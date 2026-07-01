@@ -13,3 +13,15 @@ Ce document est le registre officiel des décisions d'architecture d'AI-SOS. Cha
 ## Décision 004 — Principe de délégation contrôlée
 
 ## Décision 005 — Création du Engineering Handbook
+
+## Décision 006 — Registre officiel des décisions
+
+## Décision 007 — Guide des contributions
+
+## Décision 008 — Code de conduite
+
+## Décision 009 — Templates GitHub
+
+## Décision 010 — Standards AI-SOS
+
+## Décision 011 — Reviews
