@@ -16,6 +16,15 @@ Enable the autonomous creation and operation of startups by orchestrating specia
 - **Memory** — knowledge persists across time and projects so nothing is lost.
 - **Evolvability** — the structure is designed to grow as the platform matures.
 
+## AI-SOS Organization
+
+AI-SOS is not only a set of agents — it is an intelligent organization. Important decisions are never made by a single agent: specialized agents debate, critique proposals, and identify risks before any important implementation, and a human always validates the final decision.
+
+- **Agents** — specialized AI agents, each owning a distinct discipline. See [`agents/`](./agents/).
+- **Orchestrator** — coordinates collaboration between agents: it prepares debates, organizes the work, detects missing skills, and can propose the creation of new agents. It never decides alone. See [`agents/Orchestrator/`](./agents/Orchestrator/).
+- **Councils** — AI Expert Councils where several agents deliberate collectively before important decisions. See [`councils/`](./councils/).
+- **Governance** — the human governance and decision process; final validation always belongs to a human. See [`governance/`](./governance/).
+
 ## Repository Structure
 
 ```
@@ -23,6 +32,8 @@ Enable the autonomous creation and operation of startups by orchestrating specia
 ├── README.md                # This file
 ├── docs/                    # Core project documentation
 ├── agents/                  # Definitions for each specialized AI agent
+├── councils/                # AI Expert Councils that deliberate before decisions
+├── governance/              # Human governance and decision process
 ├── templates/               # Reusable Markdown templates
 ├── workflows/               # End-to-end operational workflows
 └── memory/                  # Persistent knowledge across projects
@@ -52,6 +63,7 @@ Core documentation describing the vision, principles, and operation of AI-SOS.
 
 Each specialized agent has its own directory containing `README.md`, `prompt.md`, `rules.md`, `inputs.md`, `outputs.md`, and `examples.md`.
 
+- [`Orchestrator/`](./agents/Orchestrator/) — Orchestrator (coordinates the other agents)
 - [`CEO/`](./agents/CEO/) — Chief Executive Officer
 - [`ProductManager/`](./agents/ProductManager/) — Product Manager
 - [`SoftwareArchitect/`](./agents/SoftwareArchitect/) — Software Architect
@@ -67,6 +79,14 @@ Each specialized agent has its own directory containing `README.md`, `prompt.md`
 - [`Marketing/`](./agents/Marketing/) — Marketing
 - [`Sales/`](./agents/Sales/) — Sales
 - [`CustomerSuccess/`](./agents/CustomerSuccess/) — Customer Success
+
+### `councils/`
+
+AI Expert Councils that deliberate before important decisions. Each council contains `README.md`, `members.md`, `workflow.md`, `decision-template.md`, and `examples.md`: [Backend](./councils/BackendCouncil/), [Frontend](./councils/FrontendCouncil/), [Architecture](./councils/ArchitectureCouncil/), [AI](./councils/AICouncil/), [Security](./councils/SecurityCouncil/), [Database](./councils/DatabaseCouncil/), [Product](./councils/ProductCouncil/), [UX](./councils/UXCouncil/), and [Quality](./councils/QualityCouncil/).
+
+### `governance/`
+
+Human governance and the decision process: [human validation](./governance/human-validation.md), [decision process](./governance/decision-process.md), [agent creation](./governance/agent-creation.md), [risk management](./governance/risk-management.md), and [audit](./governance/audit.md).
 
 ### `templates/`
 

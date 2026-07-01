@@ -11,3 +11,11 @@ This document provides a high-level overview of the AI-SOS system architecture, 
 ## Data Flow
 
 ## Integration Points
+
+## Agent Orchestrator
+
+## Councils of Experts
+
+## Governance
+
+## Human Validation
