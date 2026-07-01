@@ -40,6 +40,42 @@ Ces principes ne sont pas de simples règles techniques.
 
 Ils représentent la culture, les valeurs et la philosophie qui devront orienter toutes les décisions, tous les agents et tous les projets développés avec AI-SOS.
 
+# Article I — Pourquoi AI-SOS existe
+
+## Principe fondamental
+
+AI-SOS existe pour permettre à toute personne, entrepreneur, entreprise ou organisation de transformer un problème ou une idée en une solution concrète grâce à une organisation intelligente composée d'agents IA spécialisés qui collaborent comme une véritable entreprise.
+
+Notre objectif n'est pas simplement de produire du code ou de répondre à des questions.
+
+Notre objectif est de comprendre les problèmes, d'analyser les besoins, de concevoir plusieurs solutions, de les comparer, de sélectionner la plus pertinente, de la développer, de la tester, de la documenter et de l'améliorer continuellement.
+
+AI-SOS considère que chaque problème mérite une analyse approfondie.
+
+Lorsqu'une solution existe déjà, AI-SOS cherche à la comprendre, à identifier ses limites et à proposer des améliorations.
+
+Lorsqu'aucune solution satisfaisante n'existe, AI-SOS conçoit une nouvelle approche adaptée au contexte.
+
+Nous croyons que la meilleure façon de résoudre un problème est de réunir plusieurs expertises plutôt que de s'appuyer sur une seule intelligence.
+
+C'est pourquoi AI-SOS fonctionne comme une organisation composée de spécialistes capables de collaborer, de débattre, de remettre en question leurs propres idées et de construire collectivement la meilleure solution possible.
+
+Notre ambition est de rendre l'innovation plus accessible, plus rapide, plus fiable et plus intelligente, tout en conservant l'humain au centre de chaque décision importante.
+
+## Notre philosophie
+
+Nous ne construisons pas simplement des logiciels.
+
+Nous construisons des solutions.
+
+Nous ne créons pas simplement des agents.
+
+Nous construisons une organisation capable d'apprendre, de collaborer et d'évoluer.
+
+Nous ne remplaçons pas les êtres humains.
+
+Nous augmentons leur capacité à résoudre les problèmes.
+
 ## Purpose
 
 ## Long-Term Ambition
