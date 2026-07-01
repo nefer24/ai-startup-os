@@ -27,3 +27,11 @@ Ce document est le registre officiel des décisions d'architecture d'AI-SOS. Cha
 ## Décision 011 — Reviews
 
 ## Décision 012 — AI Review Package (ARP)
+
+## Décision 013 — Audit d'architecture interne obligatoire
+
+L'audit interne mené par un Conseil de Revue (plusieurs experts indépendants) devient une étape officielle du workflow AI-SOS, préalable à toute revue par le Chief AI Architect. Son rapport est archivé dans `reviews/packages/`.
+
+## Décision 014 — Conseil Stratégique Dynamique (remplacement de l'Executive Board)
+
+Le concept d'Executive Board est abandonné. AI-SOS adopte le **Conseil Stratégique Dynamique** : une instance exclusivement composée d'agents IA, consultative, rattachée directement au CEO, indépendante de l'Orchestrateur, activable au besoin et recomposée dynamiquement selon le problème, l'objectif ou le projet. Il analyse, débat, critique, priorise et recommande ; il ne décide jamais. Le CEO demeure la seule autorité humaine et le seul décideur. Corollaire : aucune autre autorité humaine que le CEO n'existe dans AI-SOS, et la « validation humaine graduée » ne peut déléguer la validation que vers des politiques pré-approuvées par le CEO, jamais vers un autre humain. Point à arbitrer séparément : l'Article VIII de la Constitution mentionne encore « Executive Board ».
