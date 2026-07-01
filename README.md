@@ -30,14 +30,32 @@ AI-SOS is not only a set of agents — it is an intelligent organization. Import
 ```
 .
 ├── README.md                # This file
+├── ENGINEERING.md           # Official engineering handbook
+├── DECISIONS.md             # Architecture decisions register
+├── CONTRIBUTING.md          # Contribution guide
+├── CODE_OF_CONDUCT.md       # Code of conduct
+├── .github/                 # GitHub PR and issue templates
 ├── docs/                    # Core project documentation
 ├── agents/                  # Definitions for each specialized AI agent
 ├── councils/                # AI Expert Councils that deliberate before decisions
-├── governance/              # Human governance and decision process
+├── governance/              # Human governance, roles and Git workflow
+├── standards/               # Engineering and documentation standards
+├── reviews/                 # Archive of architecture, docs and code reviews
 ├── templates/               # Reusable Markdown templates
 ├── workflows/               # End-to-end operational workflows
 └── memory/                  # Persistent knowledge across projects
 ```
+
+### Governance & Engineering
+
+- [`ENGINEERING.md`](./ENGINEERING.md) — the official development handbook.
+- [`DECISIONS.md`](./DECISIONS.md) — the register of architecture decisions.
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — how to contribute.
+- [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) — expected values and behavior.
+- [`governance/git-workflow.md`](./governance/git-workflow.md) — official Git strategy and Pull Request governance.
+- [`governance/roles.md`](./governance/roles.md) — official roles (CEO, Chief AI Architect, Claude Code).
+- [`standards/`](./standards/) — coding, documentation, architecture, security and prompt standards.
+- [`reviews/`](./reviews/) — archive of important project reviews.
 
 ### `docs/`
 
