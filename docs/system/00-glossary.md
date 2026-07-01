@@ -9,8 +9,8 @@ Ce glossaire fixe les définitions communes du dossier `docs/system/` afin d'év
 ### CEO
 Autorité humaine finale du système. Le CEO fixe l'intention et détient le pouvoir de décision ultime : aucune orientation majeure ne s'impose sans son accord. Toutes les instances du système opèrent en dernier ressort sous son autorité.
 
-### Executive Board
-Instance de direction qui traduit l'intention du CEO en priorités actionnables. L'Executive Board arbitre entre les objectifs et fixe le cap donné aux autres instances, sans se substituer à l'autorité finale du CEO. Son fonctionnement est détaillé dans [`11-executive-board.md`](./11-executive-board.md).
+### Conseil Stratégique Dynamique
+Instance **consultative, exclusivement composée d'agents IA**, rattachée directement au CEO et indépendante de l'Orchestrateur. Elle n'est pas un niveau hiérarchique obligatoire : elle est **activée au besoin** et **recomposée dynamiquement selon le problème, l'objectif ou le projet**. Elle analyse, débat, critique, priorise et produit une recommandation stratégique — elle ne décide jamais. Elle remplace l'ancien concept d'« Executive Board » (décision 014). Son fonctionnement est détaillé dans [`11-strategic-council.md`](./11-strategic-council.md).
 
 ### Orchestrateur
 Rôle de coordination chargé d'articuler les échanges entre les Conseils d'Experts, les Départements et les Agents spécialisés. L'Orchestrateur ne décide jamais seul : il structure la circulation de l'information et prépare les éléments soumis à la validation humaine. Son rôle est décrit dans [`02-orchestrator.md`](./02-orchestrator.md).
@@ -34,7 +34,7 @@ Ensemble structuré définissant, pour un agent, sa mission, sa spécialité, se
 Proposition argumentée issue d'une délibération, destinée à la validation humaine. Une recommandation n'est jamais une décision : elle éclaire un choix sans l'imposer. Elle expose les options, leurs justifications et, le cas échéant, une orientation privilégiée.
 
 ### Validation humaine
-Acte par lequel une autorité humaine décide, sur la base d'une recommandation. La validation humaine est un acte, distinct d'un acteur : elle n'est pas incarnée par une instance particulière mais exercée par l'autorité compétente. Elle transforme une proposition en décision effective.
+Acte par lequel le **CEO** — seule autorité humaine d'AI-SOS — décide, sur la base d'une recommandation. La validation humaine est un acte, distinct d'un acteur : elle n'est pas incarnée par une instance d'agents mais exercée par le CEO. Elle transforme une proposition en décision effective. Aucun agent IA ne peut recevoir cette autorité de décision ; le CEO peut seulement pré-approuver des politiques qui encadrent à l'avance certaines validations.
 
 ### Délégation contrôlée
 Principe selon lequel l'exécution d'une tâche peut être déléguée, mais jamais la responsabilité qui s'y attache. L'autorité qui délègue demeure comptable du résultat. La délégation s'exerce dans un cadre défini par le contrat de rôle et les permissions.
@@ -43,7 +43,7 @@ Principe selon lequel l'exécution d'une tâche peut être déléguée, mais jam
 Distinction fondée sur les permissions attachées à une action. Une action courante s'inscrit dans le fonctionnement ordinaire et ne requiert pas d'autorisation particulière. Une action importante, en raison de sa portée, requiert une autorisation humaine préalable.
 
 ### Utilisateur
-Porteur d'un besoin à l'origine d'une demande adressée au système. Sa demande est prise en charge sous l'autorité du CEO et de l'Executive Board. L'Utilisateur se distingue du CEO : il exprime un besoin, il ne détient pas l'autorité finale de décision.
+Porteur d'un besoin à l'origine d'une demande adressée au système. Sa demande est prise en charge sous l'autorité du CEO. L'Utilisateur se distingue du CEO : il exprime un besoin, il ne détient pas l'autorité finale de décision.
 
 ### Débat
 Phase de confrontation des options au sein des Conseils d'Experts. Le Débat permet d'éprouver les hypothèses et d'exposer les désaccords avant l'élaboration d'une recommandation. Il constitue le moment délibératif dont procède la qualité des recommandations produites.

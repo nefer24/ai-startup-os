@@ -113,3 +113,14 @@ Un **audit interne** a été conduit par un Conseil de Revue de sept experts ind
 - **Score final :** **90/100** — seuil de mise en revue atteint.
 
 Cette PR ajoute donc, outre les documents d'architecture, le rapport d'audit officiel et l'enregistrement de la **décision 013** (audit interne obligatoire) au registre.
+
+## 16. Mise à jour — Conseil Stratégique Dynamique (décision 014)
+
+À la suite d'une réévaluation architecturale décidée par le CEO et le Chief AI Architect, le concept d'**Executive Board est abandonné** et remplacé par le **Conseil Stratégique Dynamique** (décision 014).
+
+- **Nouvelle instance :** exclusivement composée d'agents IA, consultative, rattachée directement au CEO, indépendante de l'Orchestrateur, **activable au besoin** et **recomposée dynamiquement** selon le problème, l'objectif ou le projet. Elle recommande, elle ne décide jamais.
+- **Autorité :** le CEO est la **seule** autorité humaine et le seul décideur ; aucune autre autorité humaine n'existe dans AI-SOS.
+- **Validation graduée corrigée :** la délégation de validation ne peut se faire que vers des **politiques pré-approuvées par le CEO**, jamais vers un autre humain ni vers un agent.
+- **Documents modifiés :** `00-glossary.md`, `01-system-overview.md`, `02-orchestrator.md`, `04-departments.md`, `05-specialized-agents.md`, `08-decision-flow.md`, `README.md` ; le document dédié `11-executive-board.md` est **renommé** `11-strategic-council.md` et réécrit ; `DECISIONS.md` enregistre la décision 014.
+- **Point à arbitrer :** l'Article VIII de la Constitution mentionne encore « Executive Board » — mise à jour non appliquée, laissée à une décision distincte du CEO.
+- **Impact sur le score :** la correction renforce la cohérence avec la vision officielle sans dégrader les axes notés ; le score de l'audit interne demeure **90/100**.

@@ -12,15 +12,17 @@ Enfin, la vision est celle d'une organisation vivante. AI-SOS n'est pas figé : 
 
 ## Architecture générale
 
-L'architecture d'AI-SOS s'organise en niveaux hiérarchiques, du plus haut et du plus stratégique jusqu'au plus concret et opérationnel. Chaque niveau a un rôle distinct et une frontière de responsabilité clairement définie, conformément à l'Article VIII de la Constitution.
+L'architecture d'AI-SOS s'organise autour d'une **autorité unique — le CEO, seule autorité humaine du système** — et d'instances exclusivement composées d'agents IA qui analysent, débattent, critiquent, priorisent et recommandent, sans jamais décider. Il ne s'agit donc pas d'une chaîne d'autorité descendante, mais d'un flux où l'intention descend du CEO et où les recommandations remontent vers lui : la décision finale lui revient toujours. Chaque instance a un rôle distinct et une frontière de responsabilité clairement définie, dans l'esprit de l'Article VIII de la Constitution.
+
+> **Point à arbitrer.** L'Article VIII de la Constitution mentionne encore le terme « Executive Board ». Depuis la décision 014, ce concept est remplacé par le **Conseil Stratégique Dynamique**. La mise à jour du terme dans la Constitution relève d'une décision distincte du CEO et n'est pas appliquée ici.
 
 ### Human CEO
 
 Le CEO humain occupe le sommet de l'organisation. Il fixe les intentions, arbitre les orientations et détient la validation finale de toute décision importante. Aucune recommandation ne devient une décision effective sans son accord. Le CEO n'a pas à intervenir dans chaque détail : il délègue l'exécution, mais jamais la responsabilité.
 
-### Executive Board
+### Conseil Stratégique Dynamique
 
-L'Executive Board constitue le relais stratégique entre l'intention humaine et l'organisation des agents. Il cadre les priorités, veille à la cohérence d'ensemble et prépare les éléments qui permettront au CEO de décider en connaissance de cause. Il garantit que les travaux menés en dessous de lui restent alignés avec les objectifs et les contraintes fixés au plus haut niveau. Sa composition, ses responsabilités et sa frontière avec l'Orchestrateur sont détaillées dans [`11-executive-board.md`](./11-executive-board.md).
+Le Conseil Stratégique Dynamique n'est **pas un niveau hiérarchique obligatoire** : c'est une instance **consultative, exclusivement composée d'agents IA, rattachée directement au CEO et indépendante de l'Orchestrateur**. Il est **activé au besoin** — lorsqu'un problème, un objectif ou un projet appelle une réflexion stratégique indépendante — et **recomposé dynamiquement selon la nature du problème** : les agents mobilisés couvrent les dimensions pertinentes (par exemple stratégie, business, produit, finance, UX, marketing pour un produit ; ou sécurité, infrastructure, risque, conformité, architecture pour un enjeu de cybersécurité). Il analyse, débat, critique, priorise et produit une **recommandation stratégique** à l'intention du CEO, mais ne décide jamais. Son indépendance vis-à-vis de l'Orchestrateur évite que ce dernier soit à la fois celui qui cadre les priorités et celui qui coordonne leur exécution. Sa nature, son activation et sa composition dynamique sont détaillées dans [`11-strategic-council.md`](./11-strategic-council.md). Il remplace l'ancien concept d'Executive Board (décision 014).
 
 ### Orchestrateur
 
@@ -79,6 +81,6 @@ La mémoire est aussi un instrument d'amélioration continue et de traçabilité
 
 ## Cohérence avec la Constitution
 
-AI-SOS est une mise en œuvre directe de sa Constitution. L'architecture hiérarchique reflète l'Article VIII, du Human CEO jusqu'aux Agents spécialisés. Le rôle des Conseils d'Experts découle de l'Article IX, qui institue la délibération collective avant toute décision importante. La gouvernance suit l'Article X : les agents recommandent, l'humain décide, et l'exécution peut être déléguée sans que la responsabilité le soit jamais.
+AI-SOS est une mise en œuvre directe de sa Constitution. L'organisation reflète l'esprit de l'Article VIII, du CEO jusqu'aux Agents spécialisés, avec une réserve : le terme « Executive Board » de l'Article VIII est désormais remplacé, dans l'architecture du système, par le **Conseil Stratégique Dynamique** (décision 014), la mise à jour du terme constitutionnel restant à arbitrer par le CEO. Le rôle des Conseils d'Experts découle de l'Article IX, qui institue la délibération collective avant toute décision importante. La gouvernance suit l'Article X : les agents recommandent, le CEO — seule autorité humaine — décide, et l'exécution peut être déléguée sans que la responsabilité le soit jamais.
 
 Le flux de traitement des demandes applique le processus en sept étapes de l'Article XI — Analyse, Débat, Documentation, Recommandation, Validation humaine, Exécution, Amélioration. Ainsi, la vision, l'architecture et les principes présentés ici ne sont pas des choix indépendants : ils traduisent fidèlement le cadre constitutionnel qui garantit, en toute circonstance, la primauté de la décision humaine.

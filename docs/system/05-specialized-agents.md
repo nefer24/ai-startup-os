@@ -26,7 +26,7 @@ La mission est la raison d'être de l'agent. Elle répond à la question « pour
 Une mission bien formée est :
 
 - **unique et lisible** : un seul objectif directeur, exprimé sans ambiguïté ;
-- **alignée** : subordonnée à celle de son Département, elle-même dérivée des orientations de l'Executive Board et du CEO ;
+- **alignée** : subordonnée à celle de son Département, elle-même dérivée des priorités fixées par le CEO (éclairées, le cas échéant, par le Conseil Stratégique Dynamique) ;
 - **mesurable** : on peut apprécier si l'agent la remplit ou s'en éloigne ;
 - **intemporelle** : elle décrit une finalité durable, indépendante des moyens du moment.
 

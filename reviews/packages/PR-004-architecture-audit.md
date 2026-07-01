@@ -42,7 +42,7 @@ Incohérences **résiduelles** (les incohérences initiales — lien mort, diagr
 
 # Documents à améliorer
 
-Traités dans cette PR : `01-system-overview.md`, `02-orchestrator.md`, `03-expert-councils.md`, `04-departments.md`, `05-specialized-agents.md`, `06-memory.md`, `07-communication.md`, `08-decision-flow.md`, `10-system-principles.md`, `README.md` ; **ajouts** : `00-glossary.md`, `11-executive-board.md`.
+Traités dans cette PR : `01-system-overview.md`, `02-orchestrator.md`, `03-expert-councils.md`, `04-departments.md`, `05-specialized-agents.md`, `06-memory.md`, `07-communication.md`, `08-decision-flow.md`, `10-system-principles.md`, `README.md` ; **ajouts** : `00-glossary.md`, `11-strategic-council.md` (initialement créé sous le nom `11-executive-board.md`, voir addendum).
 
 À traiter ultérieurement (hors PR) : `governance/human-validation.md`, `governance/risk-management.md` ; ratification formelle du catalogue des Départements.
 
@@ -100,3 +100,13 @@ Traités dans cette PR : `01-system-overview.md`, `02-orchestrator.md`, `03-expe
 | **Total** | **62/100** | **90/100** |
 
 **Verdict :** score final **90/100** ≥ 90. L'architecture est prête pour la revue du Chief AI Architect. Aucune fusion ne sera effectuée avant validation explicite du CEO.
+
+---
+
+## Addendum — Décision 014 (Conseil Stratégique Dynamique)
+
+Postérieurement à cet audit, une réévaluation architecturale (CEO + Chief AI Architect) a conduit à **abandonner le concept d'Executive Board** au profit du **Conseil Stratégique Dynamique** : instance exclusivement composée d'agents IA, consultative, rattachée directement au CEO, indépendante de l'Orchestrateur, activable au besoin et recomposée dynamiquement selon le problème.
+
+Ce changement **ne remet pas en cause la résolution du constat n°2** (l'Executive Board n'était pas décrit) : le document dédié existe toujours, désormais nommé `11-strategic-council.md`. Il **renforce** la conformité à la vision officielle (une seule autorité humaine, le CEO) et **corrige** la formulation de la validation humaine graduée (délégation uniquement vers des politiques pré-approuvées par le CEO, jamais vers un autre humain). Les références « Executive Board » subsistant dans le corps historique de ce rapport décrivent l'état au moment de l'audit ; l'état courant est celui de la décision 014. Le score final demeure **90/100**.
+
+Point à arbitrer séparément : l'Article VIII de la Constitution mentionne encore « Executive Board ».

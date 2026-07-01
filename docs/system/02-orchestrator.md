@@ -6,7 +6,7 @@
 
 L'Orchestrateur a pour mission de transformer une demande entrante en un processus de travail cohérent, traçable et gouverné, aboutissant à une recommandation prête pour la décision humaine. Il agit comme chef d'orchestre : il ne joue d'aucun instrument à la place des spécialistes, mais il garantit que chacun intervienne au bon moment, dans le bon ordre, avec les bonnes informations.
 
-Placé entre l'Executive Board et les Conseils d'Experts dans la hiérarchie d'AI-SOS (Human CEO → Executive Board → Orchestrateur → Conseils d'Experts → Départements → Agents spécialisés), il incarne le principe d'intelligence collective : il fait converger des expertises multiples vers une solution unique et argumentée, tout en respectant le principe fondateur du problème avant la technologie.
+Rattaché au CEO et situé en amont des Conseils d'Experts, des Départements et des Agents spécialisés, il incarne le principe d'intelligence collective : il fait converger des expertises multiples vers une solution unique et argumentée, tout en respectant le principe fondateur du problème avant la technologie. L'Orchestrateur coordonne l'exécution ; il ne fixe pas les priorités stratégiques, lesquelles relèvent du CEO — éclairé le cas échéant par le Conseil Stratégique Dynamique (voir [`11-strategic-council.md`](./11-strategic-council.md)), instance consultative indépendante de l'Orchestrateur.
 
 Sa mission se résume en trois engagements permanents :
 
@@ -35,8 +35,8 @@ La responsabilité de coordination peut s'accompagner de délégation d'exécuti
 
 L'Orchestrateur reçoit et rassemble :
 
-- **La demande initiale** : un problème, une idée, une question ou un objectif exprimé par le CEO ou l'Executive Board.
-- **Les priorités de l'Executive Board** : l'Orchestrateur reçoit ses priorités de l'Executive Board, qui ordonnance les demandes et fixe le cadre stratégique dans lequel la coordination s'exerce (voir [`11-executive-board.md`](./11-executive-board.md)). Il ne se donne pas ses propres priorités : il les tient de la strate supérieure.
+- **La demande initiale** : un problème, une idée, une question ou un objectif, exprimé par le CEO (éventuellement à l'origine un besoin d'un Utilisateur pris en charge sous l'autorité du CEO).
+- **Les priorités fixées par le CEO** : l'Orchestrateur reçoit du CEO le cadre de priorités dans lequel la coordination s'exerce. Ce cadre peut avoir été éclairé, en amont, par une recommandation du Conseil Stratégique Dynamique (voir [`11-strategic-council.md`](./11-strategic-council.md)), instance consultative indépendante de l'Orchestrateur. L'Orchestrateur ne se donne pas ses propres priorités stratégiques : il les tient du CEO.
 - **Le contexte de gouvernance** : les orientations, contraintes et priorités fixées par la direction humaine.
 - **L'état des ressources** : la cartographie des Départements, des Agents spécialisés disponibles et des Conseils d'Experts mobilisables.
 - **Les connaissances accumulées** : la documentation des décisions et cycles antérieurs, source de continuité et d'apprentissage.
@@ -206,7 +206,7 @@ L'Orchestrateur est le point de passage entre le travail des agents et la décis
 - **Remontée des recommandations** : il présente au CEO une recommandation consolidée, argumentée et documentée, accompagnée des options envisagées et des désaccords éventuels.
 - **Respect de la validation humaine** : il ne considère aucune orientation comme adoptée tant que la validation n'a pas été prononcée. L'approbation finale revient toujours au CEO.
 - **Prise en compte des décisions** : approbation, refus ou demande d'ajustement, il traduit la réponse humaine en actions de coordination — déclenchement de l'exécution ou reprise du travail aux étapes concernées.
-- **Fidélité aux orientations** : il inscrit son travail dans le cadre fixé par l'Executive Board et le CEO (voir [`11-executive-board.md`](./11-executive-board.md)).
+- **Fidélité aux orientations** : il inscrit son travail dans le cadre de priorités fixé par le CEO — cadre qui peut avoir été éclairé par le Conseil Stratégique Dynamique (voir [`11-strategic-council.md`](./11-strategic-council.md)).
 
 Ce lien matérialise le principe de gouvernance d'AI-SOS : les agents recommandent, l'humain décide. La délégation de l'exécution est possible ; la délégation de la responsabilité ne l'est pas.
 

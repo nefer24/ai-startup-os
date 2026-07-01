@@ -4,7 +4,7 @@
 
 ## Vue d'ensemble
 
-Le flux de décision constitue l'ossature vivante d'AI-SOS. Il relie les acteurs de l'organisation — de l'Utilisateur au CEO, en passant par l'Executive Board, l'Orchestrateur, les Conseils d'Experts, les Départements et les Agents spécialisés — selon une séquence ordonnée et prévisible.
+Le flux de décision constitue l'ossature vivante d'AI-SOS. Il relie les acteurs de l'organisation — l'Utilisateur, le CEO (seule autorité), l'Orchestrateur, les Conseils d'Experts, les Départements et les Agents spécialisés — selon une séquence ordonnée et prévisible. En amont, et **selon le besoin uniquement**, le CEO peut activer le **Conseil Stratégique Dynamique** pour obtenir une réflexion stratégique indépendante.
 
 Ce flux repose sur trois principes directeurs :
 
@@ -12,13 +12,32 @@ Ce flux repose sur trois principes directeurs :
 - **Primauté de la validation humaine** : aucune décision importante n'est exécutée sans validation humaine explicite. L'organisation propose, l'humain décide.
 - **Circularité et apprentissage** : chaque exécution nourrit la mémoire, qui alimente à son tour les analyses futures, formant une boucle d'amélioration continue.
 
-L'Executive Board (voir [`11-executive-board.md`](./11-executive-board.md)) fixe le cadre des priorités au nom du CEO, en amont du travail, et éclaire la restitution des recommandations en aval. L'Orchestrateur (voir [`02-orchestrator.md`](./02-orchestrator.md)) joue le rôle de chef d'orchestre : il reçoit la demande, mobilise les instances compétentes et assemble le résultat en une recommandation cohérente présentée à la validation humaine.
+Le **Conseil Stratégique Dynamique** (voir [`11-strategic-council.md`](./11-strategic-council.md)), lorsqu'il est activé par le CEO, produit en amont une recommandation stratégique indépendante ; il est consultatif et distinct de l'Orchestrateur. L'Orchestrateur (voir [`02-orchestrator.md`](./02-orchestrator.md)) joue le rôle de chef d'orchestre : il reçoit la demande, mobilise les instances compétentes et assemble le résultat en une recommandation cohérente présentée à la validation humaine du CEO.
 
 ## Le point d'entrée : l'Utilisateur sous l'autorité du CEO
 
-Toute demande émane d'un **Utilisateur** : un porteur de besoin qui exprime une question, un objectif ou une intention. L'Utilisateur n'est pas le décideur du système. Sa demande est prise en charge **sous l'autorité du CEO et de l'Executive Board**, qui en fixent le cadre et les priorités.
+Toute demande émane d'un **Utilisateur** : un porteur de besoin qui exprime une question, un objectif ou une intention. L'Utilisateur n'est pas le décideur du système. Sa demande est prise en charge **sous l'autorité du CEO**, seule autorité humaine, qui en fixe le cadre et les priorités.
 
-Il importe de distinguer ces deux figures. L'Utilisateur exprime un besoin ; le CEO détient l'autorité finale de décision. Un besoin exprimé ne devient jamais, à lui seul, une décision : il entre dans le flux pour y être compris, analysé, délibéré, puis soumis à la validation humaine exercée sous l'autorité du CEO. Les définitions précises de l'**Utilisateur**, du **CEO** et de l'**Executive Board** figurent dans le [`00-glossary.md`](./00-glossary.md).
+Il importe de distinguer ces deux figures. L'Utilisateur exprime un besoin ; le CEO détient l'autorité finale de décision. Un besoin exprimé ne devient jamais, à lui seul, une décision : il entre dans le flux pour y être compris, analysé, délibéré, puis soumis à la validation humaine du CEO. Les définitions précises de l'**Utilisateur**, du **CEO** et du **Conseil Stratégique Dynamique** figurent dans le [`00-glossary.md`](./00-glossary.md).
+
+## Deux chemins selon l'activation du Conseil Stratégique Dynamique
+
+Le Conseil Stratégique Dynamique n'est pas un passage obligé : le flux emprunte l'un de deux chemins selon que le CEO l'active ou non.
+
+**Chemin avec réflexion stratégique** (le CEO active le Conseil pour un problème, un objectif ou un projet qui le justifie) :
+
+```
+CEO  ─►  Conseil Stratégique Dynamique  ─►  recommandation stratégique  ─►  CEO
+     └─►  Orchestrateur  ─►  Conseils d'Experts  ─►  Départements  ─►  Agents spécialisés  ─►  recommandation  ─►  CEO
+```
+
+**Chemin simple** (cas courant, sans réflexion stratégique dédiée) :
+
+```
+CEO  ─►  Orchestrateur  ─►  Conseils / Agents  ─►  recommandation  ─►  CEO
+```
+
+Dans les deux cas, le CEO reste la seule autorité et le seul décideur ; le Conseil Stratégique, quand il est activé, ne fait que produire une recommandation stratégique remise au CEO.
 
 ## Les deux vues du flux
 
@@ -26,7 +45,7 @@ Le parcours d'une demande se lit selon deux angles complémentaires. La **Vue 1*
 
 ### Vue 1 — Chaîne des acteurs
 
-Cette vue représente les niveaux d'autorité. L'autorité descend du CEO vers les Agents spécialisés ; les recommandations remontent en sens inverse, jusqu'à la validation humaine.
+Cette vue représente les acteurs. Le CEO est la **seule autorité** ; l'intention descend de lui vers les instances d'agents IA, et les recommandations remontent vers lui. Le **Conseil Stratégique Dynamique** n'y figure que comme une **activation optionnelle**, en amont, rattachée directement au CEO et indépendante de l'Orchestrateur.
 
 ```
    Utilisateur
@@ -37,9 +56,10 @@ Cette vue représente les niveaux d'autorité. L'autorité descend du CEO vers l
    │                                                     │
    │   CEO  ───────────────────────►  Autorité finale    │
    │    │                             de décision        │
-   │    ▼                                    ▲           │
-   │   Executive Board  ──────────────►      │           │
-   │    │   (cadre les priorités)            │           │
+   │    │  (option, selon le besoin)          ▲           │
+   │    ├──► Conseil Stratégique Dynamique    │           │
+   │    │    (agents IA, consultatif,         │           │
+   │    │     indépendant de l'Orchestrateur) │           │
    │    ▼                                    │           │
    │   Orchestrateur  ────────────────►      │           │
    │    │   (coordonne le travail)           │           │
@@ -58,7 +78,7 @@ Cette vue représente les niveaux d'autorité. L'autorité descend du CEO vers l
    └─────────────────────────────────────────────────────┘
 ```
 
-L'autorité descend niveau par niveau, du CEO aux Agents spécialisés. À chaque étage, la contribution produite plus bas est consolidée puis remontée, jusqu'à former une recommandation unique soumise à la validation humaine exercée sous l'autorité du CEO. L'Executive Board fixe le cadre en descente et éclaire la restitution en remontée ; l'Orchestrateur assure la coordination transversale de ce mouvement.
+Le CEO est la seule autorité : l'intention descend de lui, et les recommandations remontent vers lui, jusqu'à la recommandation finale qu'il valide. En amont et de façon optionnelle, le CEO peut activer le Conseil Stratégique Dynamique — instance consultative d'agents IA, indépendante de l'Orchestrateur — pour éclairer les priorités. L'Orchestrateur assure ensuite la coordination transversale du travail, sans fixer les priorités stratégiques.
 
 ### Vue 2 — Séquence des 7 étapes constitutionnelles
 
@@ -109,11 +129,11 @@ Les sept étapes s'enchaînent dans un ordre stable. La boucle de retour part ex
 
 ### Demande de l'Utilisateur
 
-Tout commence par l'expression d'un besoin. L'Utilisateur formule une demande, une question ou un objectif. Cette demande constitue le point d'entrée du flux et fixe le cadre de l'ensemble du parcours qui suivra. Elle est reçue sous l'autorité du CEO et de l'Executive Board, sans être immédiatement transformée en décision : elle est d'abord destinée à être comprise et analysée.
+Tout commence par l'expression d'un besoin. L'Utilisateur formule une demande, une question ou un objectif. Cette demande constitue le point d'entrée du flux et fixe le cadre de l'ensemble du parcours qui suivra. Elle est reçue sous l'autorité du CEO, sans être immédiatement transformée en décision : elle est d'abord destinée à être comprise et analysée.
 
 ### Orchestration
 
-L'Orchestrateur prend en charge la demande, dans le cadre des priorités fixées par l'Executive Board. Il en clarifie l'intention, en évalue la portée et la complexité, puis détermine quelles instances de l'organisation doivent être mobilisées. C'est ici que débute l'étape d'analyse du processus constitutionnel. L'Orchestrateur ne tranche pas sur le fond : il structure le travail et coordonne les acteurs. Son rôle est décrit en détail dans [`02-orchestrator.md`](./02-orchestrator.md).
+L'Orchestrateur prend en charge la demande, dans le cadre des priorités fixées par le CEO (éventuellement éclairées, en amont, par le Conseil Stratégique Dynamique). Il en clarifie l'intention, en évalue la portée et la complexité, puis détermine quelles instances de l'organisation doivent être mobilisées. C'est ici que débute l'étape d'analyse du processus constitutionnel. L'Orchestrateur ne tranche pas sur le fond : il structure le travail et coordonne les acteurs. Son rôle est décrit en détail dans [`02-orchestrator.md`](./02-orchestrator.md).
 
 ### Convocation des Conseils
 
@@ -137,7 +157,7 @@ Le Débat aboutit à une recommandation unique, claire et argumentée. Cette rec
 
 ### Validation humaine
 
-La recommandation est soumise à la validation humaine exercée sous l'autorité du CEO. L'autorité humaine compétente examine la proposition, en apprécie la pertinence et le risque, puis décide : elle approuve, ajuste, reporte ou rejette. Cette étape est le point de contrôle central du flux. Aucune décision importante ne franchit ce point sans une décision humaine explicite. Ce principe garantit que l'autorité finale demeure entre les mains de l'humain.
+La recommandation est soumise à la validation humaine du CEO. Le CEO — seule autorité humaine — examine la proposition, en apprécie la pertinence et le risque, puis décide : il approuve, ajuste, reporte ou rejette. Cette étape est le point de contrôle central du flux. Aucune décision importante ne franchit ce point sans une décision humaine explicite. Ce principe garantit que l'autorité finale demeure entre les mains de l'humain.
 
 ### Exécution
 
@@ -163,19 +183,19 @@ Soumettre chaque décision au plus haut niveau, sans distinction, saturerait l'a
 
 - **Classes de décisions** : le CEO regroupe les décisions selon leur portée et leur risque. À chaque classe est associé un niveau de validation adapté, fixé avant toute demande et non au cas par cas.
 - **Politiques pré-approuvées** : pour les classes de moindre portée, le CEO établit à l'avance des règles qui définissent ce qui peut être validé sans nouvelle intervention de sa part, tant que l'action reste dans le cadre énoncé.
-- **Délégation de la validation** : le CEO peut déléguer la validation de certaines classes à une **autorité humaine désignée**. Cette délégation porte sur l'acte de valider, jamais sur la responsabilité : conformément à l'Article X et au principe de délégation contrôlée, le CEO demeure comptable des décisions prises en son nom. L'autorité déléguée valide **au nom du CEO**, dans les limites explicitement fixées.
-- **Décisions structurantes** : les décisions qui engagent durablement l'organisation — orientations majeures, choix irréversibles, engagements de fond — restent validées **au plus haut niveau** et ne sont jamais déléguées.
+- **Délégation vers des politiques pré-approuvées uniquement** : il n'existe aucune autre autorité humaine que le CEO ; la validation ne peut donc **jamais** être déléguée à un autre humain. La seule délégation licite est vers des **politiques pré-approuvées par le CEO** — c'est-à-dire une décision que le CEO a prise à l'avance et qui encadre, sans nouvelle intervention, les validations d'une classe de moindre portée. Aucun agent IA ne reçoit d'autorité de décision : il applique la politique, il ne décide pas.
+- **Décisions structurantes** : les décisions qui engagent durablement l'organisation — orientations majeures, choix irréversibles, engagements de fond — restent validées **directement par le CEO** et ne relèvent jamais d'une politique pré-approuvée.
 
-Cette gradation ne crée aucune décision autonome : elle organise **qui** exerce la validation humaine selon la classe de la décision, sans jamais transférer la responsabilité finale, qui demeure celle du CEO.
+Cette gradation ne crée aucune décision autonome : elle organise **comment** s'exerce la validation humaine selon la classe de la décision (intervention directe du CEO, ou application d'une politique qu'il a lui-même pré-approuvée), sans jamais transférer la responsabilité finale, qui demeure celle du CEO.
 
 ## Mode dégradé de la validation humaine
 
-La validation humaine ne doit jamais devenir un point de blocage indéfini. En cas d'indisponibilité ou de latence de l'autorité humaine compétente, le flux entre en **mode dégradé**, régi par des règles fixées à l'avance :
+La validation humaine ne doit jamais devenir un point de blocage indéfini. En cas d'indisponibilité ou de latence du CEO, le flux entre en **mode dégradé**, régi par des règles fixées à l'avance par le CEO :
 
 - **Mise en file priorisée** : la demande en attente de validation est placée dans une file, ordonnée selon l'importance et l'urgence de la décision. Elle n'est ni abandonnée ni exécutée d'office.
 - **Délais encadrés** : à chaque classe de décision est associé un délai d'attente au-delà duquel une escalade est déclenchée, selon le cheminement d'escalade défini au [`00-glossary.md`](./00-glossary.md).
-- **Délégation d'urgence encadrée** : si le délai expire, la validation peut être remontée ou remise à une autorité humaine de substitution désignée à l'avance, dans un périmètre strictement borné. Cette délégation d'urgence reste une validation humaine : elle ne contourne jamais la responsabilité humaine.
-- **Aucun contournement** : le mode dégradé ne permet en aucun cas à l'organisation de décider seule d'une action importante. Il garantit qu'une décision finit toujours par atteindre une autorité humaine, sans blocage indéfini et sans que la responsabilité humaine soit escamotée.
+- **Application de politiques pré-approuvées** : si le délai expire, seules les décisions de moindre portée couvertes par une **politique pré-approuvée par le CEO** peuvent être validées automatiquement, dans le cadre strict de cette politique. Il n'existe aucun autre humain vers qui remonter la validation ; les décisions non couvertes attendent le CEO.
+- **Aucun contournement** : le mode dégradé ne permet en aucun cas à un agent IA de décider seul d'une action importante. Il garantit qu'une décision structurante finit toujours par atteindre le CEO, sans blocage indéfini et sans que la responsabilité humaine soit escamotée.
 
 Le mode dégradé arbitre ainsi entre deux exigences : ne jamais figer le flux, et ne jamais sacrifier la primauté de la décision humaine.
 
@@ -225,13 +245,13 @@ Le flux de décision est la traduction opérationnelle du processus de décision
 
 Ces sept étapes sont celles de la **Vue 2** ; les acteurs qui les portent sont ceux de la **Vue 1**. Ensemble, les deux vues expriment un même processus.
 
-Ce flux respecte pleinement les principes de gouvernance de l'Article X : recommandation collective, validation humaine obligatoire avant l'exécution des décisions importantes et délégation contrôlée — y compris lorsque la validation d'une classe de décision est déléguée à une autorité humaine désignée, sans transfert de responsabilité. Il s'inscrit dans l'organisation définie par l'Article VIII, où l'autorité descend du CEO vers l'Executive Board, l'Orchestrateur, les Conseils d'Experts, les Départements et les Agents spécialisés — la chaîne de la **Vue 1** — tandis que les recommandations remontent en sens inverse.
+Ce flux respecte pleinement les principes de gouvernance de l'Article X : recommandation collective, validation humaine obligatoire avant l'exécution des décisions importantes et délégation contrôlée — la seule délégation admise pour la validation étant l'application de politiques pré-approuvées par le CEO, jamais une délégation à un autre humain (il n'en existe pas) ni à un agent. Il s'inscrit dans l'esprit de l'organisation définie par l'Article VIII : le CEO est la seule autorité, et sous lui opèrent — exclusivement des agents IA — l'Orchestrateur, les Conseils d'Experts, les Départements et les Agents spécialisés, avec le Conseil Stratégique Dynamique en amont optionnel (celui-ci remplaçant le terme « Executive Board » de l'Article VIII, dont la mise à jour reste à arbitrer par le CEO). Les recommandations remontent vers le CEO, qui décide.
 
 ## Exemple de bout en bout
 
 Cet exemple illustre le flux sur un cas concret. Il est fictif et volontairement indépendant de toute technologie.
 
-Un **Utilisateur** exprime un besoin : « je veux offrir à mes clients un moyen simple de suivre l'avancement de leur commande ». La demande entre dans le système sous l'autorité du CEO et de l'Executive Board, qui confirment qu'elle s'inscrit dans les priorités en cours.
+Un **Utilisateur** exprime un besoin : « je veux offrir à mes clients un moyen simple de suivre l'avancement de leur commande ». La demande entre dans le système sous l'autorité du CEO, qui confirme qu'elle s'inscrit dans les priorités en cours. S'agissant d'un cas relativement simple, le CEO n'active pas le Conseil Stratégique Dynamique et confie directement la demande à l'Orchestrateur.
 
 1. **Analyse.** L'Orchestrateur clarifie l'intention, délimite le besoin (un suivi de commande, non une refonte complète) et identifie les domaines concernés : produit, expérience utilisateur, données, sécurité.
 2. **Débat.** L'Orchestrateur convoque les Conseils d'Experts pertinents. Le Conseil Produit et le Conseil UX confrontent plusieurs approches ; le Conseil Sécurité soulève un risque de confidentialité ; le Conseil Données examine la nature des informations à exposer. Le débat, borné dans le temps, fait émerger une approche préférée et écarte deux alternatives motivées.

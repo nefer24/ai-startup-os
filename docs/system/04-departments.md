@@ -4,7 +4,7 @@
 
 ## Rôle des Départements dans l'organisation
 
-Dans la hiérarchie de l'organisation (Human CEO → Executive Board → Orchestrateur → Conseils d'Experts → Départements → Agents spécialisés), les Départements occupent une position charnière. Ils traduisent les orientations stratégiques en domaines opérationnels cohérents et rassemblent les Agents spécialisés qui partagent une même famille d'expertise.
+Dans l'organisation (le CEO — seule autorité — puis, exclusivement des agents IA, l'Orchestrateur, les Conseils d'Experts, les Départements et les Agents spécialisés ; le Conseil Stratégique Dynamique pouvant être activé en amont selon le besoin), les Départements occupent une position charnière. Ils traduisent les orientations stratégiques en domaines opérationnels cohérents et rassemblent les Agents spécialisés qui partagent une même famille d'expertise.
 
 Un Département n'est pas un décideur autonome : il organise, coordonne et met en cohérence les contributions de ses agents. Les recommandations issues d'un Département remontent vers l'Orchestrateur et, lorsque nécessaire, vers les Conseils d'Experts, avant toute décision engageante. La responsabilité finale relève toujours de la **validation humaine** assurée par le **CEO**.
 
@@ -140,7 +140,7 @@ Le traitement des chevauchements obéit à des principes clairs :
 
 - **Responsable unique** : pour tout travail donné, un seul Département est désigné responsable ; les autres peuvent contribuer, mais ne portent pas la responsabilité.
 - **Arbitrage par l'Orchestrateur** : lorsque plusieurs Départements peuvent légitimement revendiquer un travail, l'attribution est arbitrée par l'**Orchestrateur**, qui tranche en fonction des Missions respectives.
-- **Escalade vers l'Executive Board** : à défaut de résolution au niveau de l'Orchestrateur, l'arbitrage est porté devant l'**Executive Board**.
+- **Escalade vers le CEO** : à défaut de résolution au niveau de l'Orchestrateur, l'arbitrage est porté devant le **CEO**, seule autorité de décision.
 - **Traçabilité** : l'attribution retenue est explicite, afin d'éviter la réapparition du même conflit de périmètre.
 
 ## Interfaces entre Départements
