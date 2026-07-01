@@ -25,3 +25,5 @@ Ce document est le registre officiel des décisions d'architecture d'AI-SOS. Cha
 ## Décision 010 — Standards AI-SOS
 
 ## Décision 011 — Reviews
+
+## Décision 012 — AI Review Package (ARP)
