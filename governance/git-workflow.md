@@ -46,9 +46,18 @@ Toutes les modifications importantes suivent un processus explicite. Ce processu
 2. **Développement** — les modifications sont réalisées sur la branche dédiée.
 3. **Commit(s)** — un ou plusieurs commits clairs et documentés.
 4. **Ouverture d'une Pull Request** — la PR cible `develop` et décrit les changements, les motivations, les impacts, les fichiers modifiés et les risques.
-5. **Revue par le Chief AI Architect (ChatGPT)** — revue technique, documentaire et de conformité avec la Constitution.
-6. **Validation du CEO** — décision finale de l'autorité humaine.
-7. **Fusion** — réalisée uniquement après l'autorisation explicite du CEO.
+5. **Production de l'AI Review Package (ARP)** — Claude Code produit obligatoirement l'ARP correspondant, à partir du template officiel, avant toute demande de revue.
+6. **Revue par le Chief AI Architect (ChatGPT)** — revue technique, documentaire et de conformité avec la Constitution, effectuée en s'appuyant en priorité sur l'ARP.
+7. **Validation du CEO** — décision finale de l'autorité humaine.
+8. **Fusion** — réalisée uniquement après l'autorisation explicite du CEO.
+
+## AI Review Package (ARP)
+
+Institué par la décision d'architecture [012](../DECISIONS.md), l'**AI Review Package** est un livrable officiel obligatoire pour toute Pull Request. Il rend chaque revue autoportante afin que la gouvernance ne dépende jamais des limitations ou des délais de synchronisation des outils externes.
+
+- **Avant toute demande de revue au Chief AI Architect, Claude Code doit toujours produire un ARP.**
+- L'ARP est la **source officielle d'information** lors des revues ; le connecteur GitHub devient un **outil de vérification complémentaire**.
+- L'ARP est rédigé à partir de [`templates/review-package-template.md`](../templates/review-package-template.md) et archivé dans [`reviews/packages/`](../reviews/packages/).
 
 ## Règle de fusion
 
