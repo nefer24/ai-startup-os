@@ -1,8 +1,8 @@
-# AI-SOS — AI Startup Operating System
+# AI-SOS — Artificial Intelligence Solution Operating System
 
 > A reusable framework for building and operating startups with specialized AI agents.
 
-AI-SOS (AI Startup Operating System) is a platform where specialized AI agents collaborate to design, build, and operate startups. It brings together agents, workflows, prompts, templates, and documentation into a single, coherent operating system for turning ideas into real products.
+AI-SOS (Artificial Intelligence Solution Operating System) is a platform where specialized AI agents collaborate to design, build, and operate startups. It brings together agents, workflows, prompts, templates, and documentation into a single, coherent operating system for turning ideas into real products.
 
 ## Mission
 
