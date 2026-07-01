@@ -6,7 +6,7 @@
 
 Le protocole de décision encadre le moment précis où une proposition issue du travail des agents devient une décision engageant l'organisation. Il s'articule autour d'une règle non négociable : **une recommandation n'est pas une décision**. Tant que le CEO — ou une politique qu'il a pré-approuvée — n'a pas validé une recommandation, aucune action structurante ne peut être exécutée.
 
-Ce protocole se place en aval du travail délibératif décrit dans `./04-debate-protocol.md` : lorsqu'un débat converge vers une recommandation (ou expose des désaccords à trancher), c'est ici que la recommandation est présentée, validée et consignée. Il s'inscrit également dans le cycle plus large décrit par `./01-request-lifecycle.md`, dont il constitue l'étape de décision. Pour la vue système correspondante, voir `../system/08-decision-flow.md` ; pour la composition et le rôle des instances de conseil qui produisent les recommandations, voir `../system/11-strategic-council.md`.
+Ce protocole se place en aval du travail délibératif décrit dans [`04-debate-protocol.md`](./04-debate-protocol.md) : lorsqu'un débat converge vers une recommandation (ou expose des désaccords à trancher), c'est ici que la recommandation est présentée, validée et consignée. Il s'inscrit également dans le cycle plus large décrit par [`01-request-lifecycle.md`](./01-request-lifecycle.md), dont il constitue l'étape de décision et dont il actionne la machine à états. Pour la vue système correspondante, voir [`../system/08-decision-flow.md`](../system/08-decision-flow.md) ; pour la composition et le rôle des instances de conseil qui produisent les recommandations, voir [`../system/11-strategic-council.md`](../system/11-strategic-council.md).
 
 Trois principes gouvernent l'ensemble :
 
@@ -14,9 +14,18 @@ Trois principes gouvernent l'ensemble :
 - **Recommandation obligatoire, décision réservée** : les agents produisent des recommandations complètes et argumentées ; la décision appartient au CEO ou à une politique pré-approuvée.
 - **Traçabilité** : toute décision est consignée avec son issue et sa justification, quel que soit le canal de validation.
 
+## Périmètre : deux flux de recommandation distincts
+
+AI-SOS produit deux natures de recommandation, qu'il ne faut pas confondre.
+
+- **La recommandation opérationnelle** — issue du travail des **Conseils d'Experts** et consolidée par l'**Orchestrateur**, elle porte sur une demande précise à trancher. **C'est elle, et elle seule, que régit le présent protocole** : elle est classée, éventuellement couverte par une politique, puis validée par le CEO ou par application d'une politique pré-approuvée.
+- **La recommandation stratégique** — produite par le **Conseil Stratégique Dynamique** lorsque le CEO l'active (voir [`02-strategic-council-activation.md`](./02-strategic-council-activation.md)), elle **fixe des priorités et des orientations** remises au CEO. Elle **ne passe PAS** par les classes de décisions ni par les politiques pré-approuvées : elle éclaire le jugement du CEO en amont, sans devenir une décision exécutable par ce protocole.
+
+Il en découle une clarification importante : une décision **structurante** n'est pas « une recommandation venue du Conseil Stratégique ». Une décision structurante peut naître du flux **opérationnel** décrit ici ; sa nature structurante tient à sa portée et à son risque (voir [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md)), non à l'instance qui l'a formulée. Le Conseil Stratégique, lui, ne soumet pas de décisions à valider : il informe les priorités que le CEO conserve.
+
 ## Présentation de la recommandation au CEO
 
-Une recommandation ne peut être soumise à validation que si elle est complète. Une recommandation incomplète est renvoyée au travail (voir `./04-debate-protocol.md`) et n'atteint pas le CEO.
+Une recommandation ne peut être soumise à validation que si elle est complète. Une recommandation incomplète est renvoyée au travail (voir [`04-debate-protocol.md`](./04-debate-protocol.md)) et n'atteint pas le CEO.
 
 ### Contenu obligatoire d'une recommandation soumise
 
@@ -33,79 +42,80 @@ Toute recommandation présentée au CEO contient, de manière explicite et disti
 
 - Une recommandation est présentée comme une **proposition**, jamais comme une décision acquise.
 - Les désaccords ne sont pas masqués ni lissés : leur présence est une information de décision, pas un défaut.
-- La recommandation indique sa **classe de décision** présumée (voir plus bas), afin d'orienter le canal de validation.
+- La recommandation indique sa **classe de décision présumée**. Cette classe est une **proposition**, jamais une auto-adjudication : elle n'a d'effet qu'après le contrôle indépendant décrit ci-dessous et défini dans [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md).
 
-## Validation par le CEO
+## Classification de la décision
 
-Face à une recommandation soumise, le CEO dispose de quatre issues possibles. Chaque issue produit un effet observable et déterminé.
+La classe d'une recommandation **oriente le canal de validation** : une classe basse peut relever d'une politique pré-approuvée ; une classe structurante va toujours au CEO. Cette classe ne peut donc pas être décidée par celui qui en tire bénéfice.
+
+- **Pas d'auto-adjudication** : l'agent qui recommande **propose** une classe présumée mais ne la valide pas lui-même. La classe présumée est vérifiée par un **contrôle indépendant de classification**, exercé par une **instance distincte de celle qui a produit la recommandation**, qui confirme ou requalifie.
+- **Défaut conservateur** : en cas de doute, de désaccord entre l'auteur et le contrôleur, ou d'information insuffisante, la décision est classée **structurante** et remonte au CEO. Le doute ne descend jamais la classe ; il la monte.
+- **Charge de la preuve** : c'est à la recommandation de démontrer qu'une classe basse s'applique, non au contrôleur de démontrer le contraire. Toute sous-qualification détectée est traitée comme une anomalie (voir [`09-error-handling.md`](./09-error-handling.md)).
+
+Les définitions des trois classes (courante, notable, structurante), leurs règles de rattachement, l'identité du contrôleur et le traitement des misclassifications sont établis dans [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md).
+
+## Validation par le CEO : les quatre issues canoniques
+
+Face à une recommandation soumise, le CEO dispose de **quatre issues** possibles, et de quatre seulement. Chaque issue produit un effet observable et déterminé sur la machine à états de [`01-request-lifecycle.md`](./01-request-lifecycle.md).
 
 ### Approuve
 
-Le CEO valide l'option privilégiée telle qu'elle est présentée. La décision est consignée comme approuvée, et l'exécution des actions associées est autorisée. Le cycle décisionnel se referme ; le travail passe à la mise en œuvre.
+Le CEO valide l'option privilégiée telle qu'elle est présentée. La décision est consignée comme approuvée, et l'exécution des actions associées est autorisée. **Effet d'état** : la demande passe de **En validation** à **En exécution**.
 
 ### Ajuste
 
-Le CEO accepte le fond mais modifie l'option privilégiée (périmètre, conditions, calendrier, garde-fous). La décision consignée est l'**option ajustée**, telle que formulée par le CEO. Les agents mettent en œuvre la version ajustée ; ils ne réinterprètent pas l'ajustement au-delà de ce qui a été énoncé. Si l'ajustement soulève de nouvelles questions, celles-ci repartent en travail avant toute exécution.
+Le CEO accepte le fond mais **amende** l'option privilégiée (périmètre, conditions, calendrier, garde-fous) et approuve la version ainsi modifiée. La décision consignée est l'**option ajustée**, telle que formulée par le CEO. **Effet d'état** : la version ajustée part **directement en Exécution** (transition **En validation → En exécution**). Il ne s'agit **pas** d'un retour en analyse : « Ajuste » est une approbation, pas un renvoi. Les agents mettent en œuvre la version ajustée sans la réinterpréter ni l'étendre au-delà de ce qui a été énoncé. Ce n'est que si le CEO, plutôt que d'amender et d'approuver, **renvoie** la demande pour complément que celle-ci revient à **En analyse** — mais c'est alors une autre issue (un report qualifié, non un ajustement).
 
 ### Reporte
 
-Le CEO ne tranche pas immédiatement : il demande un délai, des compléments, ou une nouvelle itération. La recommandation reste **en attente** ; aucune action structurante n'est exécutée entre-temps. Si des informations complémentaires sont demandées, les agents les produisent et resoumettent.
+Le CEO ne tranche pas immédiatement : il suspend la séquence en attendant un délai, des compléments ou une nouvelle itération. **Effet d'état** : la demande passe à **En attente** ; aucune action structurante n'est exécutée entre-temps. Cet état est **borné dans le temps** : il porte une échéance observable, dont la valeur relève des [`13-bounds-and-thresholds.md`](./13-bounds-and-thresholds.md). Au terme de la borne, le report ne se prolonge pas silencieusement : la demande fait l'objet d'une **escalade ou d'une relance** notifiée au CEO. Un report n'ouvre **jamais** une suspension infinie ni une décision prise par un agent à la place du CEO.
 
 ### Rejette
 
-Le CEO écarte l'option privilégiée. Aucune action associée n'est exécutée. La décision consignée est un **rejet motivé** lorsque le CEO fournit un motif. Le travail reprend selon les indications données (voir « Cas limites »).
+Le CEO écarte l'option privilégiée. Aucune action associée n'est exécutée. **Effet d'état** : la demande passe à **Rejetée**. La décision consignée est un **rejet motivé** lorsque le CEO fournit un motif ; le travail reprend selon les indications données (voir « Cas limites »).
 
-## Classes de décisions et politiques pré-approuvées
+## Politiques pré-approuvées : usage dans la séquence
 
-La validation humaine est **graduée**. Le CEO définit à l'avance des **classes de décisions** et, pour certaines d'entre elles, des **politiques pré-approuvées** qui précisent les conditions sous lesquelles une décision de cette classe est réputée validée sans passage explicite par le CEO au moment même.
+La validation humaine est **graduée**. Le CEO peut autoriser à l'avance, au moyen de **politiques pré-approuvées**, la validation automatique de certaines décisions de classe basse satisfaisant des conditions vérifiables.
 
-### Comment une décision de classe couverte est validée
+Le **format** d'une politique (identifiant, classe couverte, conditions, plafond de portée, échéance, version), son **registre**, son **versioning** et son **cycle de vie** (création, application, revalidation, révocation) sont entièrement définis dans [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md). Le présent protocole ne les redécrit pas ; il n'en régit que l'**usage dans la séquence de validation** :
 
-Lorsqu'une recommandation appartient à une classe couverte par une politique pré-approuvée, et que toutes les conditions de cette politique sont remplies, la recommandation est validée **par application de la politique**. La décision est consignée comme validée par politique, avec référence à la politique appliquée. Ce mécanisme n'est pas une délégation à un tiers :
-
-- La validation ne va **jamais** vers un autre humain : il n'existe aucun autre humain dans le système.
-- La validation ne va **jamais** vers un agent : un agent n'acquiert aucun pouvoir de décision par ce biais.
-- La validation ne va **que** vers une politique que le CEO a lui-même pré-approuvée. L'autorité reste celle du CEO, exprimée par avance.
-
-Si une seule condition de la politique n'est pas remplie, la politique ne s'applique pas et la recommandation remonte au CEO.
-
-### Ce qui reste obligatoirement au CEO
-
-Certaines décisions ne peuvent jamais être couvertes par une politique pré-approuvée et sont validées **directement par le CEO** :
-
-- Les **décisions structurantes** : orientation stratégique, engagements majeurs, choix irréversibles ou à fort impact.
-- Toute décision d'une **classe non couverte** par une politique existante.
-- Toute décision qui, bien que rattachée à une classe couverte, sort des conditions prévues par la politique.
-
-Voir `../system/11-strategic-council.md` pour l'origine des recommandations structurantes et `../system/08-decision-flow.md` pour le routage entre validation directe et validation par politique.
+- Lorsqu'une recommandation appartient à une classe couverte par une politique active, **et** que toutes les conditions de cette politique sont remplies (plafond de portée compris), la recommandation est validée **par application de la politique**. La décision est consignée comme validée par politique, avec la référence de la politique **et sa version** appliquée.
+- Ce mécanisme n'est **pas** une délégation à un tiers. La validation ne va jamais vers un autre humain (il n'en existe pas), jamais vers un agent (aucun agent n'acquiert de pouvoir de décision), et **seulement** vers une politique que le CEO a lui-même pré-approuvée. L'autorité reste celle du CEO, exprimée par avance.
+- Si une seule condition n'est pas remplie, ou si la classe n'est pas couverte, ou si la décision est **structurante**, la politique ne s'applique pas et la recommandation remonte au CEO pour l'une des quatre issues ci-dessus.
 
 ## Séquence de validation
 
 De la soumission à la décision consignée, la séquence observable est la suivante :
 
-1. **Réception** — une recommandation complète est soumise ; sa complétude est vérifiée (contenu obligatoire présent).
-2. **Classification** — la classe de décision est déterminée.
-3. **Routage** — si la classe est couverte par une politique pré-approuvée, passer à l'étape 4 ; si la décision est structurante ou d'une classe non couverte, passer à l'étape 5.
+1. **Réception** — une recommandation opérationnelle complète est soumise ; sa complétude est vérifiée (contenu obligatoire présent).
+2. **Classification** — la classe présumée est **contrôlée par l'instance indépendante de classification** (distincte de l'auteur de la recommandation), qui la confirme ou la requalifie. En cas de doute, la classe est portée à **structurante** (défaut conservateur). Voir [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md).
+3. **Routage** — si la classe confirmée est couverte par une politique pré-approuvée, passer à l'étape 4 ; si la décision est structurante ou d'une classe non couverte, passer à l'étape 5.
 4. **Vérification de politique** — les conditions de la politique pré-approuvée sont contrôlées. Si toutes sont remplies, la recommandation est validée par application de la politique ; aller à l'étape 6. Sinon, la décision remonte au CEO (étape 5).
-5. **Validation directe par le CEO** — le CEO rend l'une des quatre issues : approuve, ajuste, reporte, rejette. En cas de report, la recommandation reste en attente et la séquence est suspendue jusqu'à resoumission.
-6. **Consignation** — l'issue est enregistrée avec sa justification, la classe de décision et le canal de validation (CEO direct ou politique appliquée).
-7. **Autorisation d'exécution** — en cas d'approbation ou d'ajustement, l'exécution des actions validées est autorisée. En cas de rejet, aucune exécution n'a lieu et le travail reprend.
+5. **Validation directe par le CEO** — le CEO rend l'une des **quatre issues canoniques** : **Approuve**, **Ajuste**, **Reporte**, **Rejette**. En cas de report, la demande passe à **En attente**, la séquence est suspendue dans la borne temporelle prévue, puis escaladée ou relancée à l'échéance — jamais suspendue sans fin.
+6. **Consignation** — l'issue est enregistrée avec sa justification, la classe de décision confirmée et le canal de validation (CEO direct ou politique appliquée, avec sa version).
+7. **Autorisation d'exécution** — en cas d'approbation ou d'ajustement, l'exécution des actions validées est autorisée (**En exécution**). En cas de rejet, aucune exécution n'a lieu (**Rejetée**) ; en cas de report, la demande demeure **En attente** jusqu'à resoumission ou escalade.
 
-## Mode dégradé
+## Mode dégradé : CEO indisponible et CEO saturé
 
-Le mode dégradé s'applique lorsque le **CEO est indisponible**. Il préserve intégralement les principes d'autorité : il n'ouvre aucune brèche permettant à un agent de décider.
+Deux situations distinctes appellent un mode dégradé. Aucune n'ouvre de brèche permettant à un agent de décider. Leur traitement détaillé — files, priorités, seuils de saturation — relève de [`12-concurrency-and-contention.md`](./12-concurrency-and-contention.md) ; le présent protocole en fixe l'articulation avec les issues et l'invariant « ne jamais bloquer indéfiniment ».
 
-### Règles du mode dégradé
+- **CEO indisponible** — le CEO ne peut rendre aucune issue pendant une période. Les recommandations de classe couverte dont toutes les conditions sont remplies continuent d'être validées **par application des politiques pré-approuvées**, exactement comme en fonctionnement normal. Les décisions structurantes et les classes non couvertes sont placées en file priorisée jusqu'au retour du CEO.
+- **CEO saturé (haut volume)** — le CEO est disponible mais le volume de décisions à valider dépasse sa capacité de traitement dans les délais. La réponse n'est pas de décider à sa place, mais de **prioriser** la file (impact, urgence, échéance) et d'appliquer plus largement les politiques déjà pré-approuvées pour dégager son attention vers les décisions qui la requièrent réellement. Les seuils de saturation et les règles de contention sont dans [`12-concurrency-and-contention.md`](./12-concurrency-and-contention.md).
 
-- **File priorisée** : les recommandations en attente de validation directe sont placées dans une file, ordonnée par priorité et par impact, jusqu'au retour du CEO.
-- **Délais** : chaque recommandation en attente porte un délai d'attente observable ; l'écoulement du délai n'entraîne aucune décision automatique — il ne fait qu'informer sur l'urgence croissante.
-- **Application des seules politiques pré-approuvées** : pendant l'indisponibilité, seules les décisions de classes couvertes, dont toutes les conditions de politique sont remplies, peuvent être validées — exactement comme en fonctionnement normal, par application de la politique du CEO.
-- **Aucun contournement** : les décisions structurantes et les classes non couvertes restent bloquées en file jusqu'au retour du CEO.
-- **Aucune décision autonome d'un agent** : en aucun cas un agent ne tranche à la place du CEO ni n'élargit une politique existante.
+### Résolution de la tension avec « ne jamais bloquer indéfiniment »
+
+Une décision structurante **à échéance** ne peut être ni tranchée par un agent, ni laissée en attente infinie et silencieuse. Trois issues, et trois seulement, sont admises :
+
+1. **Comportement conservatoire réversible pré-approuvé par le CEO** — si le CEO a défini à l'avance une conduite de sauvegarde réversible pour ce type de situation (par exemple maintenir l'état existant, suspendre un engagement sans le rompre), cette conduite s'applique le temps que le CEO tranche. Elle reste une décision du CEO, exprimée par avance, et n'engage rien d'irréversible.
+2. **Délai de sécurité terminal** — à défaut de conduite conservatoire, un délai de sécurité borné est observé, au terme duquel l'échéance elle-même impose une résolution : escalade maximale, notification prioritaire, ou bascule sur le comportement le plus prudent disponible.
+3. **Attente assumée comme exception bornée et notifiée** — si ni conduite conservatoire ni délai de sécurité ne s'appliquent, l'attente du CEO est **explicitement assumée** comme une exception, **bornée** dans le temps et **notifiée**. Elle n'est jamais un blocage infini silencieux, et jamais une décision prise par un agent.
+
+Dans tous les cas, l'invariant tient : **aucun blocage infini silencieux, aucune décision d'agent, jamais**.
 
 ## Exemple concret
 
-**Contexte** — Un conseil produit une recommandation sur le choix d'un fournisseur pour un service opérationnel récurrent.
+**Contexte** — Un Conseil d'Experts produit, via l'Orchestrateur, une recommandation **opérationnelle** sur le choix d'un fournisseur pour un service récurrent.
 
 **Recommandation soumise** :
 
@@ -115,15 +125,24 @@ Le mode dégradé s'applique lorsque le **CEO est indisponible**. Il préserve i
 - *Raisons* : couverture complète des besoins, marge de croissance, meilleure fiabilité constatée.
 - *Risques* : coût supérieur ; dépendance accrue ; atténuation par une clause de sortie.
 - *Désaccords éventuels* : une position minoritaire privilégie le fournisseur A pour maîtriser le coût à court terme.
+- *Classe présumée* : « choix de fournisseur opérationnel », proposée comme **notable**.
 
-**Validation** — La décision relève d'une classe « choix de fournisseur opérationnel » couverte par une politique pré-approuvée : engagement sous un plafond défini, réversible, sans impact stratégique. Les conditions étant remplies, la recommandation est **validée par application de la politique**. La décision consignée mentionne : option retenue (fournisseur B), canal de validation (politique pré-approuvée), classe, et justification. L'exécution est autorisée.
+**Classification** — Une instance distincte de celle qui a recommandé exerce le contrôle indépendant : elle confirme la classe **notable** (engagement plafonné, réversible, sans impact stratégique). Sans cette confirmation, la classe présumée n'aurait produit aucun effet.
 
-Si, à l'inverse, le montant dépassait le plafond de la politique, la recommandation serait remontée au CEO pour validation directe, avec les mêmes éléments présentés.
+**Validation** — La classe confirmée est couverte par une politique pré-approuvée : engagement sous un plafond défini, réversible, sans impact stratégique. Les conditions étant remplies, la recommandation est **validée par application de la politique**. La décision consignée mentionne : option retenue (fournisseur B), canal de validation (politique pré-approuvée avec sa version), classe confirmée, et justification. L'exécution est autorisée.
+
+Si, à l'inverse, le montant dépassait le plafond, ou si le contrôle avait requalifié la décision en **structurante**, la recommandation serait remontée au CEO pour l'une des quatre issues canoniques, avec les mêmes éléments présentés.
 
 ## Cas limites
 
-- **Décision structurante** → elle est **toujours** validée directement par le CEO. Aucune politique pré-approuvée ne peut la couvrir, y compris en mode dégradé où elle attend en file.
-- **Rejet** → aucune action n'est exécutée ; le travail **reprend** selon le motif fourni. Selon les indications du CEO, les agents reprennent la délibération (voir `./04-debate-protocol.md`), explorent d'autres options, ou abandonnent la piste.
-- **Ajustement demandé** → la décision consignée est l'option **ajustée** telle qu'énoncée par le CEO ; les agents mettent en œuvre l'ajustement sans l'étendre. Toute nouvelle question ouverte par l'ajustement repasse en travail avant exécution.
+- **Décision structurante** → elle est **toujours** validée directement par le CEO, quelle que soit l'instance qui l'a formulée. Aucune politique pré-approuvée ne peut la couvrir, y compris en mode dégradé où elle attend en file — sous réserve du comportement conservatoire réversible et des délais de sécurité décrits en mode dégradé.
+- **Report à échéance** → la demande passe **En attente** dans une borne temporelle ([`13-bounds-and-thresholds.md`](./13-bounds-and-thresholds.md)) ; à l'échéance, escalade ou relance notifiée. Jamais de suspension infinie.
+- **Rejet** → aucune action n'est exécutée ; la demande passe **Rejetée** et le travail **reprend** selon le motif fourni. Les agents reprennent la délibération (voir [`04-debate-protocol.md`](./04-debate-protocol.md)), explorent d'autres options, ou abandonnent la piste.
+- **Ajustement** → la décision consignée est l'option **ajustée** telle qu'énoncée par le CEO ; elle part **directement en Exécution**, sans retour en analyse. Les agents mettent en œuvre l'ajustement sans l'étendre.
 - **Classe non couverte par une politique** → la recommandation **attend le CEO** ; elle ne peut pas être validée par une politique existante, même proche. En mode dégradé, elle reste en file priorisée.
-- **Tentative d'un agent de décider** → **interdite**. Un agent qui prétendrait trancher, exécuter sans validation, ou élargir une politique au-delà de ses conditions viole le protocole ; l'action est bloquée et la recommandation renvoyée dans le canal de validation approprié.
+- **Recommandation stratégique confondue avec une décision** → une orientation issue du Conseil Stratégique Dynamique **n'entre pas** dans cette séquence : elle informe les priorités du CEO et ne se voit attribuer ni classe ni politique. La confondre avec une décision à valider est une erreur de flux.
+- **Tentative d'un agent de décider** → **interdite**. Un agent qui prétendrait trancher, exécuter sans validation, s'auto-adjuger une classe basse, ou élargir une politique au-delà de ses conditions viole le protocole ; l'action est bloquée et la recommandation renvoyée dans le canal de validation approprié (voir [`09-error-handling.md`](./09-error-handling.md)).
+
+---
+
+**Renvois** : [`01-request-lifecycle.md`](./01-request-lifecycle.md) · [`02-strategic-council-activation.md`](./02-strategic-council-activation.md) · [`04-debate-protocol.md`](./04-debate-protocol.md) · [`09-error-handling.md`](./09-error-handling.md) · [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md) · [`12-concurrency-and-contention.md`](./12-concurrency-and-contention.md) · [`13-bounds-and-thresholds.md`](./13-bounds-and-thresholds.md) · [`../system/08-decision-flow.md`](../system/08-decision-flow.md) · [`../system/11-strategic-council.md`](../system/11-strategic-council.md)

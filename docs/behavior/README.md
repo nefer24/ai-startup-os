@@ -22,6 +22,23 @@ Ces documents sont cohérents avec, et subordonnés à, la Constitution ([`../00
 | [`08-learning-rules.md`](./08-learning-rules.md) | Règles d'apprentissage et prévention de la dérive |
 | [`09-error-handling.md`](./09-error-handling.md) | Gestion des erreurs, conflits, blocages et ambiguïtés |
 | [`10-end-to-end-scenarios.md`](./10-end-to-end-scenarios.md) | Scénarios complets de bout en bout |
+| [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md) | Classification des décisions et politiques pré-approuvées du CEO |
+| [`12-concurrency-and-contention.md`](./12-concurrency-and-contention.md) | Traitement de plusieurs demandes simultanées et contention |
+| [`13-bounds-and-thresholds.md`](./13-bounds-and-thresholds.md) | Bornes et seuils comportementaux (qui les fixe, valeurs par défaut) |
+| [`14-integrity-and-threat-model.md`](./14-integrity-and-threat-model.md) | Intégrité, modèle de menace comportementale et contre-pouvoirs |
+
+## Acteurs (vocabulaire de référence)
+
+- **Utilisateur** : porteur d'un besoin à l'origine d'une demande ; il n'est pas le décideur.
+- **CEO** : seule autorité humaine, seul décideur ; prend en charge la demande sous son autorité.
+- **Conseil Stratégique Dynamique** : instance IA consultative, activée par le CEO au besoin, composée dynamiquement, dissoute après remise de sa recommandation stratégique (décision 014).
+- **Orchestrateur** : coordonne le travail et consolide la recommandation finale opérationnelle ; ne décide pas.
+- **Conseils d'Experts** : délibèrent et produisent des recommandations opérationnelles.
+- **Départements** / **Agents spécialisés** : produisent le travail dans leur spécialité.
+
+## Référentiel des étapes
+
+Toutes les numérotations d'étapes de ce dossier s'indexent sur les **sept étapes constitutionnelles** (Article XI, voir [`../system/08-decision-flow.md`](../system/08-decision-flow.md), Vue 2) : Analyse → Débat → Documentation → Recommandation → Validation humaine → Exécution → Amélioration.
 
 ## Invariants comportementaux
 
@@ -30,7 +47,12 @@ Quel que soit le comportement décrit, les invariants suivants s'appliquent touj
 - **Une seule autorité humaine** : le CEO. Il est le seul décideur.
 - **Les agents recommandent, ils ne décident jamais** : toutes les autres instances sont exclusivement des agents IA, consultatifs.
 - **Validation humaine** : aucune décision importante n'est exécutée sans validation du CEO ; la délégation ne va que vers des politiques pré-approuvées par le CEO, jamais vers un autre humain ni vers un agent.
-- **Traçabilité** : chaque comportement significatif laisse une trace exploitable.
+- **Bornes et terminaison** : aucun débat, aucune boucle, aucune attente n'est infini ; toute borne a un responsable et une valeur par défaut ([`13-bounds-and-thresholds.md`](./13-bounds-and-thresholds.md)).
+- **Traçabilité et versioning** : chaque comportement significatif laisse une trace exploitable ; les protocoles comportementaux eux-mêmes sont versionnés, afin qu'une décision passée reste rattachable à la version de protocole sous laquelle elle a été prise.
+
+## Points à arbitrer par le CEO
+
+Certaines questions de long terme dépassent la présente phase et touchent la vision « une seule autorité humaine » : elles sont documentées comme ouvertes (voir [`14-integrity-and-threat-model.md`](./14-integrity-and-threat-model.md)) — notamment l'audit/la calibration des décisions du CEO lui-même, et l'ouverture à des organisations multi-humaines ou inter-organisations. Elles relèvent d'une décision distincte du CEO.
 
 ## Portée
 
