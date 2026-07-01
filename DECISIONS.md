@@ -27,3 +27,7 @@ Ce document est le registre officiel des décisions d'architecture d'AI-SOS. Cha
 ## Décision 011 — Reviews
 
 ## Décision 012 — AI Review Package (ARP)
+
+## Décision 013 — Audit d'architecture interne obligatoire
+
+L'audit interne mené par un Conseil de Revue (plusieurs experts indépendants) devient une étape officielle du workflow AI-SOS, préalable à toute revue par le Chief AI Architect. Son rapport est archivé dans `reviews/packages/`.

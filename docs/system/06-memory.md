@@ -29,7 +29,7 @@ La mémoire d'AI-SOS n'est pas un bloc unique, mais un ensemble de mémoires sp�
 
 Ces mémoires s'articulent selon un principe de subsidiarité : chaque acteur consulte d'abord la mémoire la plus locale et la plus pertinente, puis remonte vers des mémoires plus larges lorsque le besoin l'exige. Les enseignements tirés d'une demande peuvent, après validation, être promus de la mémoire court terme vers des mémoires plus durables.
 
-La mémoire de projet est matérialisée dans une organisation dédiée par projet, qui regroupe le contexte, l'historique et les artefacts propres à chacun.
+La mémoire de projet est matérialisée dans un espace de projet dédié, qui regroupe le contexte, l'historique et les artefacts propres à chacun.
 
 ## Mémoire court terme (contexte d'une demande en cours)
 
@@ -63,7 +63,7 @@ La mémoire long terme rassemble les savoirs durables qui restent pertinents au-
 
 ## Mémoire de projet (contexte, historique et artefacts propres à un projet)
 
-La mémoire de projet regroupe tout ce qui est propre à un projet donné. Elle est liée au cycle de vie du projet et matérialisée dans une organisation par projet dédiée.
+La mémoire de projet regroupe tout ce qui est propre à un projet donné. Elle est liée au cycle de vie du projet et matérialisée dans un espace de projet dédié.
 
 **Contenu typique :**
 
@@ -105,6 +105,50 @@ La mémoire organisationnelle est la mémoire d'AI-SOS sur lui-même. Elle porte
 
 **Autorité :** parce qu'elle engage l'organisation entière, la mémoire organisationnelle est la plus exigeante en matière de validation. Une décision d'architecture n'y est inscrite qu'après avoir suivi le processus décrit dans [`08-decision-flow.md`](./08-decision-flow.md).
 
+## Cycle de vie du savoir
+
+Un savoir mémorisé n'est pas figé une fois pour toutes : il possède un cycle de vie qui va de son entrée en mémoire à son éventuel retrait. La mémoire durable ne croît pas sans borne ; sa valeur tient à sa fiabilité et à sa pertinence dans le temps, non à son volume.
+
+- **Validité temporelle** : chaque savoir durable est situé dans le temps. Ce qui était vrai à un moment donné peut cesser de l'être à mesure que le contexte, les projets ou les orientations d'AI-SOS évoluent.
+- **Péremption** : un savoir peut devenir obsolète. Un enseignement périmé n'est pas conservé comme s'il restait valide ; il est signalé comme tel afin de ne pas induire les acteurs en erreur.
+- **Revalidation périodique** : les savoirs durables sont réexaminés à intervalles définis pour confirmer qu'ils restent pertinents. La revalidation est un acte de gouvernance : elle relève de l'autorité humaine, qui confirme, corrige ou retire l'enseignement.
+- **Oubli et purge** : le retrait d'un savoir de la mémoire durable ne s'improvise pas. L'oubli et la purge sont gouvernés par des politiques approuvées par la gouvernance humaine, qui définissent ce qui peut être retiré, quand et par qui. Aucun retrait n'échappe à cette gouvernance.
+- **Archivage** : ce qui n'est plus actif mais dont la trace conserve une valeur historique ou probante est archivé plutôt que détruit. L'archivage préserve la traçabilité tout en allégeant la mémoire vive de ce qui n'a plus cours.
+
+Ce cycle de vie garantit que la mémoire durable reste un patrimoine vivant, borné et fiable, plutôt qu'une accumulation indéfinie qui perdrait en qualité à mesure qu'elle grandit.
+
+## Correction et quarantaine
+
+La mémoire d'AI-SOS n'est pas infaillible : un savoir considéré comme validé peut, à l'usage, se révéler faux. La qualité de la mémoire prime sur son exhaustivité, et un savoir erroné qui subsiste est plus dangereux qu'une absence de savoir.
+
+- **Mise en quarantaine** : lorsqu'un doute sérieux pèse sur un savoir validé, celui-ci peut être placé en quarantaine. Il n'est plus réutilisé comme un acquis fiable tant que sa validité n'a pas été réexaminée.
+- **Révocation** : si le doute est confirmé, le savoir est révoqué. Il cesse de faire autorité et ne peut plus fonder de nouvelles décisions.
+- **Propagation de la correction** : une correction ne se limite pas au savoir concerné. Elle est propagée aux décisions et aux enseignements qui en dépendaient, afin que l'erreur ne se perpétue pas silencieusement à travers les acteurs et les projets qui s'y étaient appuyés.
+- **Traçabilité de la correction** : la mise en quarantaine, la révocation et la propagation sont documentées, avec leur justification, pour que l'on puisse comprendre pourquoi un savoir a changé de statut.
+
+Corriger et révoquer sont donc des actes de gouvernance à part entière : ils protègent la fiabilité de l'ensemble de la mémoire.
+
+## Consultation à grande échelle
+
+À mesure que la mémoire durable grandit, la consultation ne peut pas parcourir indistinctement l'ensemble des savoirs disponibles : le coût d'une consultation exhaustive croîtrait sans borne. La consultation à grand volume est donc cadrée.
+
+- **Cadrage du besoin (scoping)** : chaque consultation commence par circonscrire le besoin réel, afin de ne mobiliser que la fraction pertinente de la mémoire plutôt que la totalité.
+- **Priorité au plus spécifique** : conformément au principe de subsidiarité, on privilégie les savoirs les plus proches du contexte de la demande avant les savoirs les plus généraux.
+- **Priorité au plus récent et au plus pertinent** : à portée comparable, les savoirs les plus récents et les mieux ajustés au besoin sont consultés en premier, ce qui limite l'examen des savoirs marginaux ou datés.
+- **Bornage du coût** : ce cadrage borne l'effort de consultation et garantit qu'une mémoire abondante reste exploitable, sans que la richesse du patrimoine ne dégrade la rapidité des acteurs.
+
+Ce cadrage relève de règles conceptuelles de consultation ; il ne présume d'aucune technologie particulière.
+
+## Confidentialité et souveraineté de la mémoire utilisateur
+
+La mémoire utilisateur touche à ce qui appartient en propre à l'utilisateur. Elle fait l'objet d'une protection renforcée qui prolonge le principe de responsabilité humaine.
+
+- **Protection** : la mémoire utilisateur est traitée comme un patrimoine sensible. Ce qui la compose est préservé et n'est pas exposé au-delà de ce qui sert l'accompagnement de l'utilisateur.
+- **Accès restreint** : l'accès à la mémoire utilisateur est limité aux acteurs qui en ont un besoin légitime pour servir cet utilisateur. Elle n'est pas une ressource commune que chacun consulterait librement.
+- **Souveraineté de l'utilisateur** : l'utilisateur demeure souverain sur ce qui le concerne. Son usage respecte la responsabilité humaine : aucune information mémorisée n'est utilisée contre son intérêt ou au mépris de ses décisions explicites.
+
+Cette exigence de confidentialité et de souveraineté distingue la mémoire utilisateur des mémoires de portée collective et en encadre strictement l'usage.
+
 ## Règles de consultation (qui consulte quoi, quand, pour quel besoin)
 
 La consultation obéit à un principe de subsidiarité : on interroge d'abord la mémoire la plus locale et la plus pertinente, puis on élargit si nécessaire.
@@ -113,7 +157,7 @@ La consultation obéit à un principe de subsidiarité : on interroge d'abord la
 - **Les Conseils d'Experts** consultent la mémoire long terme et la mémoire organisationnelle pour fonder leurs recommandations sur des savoirs éprouvés et des décisions d'architecture existantes.
 - **Les Départements** consultent la mémoire de projet et la mémoire long terme pour situer leur contribution et réutiliser les approches ayant fait leurs preuves.
 - **Les Agents spécialisés** consultent la mémoire court terme et les savoirs long terme utiles à l'exécution de leur tâche.
-- **Le CEO** et la **validation humaine** consultent la mémoire organisationnelle et l'historique des projets pour arbitrer les décisions importantes.
+- **Le CEO** et l'**autorité humaine** consultent la mémoire organisationnelle et l'historique des projets pour arbitrer les décisions importantes. La validation humaine intervient ici comme un acte d'arbitrage porté par ces acteurs, et non comme un acteur consulté en propre.
 
 **Ordre de consultation recommandé :** contexte de la demande en cours → mémoire de projet ou utilisateur concernée → savoirs long terme → principes organisationnels. Ce parcours va du plus spécifique au plus général et limite le risque d'appliquer un savoir général là où un contexte particulier prime.
 

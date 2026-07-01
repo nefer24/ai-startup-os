@@ -29,14 +29,85 @@ La scalabilité est la capacité du système à absorber une charge croissante �
 
 ### Justification
 
-AI-SOS est conçu comme une organisation vivante, appelée à croître et à se diversifier au fil des besoins. Une conception qui ne fonctionnerait qu'à petite échelle deviendrait un obstacle dès que l'organisation s'enrichirait de nouveaux Conseils d'Experts ou de nouveaux Départements. La scalabilité garantit que la croissance encadrée prévue par le principe d'évolution permanente reste possible sans que la coordination ni la qualité des décisions ne s'effondrent sous leur propre poids.
+AI-SOS est conçu comme une organisation vivante, appelée à croître et à se diversifier au fil des besoins. Une conception qui ne fonctionnerait qu'à petite échelle deviendrait un obstacle dès que l'organisation s'enrichirait de nouveaux Conseils d'Experts ou de nouveaux Départements. La scalabilité garantit que la croissance encadrée prévue par le principe d'évolution permanente reste possible sans que la coordination ni la qualité des décisions ne s'effondrent sous leur propre poids. Affirmer que la coordination « ne doit pas » devenir un goulet d'étranglement ne suffit pas : encore faut-il que l'architecture prévoie explicitement comment cette promesse tient à mesure que l'échelle augmente.
 
 ### Conséquences
 
 - L'ajout d'Agents spécialisés ou de Conseils d'Experts n'exige pas de repenser l'ensemble du système : la structure accueille la croissance par extension plutôt que par refonte.
-- La coordination assurée par l'Orchestrateur demeure lisible même lorsque le nombre d'intervenants augmente ; l'accroissement de l'échelle ne doit pas transformer la coordination en goulet d'étranglement.
+- L'Orchestrateur est un **rôle logique**, et non un point de passage unique et indivisible : ce rôle est partitionnable. Lorsque la charge ou la diversité des domaines l'exige, il peut être fédéré ou décomposé en sous-orchestrateurs coordonnés, chacun responsable d'un périmètre, de sorte que la coordination se distribue au lieu de se concentrer en un seul étranglement. Voir [`02-orchestrator.md`](./02-orchestrator.md).
+- La croissance de la mémoire est **bornée** : la matière conservée est hiérarchisée, résumée et archivée selon sa pertinence, afin que la mémoire n'enfle pas indéfiniment jusqu'à devenir elle-même un frein à la coordination et à la décision. Voir [`06-memory.md`](./06-memory.md).
+- La validation humaine est **graduée** : toutes les décisions ne requièrent pas le même niveau d'implication du CEO. Le degré d'attention humaine s'ajuste à l'importance et au risque de la décision, ce qui permet à la gouvernance de rester tenable même lorsque le volume de demandes croît, sans jamais retirer au CEO la décision sur ce qui compte. Voir [`08-decision-flow.md`](./08-decision-flow.md).
 - La montée en charge ne dilue pas la traçabilité ni la validation humaine : les garanties de gouvernance restent constantes quelle que soit la taille de l'organisation.
 - La qualité d'une décision ne dépend pas du volume de demandes traitées simultanément.
+
+## Concurrence
+
+### Définition
+
+La concurrence est la capacité du système à traiter plusieurs demandes en même temps sans que la simultanéité ne dégrade la qualité, la cohérence ou l'ordre des traitements. Là où la scalabilité regarde la croissance de la charge dans la durée, la concurrence regarde la coexistence de plusieurs sollicitations à un même instant.
+
+### Justification
+
+Une organisation qui ne saurait traiter qu'une demande à la fois serait irréaliste : les sollicitations arrivent en parallèle, se chevauchent et se disputent des ressources et une attention limitées. Ignorer cette simultanéité exposerait le système à des traitements enchevêtrés, à des décisions prises sur des états incohérents, ou à la famine de certaines demandes au profit d'autres. Reconnaître la concurrence dès la conception permet d'ordonner ce parallélisme au lieu de le subir, et de préserver la qualité de chaque décision indépendamment de ce qui se passe à côté.
+
+### Conséquences
+
+- Les demandes concurrentes sont ordonnancées explicitement : le système dispose de files et de règles de priorisation qui déterminent ce qui est traité, dans quel ordre et avec quel niveau d'urgence, plutôt que de laisser cet ordre au hasard.
+- La contention sur des ressources ou des composants partagés est reconnue et arbitrée : aucune demande n'est indéfiniment privée d'avancement, et aucune ne compromet l'intégrité d'une autre.
+- Le traitement simultané ne crée pas d'états incohérents : une décision est prise sur une vue cohérente de l'information, jamais sur un état laissé à moitié modifié par un traitement concurrent.
+- La priorisation reste sous gouvernance : les critères qui déterminent ce qui passe avant quoi sont explicites, traçables et révisables, et ne contournent jamais la validation humaine sur ce qui l'exige.
+
+## Sécurité
+
+### Définition
+
+La sécurité est la propriété transverse par laquelle le système protège son intégrité, ses ressources et ses décisions contre les usages non autorisés, les comportements déviants et les composants compromis. Elle n'est pas confinée à un Département particulier : elle traverse l'ensemble de l'organisation et conditionne la confiance que l'on peut accorder à chacune de ses parties.
+
+### Justification
+
+Un système composé d'agents autonomes qui délibèrent, échangent et recommandent constitue une surface où un composant peut, par erreur ou par malveillance, agir hors de son mandat. Traiter la sécurité comme la seule affaire d'un Département spécialisé laisserait sans protection les frontières mêmes par lesquelles les composants interagissent. En posant la sécurité comme propriété transverse, on garantit que chaque composant n'obtient que ce dont il a besoin, que la défaillance ou la compromission de l'un ne contamine pas les autres, et que le système reste digne de confiance même lorsqu'il est mis à l'épreuve.
+
+### Conséquences
+
+- Chaque composant opère selon le **moindre privilège** : il ne dispose que des accès et des capacités strictement nécessaires à son rôle, et rien de plus.
+- Les composants sont soumis à une **isolation de confiance** : les frontières entre eux sont des frontières de confiance, de sorte qu'un composant ne peut ni présumer, ni usurper les prérogatives d'un autre.
+- La conception intègre l'hypothèse d'un **agent compromis ou malveillant** : le système est pensé pour qu'un composant se comportant de façon déviante soit contenu et ne puisse ni imposer une décision, ni corrompre l'ensemble.
+- La **détection de dérive** (drift) est prévue : un écart durable entre le comportement attendu d'un composant et son comportement observé doit pouvoir être perçu, signalé et traité, plutôt que de s'installer silencieusement.
+- La sécurité ne contourne jamais la gouvernance : elle protège la validation humaine plutôt que de s'y substituer, et une mesure de sécurité ne saurait justifier une décision importante prise sans l'aval du CEO.
+
+## Confidentialité et éthique
+
+### Définition
+
+La confidentialité et l'éthique constituent la propriété par laquelle le système protège les données qui lui sont confiées, respecte la vie privée des personnes concernées et n'agit qu'au service d'un usage responsable. Elle porte à la fois sur ce que le système conserve et expose, et sur les finalités qu'il sert.
+
+### Justification
+
+Un système qui traite des demandes et accumule un savoir manipule, par nature, des informations dont la divulgation ou le mésusage porterait préjudice. La puissance d'une organisation d'agents ne vaut que si elle demeure au service de l'humain plutôt que de le desservir. Sans cette propriété, l'efficacité du système deviendrait une menace : traçabilité et mémoire, qui font sa force, se retourneraient en atteintes à la vie privée. Poser la confidentialité et l'éthique comme propriétés du système garantit que sa capacité reste subordonnée au respect des personnes et à la finalité qu'il est censé servir.
+
+### Conséquences
+
+- Les données confiées au système sont **protégées** : leur accès est restreint à ce que le traitement d'une demande exige, et leur conservation obéit à la finalité pour laquelle elles ont été recueillies.
+- La **vie privée** des personnes concernées est respectée : le système ne collecte, n'expose ni ne conserve d'information au-delà de ce qui est nécessaire et légitime.
+- L'**usage responsable** prime : le système ne met pas ses capacités au service de finalités contraires à l'intérêt des personnes, et une finalité douteuse est un motif de suspension et de renvoi à la gouvernance, non un obstacle à contourner.
+- Le système reste **au service de l'humain** : sa raison d'être est d'assister la décision humaine, jamais de la déposséder ni de l'instrumentaliser ; l'éthique prolonge ainsi la validation humaine plutôt que de la relativiser.
+
+## Reproductibilité et versioning
+
+### Définition
+
+La reproductibilité et le versioning constituent la propriété par laquelle l'état du système — les versions des agents, des décisions et des savoirs — est identifié, conservé et restituable. Une contribution passée doit pouvoir être retrouvée dans l'état exact où elle a été produite, comprise et rejouée, afin de rester auditable dans le temps.
+
+### Justification
+
+Un système qui évolue en permanence risque, sans versioning, de rendre son propre passé illisible : une décision ancienne deviendrait incompréhensible dès lors que les agents, les savoirs ou les règles qui l'ont produite auraient changé sans laisser trace de leur état antérieur. Si une contribution passée ne peut plus être reproduite, la traçabilité s'effondre : conserver le *quoi* sans pouvoir restituer le *contexte* qui l'a produit revient à conserver une trace qu'on ne peut plus interpréter. Le versioning est donc la condition qui rend la traçabilité durable et l'amélioration continue vérifiable.
+
+### Conséquences
+
+- Les **agents** sont versionnés : on sait, pour chaque décision, quelle version d'un composant y a contribué, de sorte qu'une évolution ultérieure n'efface pas la compréhension du passé.
+- Les **décisions** sont versionnées : une décision retenue, ses options écartées et sa validation restent attachées à l'état du système qui les a produites.
+- Les **savoirs** sont versionnés : la mémoire distingue ses états successifs, afin qu'une connaissance mobilisée hier reste identifiable même si elle a été révisée depuis.
+- Une contribution passée demeure **reproductible et auditable** : il reste possible de reconstituer les conditions dans lesquelles elle a été produite, sans quoi la traçabilité perdrait son sens.
 
 ## Modularité
 
@@ -129,8 +200,10 @@ Les principes techniques présentés ici ne constituent pas un cadre parallèle 
 
 - La **modularité** et l'**extensibilité** prolongent la **spécialisation** et l'**évolution permanente** : des composants aux frontières nettes, que l'organisation peut enrichir sans se défaire.
 - L'**observabilité** et la **traçabilité** donnent corps à la **documentation** et à la **validation humaine** : rendre la pensée collective visible dans le présent, et retraçable dans le temps, pour que le CEO décide en connaissance de cause.
+- La **reproductibilité et le versioning** approfondissent la **traçabilité** et la **documentation** : ils garantissent qu'une contribution passée reste reproductible et auditable, sans quoi la trace conservée deviendrait illisible à mesure que le système évolue.
 - La **tolérance aux erreurs** et la **robustesse** servent l'**amélioration continue** : accueillir l'erreur et l'imprévu comme des ressources, les contenir et en apprendre.
-- La **scalabilité** rend possible l'**évolution permanente** à l'échelle, sans jamais diluer les garanties de gouvernance.
+- La **scalabilité** et la **concurrence** rendent possible l'**évolution permanente** à l'échelle et dans la simultanéité, sans jamais diluer les garanties de gouvernance : l'Orchestrateur reste un rôle logique partitionnable, la mémoire bornée et la validation humaine graduée.
+- La **sécurité** et le couple **confidentialité et éthique** garantissent que la puissance du système demeure subordonnée à la protection des personnes et à la gouvernance : moindre privilège, isolation de confiance et usage responsable maintiennent le système **au service de l'humain**.
 - Enfin, l'ensemble reste subordonné au principe du **problème avant la technologie** et à la **neutralité technologique** : ces propriétés sont recherchées pour elles-mêmes, indépendamment de tout moyen technique, et ne valent que parce qu'elles servent la résolution du problème réel sous gouvernance humaine finale.
 
-Ces principes ne se suffisent pas isolément : ils se renforcent mutuellement, à l'image des principes fondamentaux. La modularité rend possible la scalabilité ; l'observabilité alimente la traçabilité ; la tolérance aux erreurs et la robustesse se complètent. Respectés ensemble, ils garantissent qu'AI-SOS demeure, quelles que soient son échelle et son évolution, un système intelligible, gouvernable et fidèle à sa devise : **Comprendre. Collaborer. Construire. Améliorer.**
+Ces principes ne se suffisent pas isolément : ils se renforcent mutuellement, à l'image des principes fondamentaux. La modularité rend possible la scalabilité ; l'observabilité alimente la traçabilité, que la reproductibilité rend durable ; la tolérance aux erreurs et la robustesse se complètent ; la sécurité, la confidentialité et l'éthique protègent l'ensemble, tandis que la concurrence en préserve la qualité sous la pression du parallélisme. Respectés ensemble, ils garantissent qu'AI-SOS demeure, quelles que soient son échelle et son évolution, un système intelligible, gouvernable et fidèle à sa devise : **Comprendre. Collaborer. Construire. Améliorer.**

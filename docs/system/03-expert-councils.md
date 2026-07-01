@@ -16,6 +16,41 @@ Ce refus de la décision solitaire s'inscrit dans les principes fondateurs d'AI-
 
 Il existe autant de Conseils que de domaines de responsabilité — architecture, sécurité, données, produit, expérience utilisateur, qualité, et les grands domaines techniques et d'intelligence artificielle. Chaque domaine dispose ainsi d'une enceinte propre où ses questions importantes sont délibérées avant d'atteindre l'humain.
 
+## Relation entre Conseils et Départements
+
+Un Conseil d'Experts et un Département ne sont pas la même chose, et cette distinction est structurante. Un **Département** est une instance permanente qui regroupe des Agents spécialisés partageant une même famille d'expertise ; il constitue le rattachement principal et durable d'un agent. Un **Conseil d'Experts** est une instance **transverse** qui réunit, le temps d'une délibération, des Agents issus de plusieurs Départements autour d'une question importante. Un Conseil n'est **pas** un Département : il ne possède ni effectif permanent au sens d'un rattachement, ni périmètre organisationnel propre. Il se forme pour délibérer, produit une recommandation, puis se dissout.
+
+Qui peuple un Conseil ? Des **Agents spécialisés détachés de leurs Départements** le temps de la délibération. Ces agents demeurent rattachés à leur Département d'origine ; leur participation à un Conseil est une **contribution transverse** qui ne modifie pas leur rattachement principal. Le Conseil rassemble ainsi la diversité d'expertises nécessaire à la question posée, en puisant dans un ou plusieurs Départements selon les enjeux qu'elle soulève.
+
+À chaque grand domaine de responsabilité correspond conceptuellement un Conseil. Cette correspondance domaine ↔ Conseil est directe mais non rigide : une même question peut mobiliser plusieurs Conseils, et un Conseil peut convier des expertises issues de domaines voisins. À titre indicatif :
+
+| Domaine | Conseil correspondant | Départements sollicités (à titre indicatif) |
+| --- | --- | --- |
+| Architecture et direction technique | Conseil d'architecture | Engineering, Infrastructure |
+| Sécurité et risque | Conseil de sécurité | Security |
+| Données et modélisation | Conseil des données | Engineering, Infrastructure |
+| Produit et priorisation | Conseil produit | Product, Business |
+| Expérience utilisateur | Conseil d'expérience utilisateur | UX, Product |
+| Qualité et exigences | Conseil de qualité | Engineering, Product |
+| Intelligence artificielle | Conseil d'intelligence artificielle | Research, Engineering |
+
+Le détail des Départements, de leur structure et du rattachement des agents figure dans [`04-departments.md`](./04-departments.md).
+
+## Conseils par domaine
+
+La liste des Conseils est **indicative et extensible** : elle reflète les grands domaines de responsabilité de l'organisation et peut s'enrichir de nouveaux Conseils à mesure que de nouveaux domaines émergent, dans le cadre de gouvernance décrit dans [`09-agent-creation.md`](./09-agent-creation.md). Cette liste demeure cohérente avec les Conseils recensés dans le dossier `councils/` du dépôt :
+
+- **Conseil d'architecture** — architecture de haut niveau et direction technique.
+- **Conseil de sécurité** — sécurité et maîtrise des risques.
+- **Conseil des données** — modélisation et organisation des données.
+- **Conseil produit** — direction et priorisation du produit.
+- **Conseil d'expérience utilisateur** — expérience et facilité d'usage.
+- **Conseil de qualité** — exigences de qualité et validation.
+- **Conseil d'intelligence artificielle** — intelligence artificielle et apprentissage.
+- **Conseil de conception applicative** — conception des composants applicatifs, côté fondations comme côté interface.
+
+Aucune de ces enceintes n'est un Département : ce sont des lieux de délibération transverse, convoqués au besoin, qui puisent leurs membres dans les Départements concernés.
+
 ## Composition d'un Conseil
 
 Un Conseil réunit plusieurs Agents spécialisés dont les rôles se complètent. Sa composition n'est pas figée : elle s'adapte à la nature de la question traitée, tout en respectant une structure stable.
@@ -32,6 +67,17 @@ Lorsqu'une question déborde les frontières d'un seul domaine, le Conseil convi
 
 L'[`Orchestrateur`](./02-orchestrator.md) assure la facilitation du Conseil. Il ne tranche pas et n'impose pas de position : son rôle est de veiller au bon déroulement de la délibération. Il convoque les membres pertinents, cadre la question, s'assure que chaque perspective peut s'exprimer, empêche qu'une voix domine indûment et garantit que le mouvement délibératif progresse vers une recommandation. Sa neutralité est la condition de l'équité du débat.
 
+## Facilitation et responsabilité
+
+La délibération d'un Conseil distingue deux fonctions qui ne doivent jamais se confondre : celle du **facilitateur** et celle des **membres**.
+
+- **Le facilitateur** est l'[`Orchestrateur`](./02-orchestrator.md). Il est **neutre** et **garant du processus** : il cadre la question, ouvre et clôt les phases de délibération, veille au respect du quorum, du critère de convergence et du time-box, et s'assure que chaque perspective peut s'exprimer sans qu'aucune ne domine indûment. Le facilitateur ne porte **aucune** position sur le fond ; il ne juge pas la valeur des options et ne pèse pas dans la recommandation. Sa responsabilité est celle de la **qualité du processus**, non celle du contenu.
+- **Les membres** sont les Agents spécialisés qui délibèrent. Ils sont **responsables du contenu** : la pertinence des options, la solidité des arguments, l'identification des risques et, en définitive, la **qualité de la recommandation** produite. C'est à eux, et non au facilitateur, qu'incombe le fond de la délibération.
+
+Cette séparation protège l'équité du débat : le garant du processus n'a pas d'intérêt dans son issue, et ceux qui ont un avis sur le fond n'ont pas la main sur les règles du jeu.
+
+Lorsque plusieurs Conseils siègent en parallèle, la fonction de facilitateur peut être **déléguée**. L'Orchestrateur confie alors la facilitation d'un Conseil à un facilitateur délégué, qui exerce le même rôle neutre de garant du processus et rend compte à l'Orchestrateur. La délégation porte sur la fonction de facilitation, jamais sur la responsabilité du contenu, qui demeure celle des membres.
+
 ## Comment ils débattent
 
 La délibération d'un Conseil suit un mouvement structuré en trois temps, qui transforme des positions initiales en une réflexion collective éprouvée.
@@ -46,9 +92,36 @@ Les positions exposées sont soumises à un examen mutuel. Les membres cherchent
 
 ### Amélioration
 
-À la lumière des critiques, les options sont retravaillées, combinées ou écartées. Les membres ajustent leurs positions, intègrent les objections valides et construisent des propositions plus robustes que celles initialement avancées. Ce mouvement peut se répéter : débattre, critiquer et améliorer jusqu'à ce que les options survivantes aient résisté à un examen sérieux.
+À la lumière des critiques, les options sont retravaillées, combinées ou écartées. Les membres ajustent leurs positions, intègrent les objections valides et construisent des propositions plus robustes que celles initialement avancées. Ce mouvement peut se répéter : débattre, critiquer et améliorer jusqu'à ce que les options survivantes satisfassent le critère de convergence défini plus bas, dans les limites d'itérations et de temps du Conseil.
 
 Ce cycle délibératif est décrit dans son ensemble dans le [`flux de décision`](./08-decision-flow.md).
+
+## Taille et protocole de conclusion
+
+Pour rester délibérant, un Conseil obéit à des bornes explicites de taille et de conclusion. Ces bornes évitent deux dérives symétriques : l'enceinte pléthorique où plus personne ne s'écoute, et la délibération sans fin qui ne conclut jamais.
+
+### Taille bornée et sous-comités
+
+Un Conseil a une **taille bornée**. Au-delà d'un certain nombre de membres, la délibération perd en qualité : les tours de parole s'allongent, les échanges se diluent et la confrontation des idées s'appauvrit. Lorsqu'une question exige davantage d'expertises que le Conseil ne peut en accueillir utilement, il forme des **sous-comités** : des groupes restreints qui approfondissent un aspect délimité de la question, puis restituent leurs conclusions au Conseil plénier. Le sous-comité prépare la délibération ; il ne se substitue pas au Conseil ni à sa recommandation.
+
+### Quorum
+
+Une délibération n'est valide que si un **quorum** est réuni : un nombre et une diversité minimaux de membres présents, garantissant que les perspectives essentielles au domaine sont effectivement représentées. En deçà du quorum, le Conseil ne conclut pas ; le facilitateur convoque les membres manquants ou reporte la délibération. Le quorum protège la recommandation contre le risque d'une conclusion tirée d'un échantillon d'expertises trop étroit.
+
+### Critère de convergence objectif
+
+La conclusion du cycle débat → critique → amélioration ne repose pas sur une appréciation floue telle qu'un « examen sérieux », qui n'est pas décidable. Elle repose sur un **critère de convergence objectif** : la délibération est réputée aboutie lorsque les options survivantes ont résisté à un tour de critique sans qu'aucune objection de fond nouvelle n'émerge, et que les objections soulevées ont été soit intégrées, soit explicitement consignées comme dissensions. Ce critère, observable et vérifiable, permet de déterminer sans ambiguïté si le Conseil peut conclure.
+
+### Itérations bornées et time-box
+
+Le cycle débat → critique → amélioration est **borné** de deux manières : par un **nombre maximal d'itérations** et par une **limite de temps conceptuelle** (time-box). Ces bornes garantissent qu'un Conseil conclut toujours, y compris en l'absence de consensus.
+
+En cas d'**absence de convergence** lorsque les bornes sont atteintes — critère de convergence non satisfait au terme du time-box ou du nombre maximal d'itérations —, le Conseil ne force pas un accord artificiel. Il applique le protocole de conclusion suivant :
+
+- **Présentation à parité** : les options concurrentes sont présentées **à parité**, chacune accompagnée de ses raisons et de ses risques, sans qu'aucune ne soit indûment privilégiée.
+- **Escalade** : la question est **escaladée** à la validation humaine, à qui il revient de trancher entre les options présentées.
+
+Ce protocole prolonge la manière dont le Conseil gère les désaccords, décrite ci-dessous, et garantit qu'une délibération se termine toujours par une transparence accrue envers l'humain, jamais par un blocage.
 
 ## Comment ils produisent une recommandation
 

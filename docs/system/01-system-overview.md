@@ -20,7 +20,7 @@ Le CEO humain occupe le sommet de l'organisation. Il fixe les intentions, arbitr
 
 ### Executive Board
 
-L'Executive Board constitue le relais stratégique entre l'intention humaine et l'organisation des agents. Il cadre les priorités, veille à la cohérence d'ensemble et prépare les éléments qui permettront au CEO de décider en connaissance de cause. Il garantit que les travaux menés en dessous de lui restent alignés avec les objectifs et les contraintes fixés au plus haut niveau.
+L'Executive Board constitue le relais stratégique entre l'intention humaine et l'organisation des agents. Il cadre les priorités, veille à la cohérence d'ensemble et prépare les éléments qui permettront au CEO de décider en connaissance de cause. Il garantit que les travaux menés en dessous de lui restent alignés avec les objectifs et les contraintes fixés au plus haut niveau. Sa composition, ses responsabilités et sa frontière avec l'Orchestrateur sont détaillées dans [`11-executive-board.md`](./11-executive-board.md).
 
 ### Orchestrateur
 
@@ -36,7 +36,7 @@ Les Départements regroupent les domaines de compétence par grandes fonctions. 
 
 ### Agents spécialisés
 
-Les Agents spécialisés constituent le niveau le plus concret. Chacun porte une expertise précise et contribue par sa perspective au débat, à l'analyse et à la production de recommandations. La spécialisation garantit la profondeur : plutôt qu'un généraliste unique, le système mobilise un ensemble de compétences pointues qui, combinées, couvrent le problème sous tous ses angles. Leur nature et leur cycle de vie sont décrits dans [`05-agents.md`](./05-agents.md).
+Les Agents spécialisés constituent le niveau le plus concret. Chacun porte une expertise précise et contribue par sa perspective au débat, à l'analyse et à la production de recommandations. La spécialisation garantit la profondeur : plutôt qu'un généraliste unique, le système mobilise un ensemble de compétences pointues qui, combinées, couvrent le problème sous tous ses angles. Leur nature et leur cycle de vie sont décrits dans [`05-specialized-agents.md`](./05-specialized-agents.md).
 
 ## Composants principaux
 
@@ -47,6 +47,8 @@ Le deuxième composant est le mécanisme de délibération porté par les Consei
 Le troisième composant est l'Orchestrateur, qui assure la circulation de l'information et la mise en mouvement du travail. Il connecte les niveaux entre eux, prépare les débats et signale les manques, en veillant à ce que chaque demande suive un cheminement clair.
 
 Le quatrième composant est la mémoire du système, qui conserve les analyses, les décisions et les enseignements passés afin d'éclairer les travaux futurs. Le cinquième composant, transversal, est la documentation : chaque étape significative laisse une trace explicite, ce qui rend le système auditable et améliorable. Ces deux dimensions se retrouvent respectivement dans [`06-memory.md`](./06-memory.md) et dans l'ensemble des documents de gouvernance.
+
+Ces composants s'appuient enfin sur un ensemble de **propriétés systémiques** transverses — robustesse, sécurité, confidentialité, traçabilité, reproductibilité, scalabilité et concurrence — décrites dans [`10-system-principles.md`](./10-system-principles.md). Le vocabulaire commun employé dans ce dossier est défini dans le [`00-glossary.md`](./00-glossary.md).
 
 ## Principes directeurs du système
 

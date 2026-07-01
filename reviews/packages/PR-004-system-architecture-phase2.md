@@ -103,3 +103,13 @@ Cette PR **définit** l'architecture conceptuelle ; elle n'affecte aucune archit
 ## 14. Recommandation de Claude Code
 
 Je recommande l'**adoption** de cette Pull Request. Elle réalise pleinement l'objectif de la Phase 2 : une architecture conceptuelle complète, cohérente avec la Constitution et les Principes, sans aucun code ni choix technologique, et sans modifier ni supprimer de contenu existant. Le risque technique est très faible. Sous réserve des arbitrages conceptuels listés en section 13 (périmètre des départements, granularité des mémoires), l'ensemble est prêt pour la revue du Chief AI Architect puis la validation du CEO. Aucune fusion ne sera effectuée avant autorisation explicite du CEO.
+
+## 15. Audit interne (décision 013)
+
+Un **audit interne** a été conduit par un Conseil de Revue de sept experts indépendants avant toute revue par le Chief AI Architect. Le rapport officiel est archivé dans [`PR-004-architecture-audit.md`](./PR-004-architecture-audit.md).
+
+- **Score initial :** 62/100 — faiblesses structurelles réelles (Executive Board non décrit, lien mort, diagramme de flux incohérent, relation Conseils/Départements, Orchestrateur non partitionnable, absence de critères de terminaison, de mode dégradé de validation, de cycle de vie mémoire, et de propriétés systémiques de sécurité/versioning/concurrence).
+- **Corrections appliquées :** création de `00-glossary.md` et `11-executive-board.md` ; refonte du diagramme de flux (`08`) ; fédération et résilience de l'Orchestrateur (`02`) ; arbitrage Conseils ↔ Départements (`03`/`04`) ; validation humaine graduée et mode dégradé (`08`) ; cycle de vie et quarantaine de la mémoire (`06`) ; quatre nouvelles propriétés systémiques (`10`) ; harmonisation terminologique, parcours de lecture et exemple de bout en bout.
+- **Score final :** **90/100** — seuil de mise en revue atteint.
+
+Cette PR ajoute donc, outre les documents d'architecture, le rapport d'audit officiel et l'enregistrement de la **décision 013** (audit interne obligatoire) au registre.

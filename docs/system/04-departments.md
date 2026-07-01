@@ -26,9 +26,15 @@ Cette structure commune permet de raisonner de façon uniforme sur n'importe que
 
 ## Catalogue des Départements
 
-Le catalogue ci-dessous présente un ensemble de Départements représentatifs des grands domaines de l'organisation. Cette liste est **extensible** : d'autres Départements peuvent être créés au fil de l'évolution des besoins, selon le cadre de gouvernance décrit dans [`09-agent-creation.md`](./09-agent-creation.md). Les agents cités sont des exemples conceptuels de rôles typiques, et non une énumération exhaustive.
+Le catalogue ci-dessous présente un ensemble de Départements **à titre purement illustratif**. Cette liste est **illustrative et extensible**, et **non un socle normatif figé** : elle donne à voir des grands domaines représentatifs sans prétendre fixer, de manière définitive, la composition départementale de l'organisation.
 
-### Engineering
+En conséquence :
+
+- **Valeur d'exemple** : chaque entrée du catalogue constitue un **exemple conceptuel** de Département possible, et non une prescription. Les Missions, Responsabilités et Agents cités illustrent des rôles typiques et ne forment pas une énumération exhaustive ni obligatoire.
+- **Ratification formelle** : la liste effective des Départements retenus par l'organisation relève d'une **décision d'architecture formelle**, tracée dans le **registre des décisions**. Aucun Département n'acquiert de statut normatif du seul fait de figurer dans ce catalogue illustratif.
+- **Extensibilité** : d'autres Départements peuvent être créés, redéfinis ou retirés au fil de l'évolution des besoins, selon le cadre de gouvernance décrit dans [`09-agent-creation.md`](./09-agent-creation.md).
+
+### Engineering *(exemple conceptuel)*
 
 **Mission** : Concevoir, structurer et faire évoluer les fondations conceptuelles des solutions de l'organisation, en garantissant leur cohérence, leur qualité et leur pérennité.
 
@@ -36,7 +42,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent d'architecture conceptuelle qui définit les grandes structures ; un agent de conception détaillée qui affine les composants ; un agent de revue de qualité qui évalue la solidité des propositions ; un agent d'intégration qui veille à la cohérence d'ensemble.
 
-### Research
+### Research *(exemple conceptuel)*
 
 **Mission** : Explorer, analyser et synthétiser la connaissance nécessaire pour éclairer les décisions et anticiper les évolutions du domaine d'activité.
 
@@ -44,7 +50,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent d'exploration qui identifie les pistes pertinentes ; un agent de synthèse qui condense les résultats ; un agent de vérification qui contrôle la validité des conclusions ; un agent de veille qui suit l'évolution des connaissances.
 
-### Business
+### Business *(exemple conceptuel)*
 
 **Mission** : Aligner les activités de l'organisation sur ses objectifs de valeur, en éclairant les choix stratégiques et opérationnels.
 
@@ -52,7 +58,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent de stratégie qui formule des orientations ; un agent d'analyse d'opportunités qui évalue les pistes ; un agent de modélisation d'activité qui structure les propositions de valeur ; un agent de suivi de performance qui mesure les résultats.
 
-### Marketing
+### Marketing *(exemple conceptuel)*
 
 **Mission** : Comprendre les audiences et concevoir la manière dont l'organisation communique la valeur de ses solutions.
 
@@ -60,7 +66,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent de positionnement qui clarifie l'identité et la différenciation ; un agent de contenu qui élabore les messages ; un agent d'analyse d'audience qui caractérise les publics ; un agent de mesure d'impact qui évalue les retours.
 
-### Finance
+### Finance *(exemple conceptuel)*
 
 **Mission** : Garantir la lisibilité et la soutenabilité financière des activités de l'organisation.
 
@@ -68,7 +74,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent de planification financière qui projette les besoins ; un agent d'analyse de coûts qui évalue les dépenses ; un agent de suivi budgétaire qui contrôle l'allocation ; un agent d'évaluation de risque financier qui identifie les vulnérabilités.
 
-### Legal
+### Legal *(exemple conceptuel)*
 
 **Mission** : Veiller à la conformité et à la maîtrise des risques juridiques des activités de l'organisation.
 
@@ -76,7 +82,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent de conformité qui vérifie le respect des règles ; un agent d'analyse contractuelle qui examine les engagements ; un agent de veille réglementaire qui suit les évolutions ; un agent d'évaluation de risque juridique qui alerte sur les expositions.
 
-### Psychology
+### Psychology *(exemple conceptuel)*
 
 **Mission** : Éclairer les dimensions humaines et comportementales des décisions et des interactions au sein de l'organisation et avec ses publics.
 
@@ -84,7 +90,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent d'analyse comportementale qui étudie les dynamiques ; un agent d'accompagnement qui propose des approches relationnelles ; un agent d'évaluation d'impact humain qui apprécie les conséquences ; un agent de motivation qui éclaire les leviers d'engagement.
 
-### Education
+### Education *(exemple conceptuel)*
 
 **Mission** : Concevoir et structurer la transmission des connaissances, tant en interne qu'en direction des publics de l'organisation.
 
@@ -92,7 +98,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent de conception pédagogique qui structure les parcours ; un agent de vulgarisation qui rend les contenus accessibles ; un agent d'évaluation d'apprentissage qui mesure la compréhension ; un agent d'accompagnement qui soutient la progression.
 
-### Product
+### Product *(exemple conceptuel)*
 
 **Mission** : Définir et faire évoluer la valeur des solutions offertes, en cohérence avec les besoins des utilisateurs et les objectifs de l'organisation.
 
@@ -100,7 +106,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent de vision produit qui définit le cap ; un agent de priorisation qui arbitre les orientations ; un agent d'analyse de besoin qui caractérise les attentes ; un agent de cohérence qui veille à l'unité de la solution.
 
-### UX
+### UX *(exemple conceptuel)*
 
 **Mission** : Garantir la qualité, la clarté et l'accessibilité de l'expérience vécue par les utilisateurs.
 
@@ -108,7 +114,7 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent de conception d'expérience qui structure les parcours ; un agent de recherche utilisateur qui recueille les besoins ; un agent d'évaluation d'utilisabilité qui teste la clarté ; un agent d'accessibilité qui veille à l'inclusion.
 
-### Security
+### Security *(exemple conceptuel)*
 
 **Mission** : Protéger l'intégrité, la confidentialité et la fiabilité des activités et des informations de l'organisation.
 
@@ -116,13 +122,50 @@ Le catalogue ci-dessous présente un ensemble de Départements représentatifs d
 
 **Agents** : Un agent d'analyse de menaces qui anticipe les risques ; un agent d'évaluation de vulnérabilités qui identifie les faiblesses ; un agent de définition de protections qui propose des garde-fous ; un agent de surveillance qui signale les anomalies.
 
-### Infrastructure
+### Infrastructure *(exemple conceptuel)*
 
 **Mission** : Assurer la solidité, la disponibilité et la continuité des fondations sur lesquelles reposent les activités de l'organisation.
 
 **Responsabilités** : Concevoir des fondations fiables, veiller à leur résilience, anticiper les besoins de capacité et recommander les évolutions nécessaires à la continuité des activités.
 
 **Agents** : Un agent de conception de fondations qui structure les socles ; un agent de résilience qui prépare la continuité ; un agent de capacité qui anticipe les besoins ; un agent de supervision qui suit l'état des fondations.
+
+## Règle anti-recouvrement
+
+Les Départements ont des **frontières nettes** : chaque domaine possède un périmètre identifiable, et un même travail relève d'**un seul Département responsable**. Cette règle garantit qu'aucune contribution ne se retrouve orpheline ni revendiquée simultanément par plusieurs Départements.
+
+Certains domaines présentent toutefois des **chevauchements potentiels**. Ainsi, la notion de « valeur » et celle de « besoins utilisateurs » peuvent être invoquées par les Départements **Product**, **Business** et **UX** : Product y voit la valeur de la solution, Business la valeur pour l'organisation, UX la valeur ressentie par l'utilisateur. Ces recoupements sont normaux mais ne doivent jamais aboutir à une responsabilité diffuse.
+
+Le traitement des chevauchements obéit à des principes clairs :
+
+- **Responsable unique** : pour tout travail donné, un seul Département est désigné responsable ; les autres peuvent contribuer, mais ne portent pas la responsabilité.
+- **Arbitrage par l'Orchestrateur** : lorsque plusieurs Départements peuvent légitimement revendiquer un travail, l'attribution est arbitrée par l'**Orchestrateur**, qui tranche en fonction des Missions respectives.
+- **Escalade vers l'Executive Board** : à défaut de résolution au niveau de l'Orchestrateur, l'arbitrage est porté devant l'**Executive Board**.
+- **Traçabilité** : l'attribution retenue est explicite, afin d'éviter la réapparition du même conflit de périmètre.
+
+## Interfaces entre Départements
+
+Pour collaborer sans dépendre systématiquement d'une médiation centrale, les Départements s'appuient sur des **interfaces**, c'est-à-dire des **contrats conceptuels stables** définissant ce qu'un Département attend en **entrée** et ce qu'il fournit en **sortie**.
+
+Ces interfaces conceptuelles reposent sur plusieurs principes :
+
+- **Contrats stables** : chaque Département expose des entrées attendues (ce dont il a besoin pour agir) et des sorties attendues (ce qu'il produit pour les autres), formulées de façon suffisamment durable pour ne pas être renégociées à chaque interaction.
+- **Couplage faible** : en s'appuyant sur ces contrats, un Département peut consommer les sorties d'un autre sans connaître son fonctionnement interne, ce qui limite les dépendances rigides et facilite l'évolution de chacun.
+- **Médiation centrale non systématique** : des interfaces claires permettent aux Départements de collaborer directement pour les échanges courants, réservant l'intervention de l'**Orchestrateur** aux cas de coordination transverse, d'arbitrage ou de consolidation.
+- **Lisibilité des échanges** : les contrats rendent explicites les points de contact entre domaines, ce qui réduit les ambiguïtés et renforce la cohérence d'ensemble.
+
+Ces interfaces conceptuelles ne modifient pas la hiérarchie : les décisions engageantes demeurent soumises à la **validation humaine** du **CEO**.
+
+## Dimension multi-juridiction, multi-langue et multi-culture
+
+Le **droit applicable**, la **langue** et la **culture** ne sont pas des hypothèses implicites de l'organisation : ce sont des **dimensions de contexte** qui doivent être explicitées pour chaque travail concerné. Présumer un cadre juridique unique, une langue par défaut ou une norme culturelle homogène constituerait un biais susceptible de fausser les recommandations.
+
+Ce principe se décline ainsi :
+
+- **Contexte, non hypothèse** : la juridiction, la langue et la culture pertinentes sont des paramètres de contexte à identifier explicitement, et non des valeurs supposées acquises.
+- **Pluralité juridictionnelle** : un même domaine juridique peut couvrir **plusieurs juridictions** aux règles distinctes ; une recommandation valable dans un cadre ne l'est pas nécessairement dans un autre.
+- **Départements particulièrement concernés** : cette dimension touche l'ensemble de l'organisation, mais concerne tout particulièrement les Départements **Legal** (diversité des cadres juridiques), **Marketing** (adaptation du discours aux publics et aux cultures) et **UX** (langue, conventions et attentes culturelles des utilisateurs).
+- **Explicitation des limites** : lorsqu'une recommandation dépend d'un contexte juridictionnel, linguistique ou culturel donné, ce périmètre de validité est signalé, afin d'éviter toute généralisation abusive.
 
 ## Appartenance d'un agent à un Département
 
@@ -149,13 +192,24 @@ Toute création ou modification de Département s'effectue exclusivement dans le
 
 Les modalités précises de création des Départements et des Agents spécialisés sont décrites dans [`09-agent-creation.md`](./09-agent-creation.md).
 
+## Relation entre Département et Conseil d'Experts
+
+Les Départements et les Conseils d'Experts ne se situent pas sur le même plan et ne remplissent pas la même fonction, ce qui rend leur articulation essentielle :
+
+- **Département : axe vertical** : un Département regroupe des Agents spécialisés autour d'un domaine de compétence stable et en porte la responsabilité opérationnelle.
+- **Conseil : axe transverse** : un **Conseil est transverse**. Il ne possède pas d'agents en propre ni de périmètre départemental ; il réunit ponctuellement des expertises issues de plusieurs Départements pour éclairer une question dépassant un domaine unique.
+- **Éclairage, non exécution** : le Conseil apporte un éclairage consolidé sur les enjeux transversaux, tandis que les Départements produisent les contributions concrètes ; les deux convergent vers une recommandation unique.
+- **Subordination au principe fondateur** : ni le Département ni le Conseil ne décident ; leurs travaux demeurent soumis à la **validation humaine** du **CEO**.
+
+Le fonctionnement détaillé des Conseils d'Experts, leur composition et leurs modalités de convocation sont décrits dans [`03-expert-councils.md`](./03-expert-councils.md).
+
 ## Coordination inter-départements
 
 Les activités de l'organisation dépassent fréquemment le périmètre d'un seul Département. La coordination entre Départements est donc essentielle et repose sur des principes structurants :
 
 - **Orchestration centrale** : l'Orchestrateur assure la mise en relation des Départements, répartit les contributions et veille à la cohérence d'ensemble des travaux transverses.
-- **Éclairage expert** : lorsqu'une question engage plusieurs domaines ou comporte des enjeux importants, les Conseils d'Experts apportent un éclairage transversal avant toute recommandation consolidée.
-- **Interfaces claires** : chaque Département expose ses contributions de manière lisible, afin que les autres Départements puissent s'appuyer sur elles sans ambiguïté.
+- **Éclairage expert** : lorsqu'une question engage plusieurs domaines ou comporte des enjeux importants, les Conseils d'Experts apportent un éclairage transversal avant toute recommandation consolidée (voir [`03-expert-councils.md`](./03-expert-councils.md)).
+- **Interfaces claires** : chaque Département expose ses contributions de manière lisible, en s'appuyant sur les contrats conceptuels décrits à la section « Interfaces entre Départements », afin que les autres Départements puissent s'appuyer sur elles sans ambiguïté.
 - **Résolution des tensions** : les divergences entre Départements sont arbitrées par escalade vers l'Orchestrateur, puis, si nécessaire, soumises à la **validation humaine** du **CEO**.
 - **Recommandation consolidée** : les contributions inter-départements convergent en une recommandation unique et cohérente, présentée à l'humain qui conserve la décision finale.
 
