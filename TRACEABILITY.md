@@ -278,3 +278,40 @@ Cœur de l'Orchestrateur : **réception → contexte → Policy Engine → évé
 | Couverture `src/aisos/orchestrator/` | ✅ 100 % |
 
 La Phase 19 respecte la Baseline v1.0 et les Phases 8 à 18 ; aucun workflow LangGraph, aucun Workflow Engine, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. L'Orchestrateur coordonne ; le CEO décide.
+
+## Phase 20 — CEO Decision Resume Flow (reprise déterministe)
+
+Cœur de **reprise après décision du CEO** : lorsque l'Orchestrateur s'est arrêté au routage CEO (Phase 19), le CEO tranche et la reprise **applique** son issue — jamais n'en crée une. Extension du module `orchestrator/`. **Sans LangGraph, sans API, sans base, sans broker, sans LLM, sans décision automatique.**
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/orchestrator/resume.py` (`CEODecisionInput`) | entrée de reprise : principal CEO, `HumanDecision`, liste blanche d'ajustements | [`docs/contracts/09-human-decision-schema.md`](docs/contracts/09-human-decision-schema.md) |
+| `aisos/orchestrator/resume.py` (`CEODecisionResumer.resume_after_ceo_decision`) | validation de l'autorité CEO, audit de la décision, publication des événements de reprise, application contrôlée de APPROVE/ADJUST/DEFER/REJECT | [`docs/components/09-human-interaction.md`](docs/components/09-human-interaction.md), [`docs/runtime/02-main-request-workflow.md`](docs/runtime/02-main-request-workflow.md) |
+| `aisos/orchestrator/dispatcher.py` (`RequestDispatcher.resume_after_ceo_decision`) | point d'entrée de reprise | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `aisos/orchestrator/context.py` (`OrchestrationStatus.RESUMED_*`/`DEFERRED`/`REJECTED_BY_CEO`, `OrchestrationResult.ceo_outcome`/`applied_adjustments`) | états et résultat de reprise ; l'issue est **recopiée** du CEO, jamais générée | [`docs/contracts/09-human-decision-schema.md`](docs/contracts/09-human-decision-schema.md) |
+| `tests/unit/test_ceo_decision_resume.py` | tests unitaires (4 issues, validation, audit, mémoire) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_ceo_decision_resume_governance.py` | preuves des invariants de reprise | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 20)
+
+| Invariant | Test |
+| --- | --- |
+| Seule une décision validée par le CEO peut reprendre un flux | `test_only_a_ceo_validated_decision_can_resume` |
+| Aucun agent/service ne peut reprendre à la place du CEO | `test_no_agent_or_service_can_resume_for_the_ceo` |
+| APPROVE applique la décision du CEO sans en créer une | `test_approve_applies_the_ceo_decision_without_creating_one` |
+| ADJUST n'applique jamais un ajustement non autorisé | `test_adjust_never_applies_an_unauthorized_adjustment` |
+| DEFER et REJECT n'écrivent aucune mémoire | `test_defer_and_reject_write_no_memory` |
+| Chaque reprise produit un audit | `test_each_resume_produces_an_audit` |
+| Un événement CEO-only exige un acteur CEO | `test_ceo_only_event_requires_ceo_actor_on_the_resume_bus` |
+| Les événements de reprise portent un acteur CEO | `test_resume_events_carry_a_ceo_actor` |
+
+### Vérification Phase 20 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 61 source files |
+| `pytest` | ✅ 164 passed (dont 61 `governance`) |
+| Couverture `src/aisos/orchestrator/` | ✅ 100 % |
+
+La Phase 20 respecte la Baseline v1.0 et les Phases 8 à 19 ; aucun LangGraph, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. La reprise **applique** la décision du CEO ; elle ne la crée jamais.

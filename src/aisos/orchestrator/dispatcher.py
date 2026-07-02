@@ -19,6 +19,7 @@ from aisos.orchestrator.context import (
 )
 from aisos.orchestrator.coordinator import ComponentCoordinator
 from aisos.orchestrator.lifecycle import LifecycleManager
+from aisos.orchestrator.resume import CEODecisionInput, CEODecisionResumer
 from aisos.schemas.entities import PreapprovedPolicy, Request
 from aisos.security.interfaces import Principal
 
@@ -33,6 +34,7 @@ class RequestDispatcher:
     ) -> None:
         self._xc = execution_context
         self._coordinator = ComponentCoordinator(execution_context, lifecycle)
+        self._resumer = CEODecisionResumer(execution_context, lifecycle)
 
     async def dispatch(
         self,
@@ -52,3 +54,11 @@ class RequestDispatcher:
         )
         octx = OrchestrationContext(request_context=request_context)
         return await self._coordinator.coordinate(octx, policies=policies)
+
+    async def resume_after_ceo_decision(
+        self,
+        request_context: RequestContext,
+        decision_input: CEODecisionInput,
+    ) -> OrchestrationResult:
+        """Reprend un flux suspendu a partir d'une decision du CEO (Phase 20)."""
+        return await self._resumer.resume_after_ceo_decision(request_context, decision_input)
