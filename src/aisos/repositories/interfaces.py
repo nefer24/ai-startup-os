@@ -1,21 +1,27 @@
-"""Interfaces de persistance par entite (signatures uniquement).
+"""Interfaces de persistance par entite — ports du coeur (signatures uniquement).
 
 Tracabilite : docs/database/02-relational-schema.md, docs/database/03-constraints-and-invariants.md,
-docs/implementation/06-storage-strategy.md. Aucune implementation SQL ici : les invariants de
-gouvernance sont appliques par le schema (contraintes / triggers) et par le Policy Engine.
+docs/implementation/06-storage-strategy.md, docs/engineering/03-module-boundaries.md.
+
+Ports declares par le coeur ; les adaptateurs (couche `infrastructure`) les implementent
+(dependency inversion : le coeur ne depend jamais d'un adaptateur). Aucun SQL, aucun framework
+ici. Les invariants (audit append-only, revision memoire non ecrasante) sont exprimes par la
+FORME des ports : les stores d'audit et de memoire n'exposent AUCUNE ecriture destructive.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from aisos.schemas.audit import AuditRecord
 from aisos.schemas.decision import HumanDecision, Recommendation
 from aisos.schemas.entities import Agent, Council, PreapprovedPolicy, Request
 from aisos.schemas.memory import MemoryRecord
+from aisos.workflow.instance import WorkflowInstance
 
 
+@runtime_checkable
 class RequestRepository(Protocol):
     async def get(self, request_id: str) -> Request | None: ...
     async def add(self, request: Request) -> Request: ...
@@ -33,8 +39,10 @@ class CouncilRepository(Protocol):
     async def add(self, council: Council) -> Council: ...
 
 
+@runtime_checkable
 class PolicyRepository(Protocol):
     async def get(self, policy_id: str) -> PreapprovedPolicy | None: ...
+    async def add(self, policy: PreapprovedPolicy) -> PreapprovedPolicy: ...
     async def list_active(self) -> Sequence[PreapprovedPolicy]: ...
 
 
@@ -48,8 +56,31 @@ class DecisionRepository(Protocol):
     async def list_pending(self) -> Sequence[HumanDecision]: ...
 
 
-class MemoryRepository(Protocol):
+@runtime_checkable
+class WorkflowRepository(Protocol):
+    """Persistance de l'etat d'un workflow (une instance par demande)."""
+
+    async def get(self, workflow_id: str) -> WorkflowInstance | None: ...
+    async def add(self, instance: WorkflowInstance) -> WorkflowInstance: ...
+    async def list(self, *, limit: int = 50, offset: int = 0) -> Sequence[WorkflowInstance]: ...
+
+
+@runtime_checkable
+class MemoryStore(Protocol):
+    """Ecriture memoire NON ecrasante : chaque revision est ajoutee (jamais modifiee/supprimee)."""
+
+    async def append_revision(self, record: MemoryRecord) -> MemoryRecord: ...
     async def get(self, memory_id: str) -> MemoryRecord | None: ...
+    async def list_revisions(self, memory_id: str) -> Sequence[MemoryRecord]: ...
+
+
+@runtime_checkable
+class AuditStore(Protocol):
+    """Journal APPEND-ONLY : seule `append` ecrit ; aucune methode update/delete n'existe."""
+
+    async def append(self, record: AuditRecord) -> AuditRecord: ...
+    async def get(self, audit_id: str) -> AuditRecord | None: ...
+    async def list(self, *, limit: int = 50, offset: int = 0) -> Sequence[AuditRecord]: ...
 
 
 class AuditRepository(Protocol):
@@ -57,3 +88,11 @@ class AuditRepository(Protocol):
 
     async def get(self, audit_id: str) -> AuditRecord | None: ...
     async def list(self, *, limit: int = 50, offset: int = 0) -> Sequence[AuditRecord]: ...
+
+
+@runtime_checkable
+class CheckpointStore(Protocol):
+    """Checkpointer d'orchestration (un thread par demande, docs/database/06)."""
+
+    async def save(self, thread_id: str, state: dict[str, object]) -> str: ...
+    async def load(self, thread_id: str) -> dict[str, object] | None: ...

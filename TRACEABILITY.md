@@ -390,3 +390,42 @@ Intégration du **Workflow Engine (Phase 21)** au cœur de l'**Orchestrateur (Ph
 | Couverture `src/aisos/orchestrator/` + `src/aisos/workflow/` | ✅ 100 % |
 
 La Phase 22 respecte la Baseline v1.0 et les Phases 8 à 21 ; aucun LangGraph réel, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. L'Orchestrateur pilote le workflow ; le CEO décide.
+
+## Phase 23 — Persistence Adapter Skeleton (adaptateurs mémoire)
+
+Squelette déterministe des **adaptateurs de persistance** : ports déclarés par le cœur, implémentés par des **adaptateurs EN MÉMOIRE** (repositories, Unit of Work transactionnel, checkpoint store). **Séparation stricte cœur/infrastructure** (dependency inversion : le cœur ne dépend jamais de l'infrastructure). **Aucune base réelle, aucun SQLAlchemy, aucun réseau, aucune API, aucun LangGraph, aucune décision automatique.**
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/repositories/interfaces.py` (`RequestRepository`, `WorkflowRepository`, `PolicyRepository`, `MemoryStore`, `AuditStore`, `CheckpointStore`) | ports de persistance déclarés par le cœur ; append-only exprimé par la forme (aucune écriture destructive) | [`docs/implementation/06-storage-strategy.md`](docs/implementation/06-storage-strategy.md), [`docs/engineering/03-module-boundaries.md`](docs/engineering/03-module-boundaries.md) |
+| `aisos/infrastructure/memory_backend.py` (`InMemoryDatabase`, `Changeset`) | état commité partagé + tampon transactionnel (application atomique / abandon total) | [`docs/implementation/06-storage-strategy.md`](docs/implementation/06-storage-strategy.md) |
+| `aisos/infrastructure/repositories.py` | adaptateurs mémoire : requests, workflows, policies, memory (révision non écrasante), audit (append-only) | [`docs/database/07-audit-event-store.md`](docs/database/07-audit-event-store.md), [`docs/behavior/06-memory-update-rules.md`](docs/behavior/06-memory-update-rules.md) |
+| `aisos/infrastructure/unit_of_work.py` (`InMemoryUnitOfWork`) | frontière transactionnelle : commit atomique / rollback total ; attributs typés par les ports (conformité vérifiée par mypy) | [`docs/engineering/03-module-boundaries.md`](docs/engineering/03-module-boundaries.md) |
+| `aisos/infrastructure/checkpoint.py` (`InMemoryCheckpointStore`) | checkpoint store mémoire (un thread par demande ; save/load isolés par copie profonde) | [`docs/database/06-checkpointing-strategy.md`](docs/database/06-checkpointing-strategy.md) |
+| `tests/unit/test_persistence_adapters.py` | tests unitaires (commit/rollback, append-only, checkpoint, lectures) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_persistence_governance.py` | preuves des invariants de persistance et de couches | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 23)
+
+| Invariant | Test |
+| --- | --- |
+| UnitOfWork commit persiste ; rollback abandonne | `test_unit_of_work_commit_persists`, `test_unit_of_work_rollback_discards` |
+| Aucun commit implicite (sortie sans commit ⇒ abandon) | `test_exit_without_commit_discards` |
+| Audit append-only (aucune écriture destructive) | `test_audit_store_is_append_only` |
+| Révision mémoire append-only (jamais écrasée) | `test_memory_revision_is_append_only` |
+| Workflow checkpoint save / load | `test_workflow_checkpoint_save_load` |
+| Rollback ne laisse aucune écriture partielle | `test_rollback_leaves_no_partial_write` |
+| Commit atomique inter-usages | `test_commit_is_atomic_across_usages` |
+| Aucune couche cœur n'importe l'infrastructure | `test_core_layers_do_not_import_infrastructure` |
+| Les repositories respectent les ports | `test_repositories_conform_to_their_ports` |
+
+### Vérification Phase 23 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 68 source files |
+| `pytest` | ✅ 214 passed (dont 82 `governance`) |
+| Couverture `src/aisos/infrastructure/` + `src/aisos/repositories/` | ✅ 100 % |
+
+La Phase 23 respecte la Baseline v1.0 et les Phases 8 à 22 ; aucune base réelle, aucun SQLAlchemy, aucun réseau, aucune API, aucun LangGraph, aucune décision automatique. Le cœur déclare les ports ; l'infrastructure les implémente, jamais l'inverse.
