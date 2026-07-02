@@ -11,11 +11,14 @@ import datetime as dt
 
 from pydantic import Field
 
-from aisos.schemas.base import AISOSModel
+from aisos.schemas.base import ImmutableModel
 
 
-class EventEnvelope(AISOSModel):
-    """Enveloppe standard portant un evenement de gouvernance (docs/contracts/02)."""
+class EventEnvelope(ImmutableModel):
+    """Enveloppe standard portant un evenement de gouvernance (docs/contracts/02).
+
+    Immuable (frozen) : un abonne ne peut pas modifier l'evenement original (Phase 18).
+    """
 
     event_id: str
     type: str

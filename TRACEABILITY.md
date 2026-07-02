@@ -206,3 +206,38 @@ Autorisation RBAC déterministe et application des manifests, **sans OIDC réel,
 | Couverture `src/aisos/security/` | ✅ 100 % |
 
 La Phase 17 respecte les Phases 8 à 16 ; aucun workflow LangGraph, aucune API réelle, aucune persistance réelle, aucun OIDC réel, aucune décision automatique.
+
+## Phase 18 — Event Bus Core (cœur déterministe)
+
+Publication / abonnement **en mémoire**, validation du catalogue et du versionnement, événements CEO-only, ordre de livraison déterministe, isolation des abonnés — **sans broker réel, sans persistance réelle, sans framework, sans décision automatique**. Le bus valide et transporte ; c'est l'audit qui prouve.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/events/envelope.py` (`EventEnvelope`, immuable) | enveloppe d'événement figée (frozen) ⇒ aucun abonné ne peut muter l'original | [`docs/contracts/02-event-catalog.md`](docs/contracts/02-event-catalog.md) |
+| `aisos/events/catalog.py` (`is_known_event`, `is_ceo_only_event`, `is_supported_version`, `actor_is_ceo`, `SUPPORTED_SCHEMA_VERSIONS`) | validation pure du catalogue et du versionnement | [`docs/contracts/02-event-catalog.md`](docs/contracts/02-event-catalog.md), [`docs/contracts/03-event-versioning.md`](docs/contracts/03-event-versioning.md) |
+| `aisos/events/bus.py` (`InMemoryEventBus`, `PublishResult`, `Subscription`, `WILDCARD`) | publication/abonnement mémoire ; validation au publish, ordre déterministe, copie profonde, isolation d'erreur non silencieuse | [`docs/components/06-event-bus.md`](docs/components/06-event-bus.md) |
+| `tests/unit/test_event_bus.py` | tests unitaires (catalogue, livraison, wildcard, filtrage, désabonnement) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_event_bus_governance.py` | preuves des invariants du bus | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 18)
+
+| Invariant | Test |
+| --- | --- |
+| Un événement inconnu (hors catalogue) est refusé | `test_unknown_event_is_rejected` |
+| Un événement CEO-only exige un acteur CEO | `test_ceo_only_event_requires_ceo_actor` |
+| Une version de schéma non supportée est refusée | `test_unsupported_version_is_rejected` |
+| L'ordre de publication est conservé à la livraison | `test_publication_order_preserved` |
+| Aucun abonné ne peut modifier l'événement original | `test_subscriber_cannot_modify_original_event` |
+| Une erreur d'abonné est isolée et jamais silencieuse | `test_subscriber_error_is_isolated_not_silent` |
+| Un événement d'audit est publiable sans décision automatique | `test_audit_event_publishable` |
+
+### Vérification Phase 18 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 56 source files |
+| `pytest` | ✅ 129 passed (dont 45 `governance`) |
+| Couverture `src/aisos/events/` | ✅ 100 % |
+
+La Phase 18 respecte les Phases 8 à 17 ; aucun broker réel, aucune API réelle, aucune persistance réelle, aucun workflow LangGraph, aucune décision automatique.
