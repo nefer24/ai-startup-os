@@ -22,7 +22,7 @@ from enum import StrEnum
 from pydantic import Field
 
 from aisos.audit.interfaces import AuditEngine
-from aisos.domain.enums import LifecycleState, ValidationMode
+from aisos.domain.enums import DecisionOutcome, LifecycleState, ValidationMode
 from aisos.events import InMemoryEventBus
 from aisos.memory.interfaces import MemorySystem
 from aisos.policies.interfaces import PolicyEngine
@@ -45,11 +45,22 @@ class OrchestrationStatus(StrEnum):
     - `executed_under_policy` : validation pre-accordee par le CEO via une politique ; la
       coordination s'est poursuivie jusqu'a l'ecriture memoire.
     - `rejected` : la securite a refuse ; interruption propre, auditee.
+
+    Etats de reprise apres decision du CEO (Phase 20) — chacun APPLIQUE la decision du CEO,
+    aucun ne la CREE :
+    - `resumed_approved` : APPROVE — reprise sous validation du CEO (jamais de decision auto).
+    - `resumed_adjusted` : ADJUST — reprise avec les seuls ajustements autorises appliques.
+    - `deferred` : DEFER — suspension propre (echeance conservee).
+    - `rejected_by_ceo` : REJECT — terminaison propre.
     """
 
     AWAITING_CEO_VALIDATION = "awaiting_ceo_validation"
     EXECUTED_UNDER_POLICY = "executed_under_policy"
     REJECTED = "rejected"
+    RESUMED_APPROVED = "resumed_approved"
+    RESUMED_ADJUSTED = "resumed_adjusted"
+    DEFERRED = "deferred"
+    REJECTED_BY_CEO = "rejected_by_ceo"
 
 
 class RequestContext(ImmutableModel):
@@ -76,6 +87,11 @@ class OrchestrationResult(ImmutableModel):
     audit_ids: list[str] = Field(default_factory=list)
     interrupted: bool = False
     reason: str = ""
+    #: Issue de decision du CEO APPLIQUEE lors d'une reprise (Phase 20) — jamais generee par
+    #: l'Orchestrateur ; recopiee fidelement depuis la decision du CEO.
+    ceo_outcome: DecisionOutcome | None = None
+    #: Cles d'ajustement effectivement appliquees (ADJUST) — sous-ensemble autorise uniquement.
+    applied_adjustments: list[str] = Field(default_factory=list)
 
 
 @dataclass

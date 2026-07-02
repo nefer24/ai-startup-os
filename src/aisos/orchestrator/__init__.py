@@ -18,8 +18,11 @@ from aisos.orchestrator.coordinator import ComponentCoordinator
 from aisos.orchestrator.dispatcher import RequestDispatcher
 from aisos.orchestrator.interfaces import Orchestrator, StrategicCouncilProposal
 from aisos.orchestrator.lifecycle import LifecycleManager
+from aisos.orchestrator.resume import CEODecisionInput, CEODecisionResumer
 
 __all__ = [
+    "CEODecisionInput",
+    "CEODecisionResumer",
     "ComponentCoordinator",
     "ExecutionContext",
     "LifecycleManager",
