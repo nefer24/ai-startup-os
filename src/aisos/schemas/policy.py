@@ -9,16 +9,19 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from aisos.domain.enums import DecisionClass, Level, ValidationMode
+from aisos.domain.enums import DecisionClass, Level, RiskLevel, ValidationMode
 from aisos.schemas.base import AISOSModel
 
 
 class Classification(AISOSModel):
-    """Resultat de classification d'une demande (docs/contracts/06)."""
+    """Resultat de classification d'une demande (docs/contracts/06).
+
+    Le risque est a quatre echelons (docs/policies/02) ; complexite et incertitude a trois.
+    """
 
     request_id: str
     complexity: Level
-    risk: Level
+    risk: RiskLevel
     uncertainty: Level
     derived_class: DecisionClass
     precedence_axis: str
@@ -63,3 +66,17 @@ class ConservativeDefault(AISOSModel):
     reason: str | None = None
     forced_class: DecisionClass | None = None
     forced_mode: ValidationMode = ValidationMode.CEO_DIRECT
+
+
+class PolicyResult(AISOSModel):
+    """Resultat standard, agrege, produit par le Policy Engine (docs/contracts/06).
+
+    Reunit la classification, le routage retenu, l'etat du defaut conservateur et,
+    le cas echeant, l'eligibilite de la politique pre-approuvee selectionnee. C'est la
+    sortie unique et deterministe de `PolicyEngine.evaluate`.
+    """
+
+    classification: Classification
+    routing: ValidationRouting
+    conservative_default: ConservativeDefault
+    eligibility: PolicyEligibility | None = None

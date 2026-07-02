@@ -55,4 +55,40 @@ Ce document satisfait la contrainte de la Phase 13 : « Tout élément créé do
 | `pytest` | ✅ 31 passed (dont tests `governance`) |
 | Import du paquet | ✅ `import aisos` (v0.0.0) |
 
-Aucune logique métier, aucun workflow, aucun agent, aucune décision automatique : uniquement le squelette conforme aux spécifications.
+En Phase 13, aucune logique métier, aucun workflow, aucun agent, aucune décision automatique : uniquement le squelette conforme aux spécifications.
+
+---
+
+## Phase 14 — Policy Engine (premier composant métier contrôlé)
+
+Première logique métier, **déterministe, sans I/O, sans framework, sans persistance** (couche `core`). Traduit les règles de gouvernance en logique testable.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/policies/engine.py` (`DefaultPolicyEngine`) | classification, préséance inter-axes, défaut conservateur FORT, éligibilité des politiques pré-approuvées, interdiction absolue de délégation structurante/critique, sortie standard `PolicyResult` | [`docs/policies/07-decision-classification-policy.md`](docs/policies/07-decision-classification-policy.md), [`docs/policies/08-preapproved-policy.md`](docs/policies/08-preapproved-policy.md), [`docs/components/04-policy-engine.md`](docs/components/04-policy-engine.md), [`docs/runtime/06-policy-evaluation-workflow.md`](docs/runtime/06-policy-evaluation-workflow.md) |
+| `aisos/policies/engine.py` (`PolicyThresholds`) | seuils calibrés par le CEO, **lus** et jamais fixés par le moteur | [`docs/behavior/13-bounds-and-thresholds.md`](docs/behavior/13-bounds-and-thresholds.md) |
+| `aisos/domain/enums.py` (`RiskLevel`) | risque à 4 échelons (faible/modéré/élevé/critique) → table risque-classe | [`docs/policies/02-risk-policy.md`](docs/policies/02-risk-policy.md), [`docs/policies/07`](docs/policies/07-decision-classification-policy.md) |
+| `aisos/schemas/policy.py` (`PolicyResult`) | résultat standard agrégé (classification + routage + défaut conservateur + éligibilité) | [`docs/contracts/06-policy-result-schema.md`](docs/contracts/06-policy-result-schema.md) |
+| `tests/unit/test_policy_engine.py`, `test_policy_edge_and_regression.py` | tests unitaires, cas limites, non-régression | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_policy_governance.py` | preuves des invariants CEO (aucun agent ne valide ; structurante/critique ⇒ CEO ; doute ⇒ classe supérieure/CEO ; politique inactive ⇒ CEO ; aucune validation implicite) | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 14)
+
+| Invariant | Test |
+| --- | --- |
+| Aucun agent ne peut valider | `test_no_agent_can_validate` (+ `ValidatorType` sans `agent`) |
+| Structurante / critique ⇒ CEO obligatoire, jamais délégué | `test_structurante_forces_ceo`, `test_critique_forces_ceo`, `test_structurante_critique_never_eligible` |
+| Doute ⇒ classe supérieure et CEO (défaut conservateur FORT) | `test_doubt_raises_class_and_routes_to_ceo`, `test_missing_information_routes_to_ceo` |
+| Politique expirée / inactive ⇒ CEO | `test_inactive_policy_goes_to_ceo` |
+| Aucune validation implicite | `test_no_implicit_validation`, `test_policy_cannot_declare_structurante` |
+
+### Vérification Phase 14 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed (59 fichiers) |
+| `mypy` (strict) | ✅ no issues found in 49 source files |
+| `pytest` | ✅ 56 passed (dont 15 `governance`) |
+| Couverture `src/aisos/policies/` | ✅ 99 % |
+
+La Phase 14 n'implémente aucun workflow LangGraph, aucune API réelle, aucune persistance réelle : uniquement la logique déterministe du Policy Engine, conforme aux Phases 4, 8, 12 et 13.

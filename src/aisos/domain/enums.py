@@ -75,11 +75,25 @@ class ValidationMode(StrEnum):
 
 
 class Level(StrEnum):
-    """Niveau gradue pour complexite / risque / incertitude (docs/policies/01-03)."""
+    """Niveau gradue a trois echelons pour la complexite et l'incertitude (docs/policies/01, 03)."""
 
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class RiskLevel(StrEnum):
+    """Niveau de risque a quatre echelons (docs/policies/02-risk-policy.md).
+
+    Le risque est une entree directe de la classification et impose un plancher de classe
+    (docs/policies/07, Regle 2) : critique -> classe critique ; eleve -> au moins structurante ;
+    modere -> au moins importante ; faible -> aucun plancher impose.
+    """
+
+    LOW = "low"
+    MODERATE = "moderate"
+    HIGH = "high"
+    CRITICAL = "critical"
 
 
 class CouncilType(StrEnum):
