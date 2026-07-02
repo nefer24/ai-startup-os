@@ -351,3 +351,42 @@ Cœur du **Workflow Engine** : machine à états déterministe, **en mémoire, s
 | Couverture `src/aisos/workflow/` | ✅ 100 % |
 
 La Phase 21 respecte la Baseline v1.0 et les Phases 8 à 20 ; aucun LangGraph réel, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. Le workflow transitionne ; le CEO décide.
+
+## Phase 22 — Workflow-Orchestrator Integration (câblage déterministe)
+
+Intégration du **Workflow Engine (Phase 21)** au cœur de l'**Orchestrateur (Phases 19-20)** : chaque demande crée un workflow, démarré après Security, mis en pause automatiquement quand Policy route vers le CEO, repris après décision du CEO, puis `completed`/`terminated` selon l'issue. `OrchestrationStatus` et `WorkflowState` restent **synchronisés**. **Sans LangGraph réel, sans API, sans base, sans broker, sans LLM, sans décision automatique.**
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/orchestrator/workflow_link.py` (`WorkflowRegistry`) | registre en mémoire `request_id -> WorkflowInstance`, partagé coordinateur/resumer | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md), [`docs/components/07-workflow-engine.md`](docs/components/07-workflow-engine.md) |
+| `aisos/orchestrator/coordinator.py` (`ComponentCoordinator`) | crée + démarre le workflow après Security ; pause CEO (RUNNING→PAUSED_CEO) ; complétion sous politique (RUNNING→COMPLETED) | [`docs/runtime/02-main-request-workflow.md`](docs/runtime/02-main-request-workflow.md), [`docs/runtime/07-human-interrupt-workflow.md`](docs/runtime/07-human-interrupt-workflow.md) |
+| `aisos/orchestrator/resume.py` (`CEODecisionResumer._sync_workflow`) | reprise du workflow selon l'issue CEO : APPROVE/ADJUST→COMPLETED, REJECT→TERMINATED, DEFER→PAUSED_CEO | [`docs/components/09-human-interaction.md`](docs/components/09-human-interaction.md) |
+| `aisos/orchestrator/context.py` (`OrchestrationResult.workflow_state`) | synchronisation `OrchestrationStatus` ↔ `WorkflowState` | [`docs/components/07-workflow-engine.md`](docs/components/07-workflow-engine.md) |
+| `aisos/orchestrator/dispatcher.py` (`RequestDispatcher.get_workflow`) | moteur + registre partagés ; inspection du workflow d'une demande | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `tests/unit/test_workflow_orchestrator_integration.py` | tests unitaires (création, pause, reprise, complétion/terminaison) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_workflow_orchestrator_integration_governance.py` | preuves des invariants d'intégration | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 22)
+
+| Invariant | Test |
+| --- | --- |
+| Chaque demande crée un workflow | `test_each_request_creates_a_workflow` |
+| Policy CEO ⇒ workflow `paused_ceo` | `test_policy_ceo_routing_pauses_the_workflow` |
+| APPROVE/ADJUST ⇒ workflow `running` puis `completed` | `test_approve_resumes_then_completes_the_workflow` |
+| REJECT ⇒ workflow `terminated` | `test_reject_terminates_the_workflow` |
+| DEFER ⇒ workflow reste `paused_ceo` | `test_defer_keeps_the_workflow_paused` |
+| Transition workflow auditée | `test_workflow_transitions_are_audited` |
+| Événements workflow publiés dans l'ordre | `test_workflow_events_published_in_order` |
+| Aucune transition workflow sans Security + Policy | `test_no_workflow_transition_without_security` |
+| `OrchestrationStatus` et `WorkflowState` synchronisés | `test_orchestration_status_and_workflow_state_stay_synchronized` |
+
+### Vérification Phase 22 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 65 source files |
+| `pytest` | ✅ 197 passed (dont 75 `governance`) |
+| Couverture `src/aisos/orchestrator/` + `src/aisos/workflow/` | ✅ 100 % |
+
+La Phase 22 respecte la Baseline v1.0 et les Phases 8 à 21 ; aucun LangGraph réel, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. L'Orchestrateur pilote le workflow ; le CEO décide.

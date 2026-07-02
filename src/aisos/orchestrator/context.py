@@ -30,6 +30,7 @@ from aisos.schemas.base import ImmutableModel
 from aisos.schemas.entities import Request
 from aisos.schemas.policy import PolicyResult
 from aisos.security.interfaces import Authorizer, Principal
+from aisos.workflow.states import WorkflowState
 
 
 def _utc_now() -> dt.datetime:
@@ -92,6 +93,8 @@ class OrchestrationResult(ImmutableModel):
     ceo_outcome: DecisionOutcome | None = None
     #: Cles d'ajustement effectivement appliquees (ADJUST) — sous-ensemble autorise uniquement.
     applied_adjustments: list[str] = Field(default_factory=list)
+    #: Etat du workflow synchronise avec l'orchestration (Phase 22) — None si non integre.
+    workflow_state: WorkflowState | None = None
 
 
 @dataclass

@@ -40,11 +40,13 @@ from aisos.orchestrator.context import (
     RequestContext,
 )
 from aisos.orchestrator.lifecycle import LifecycleManager
+from aisos.orchestrator.workflow_link import WorkflowRegistry
 from aisos.schemas.base import AISOSModel
 from aisos.schemas.decision import HumanDecision
 from aisos.schemas.memory import MemoryRecord, Provenance
 from aisos.security import Action
 from aisos.security.interfaces import Principal
+from aisos.workflow import InMemoryWorkflowEngine, WorkflowInstance, WorkflowState
 
 
 class CEODecisionInput(AISOSModel):
@@ -63,10 +65,19 @@ class CEODecisionResumer:
     """Reprend un flux d'orchestration a partir d'une decision du CEO. N'invente aucune decision."""
 
     def __init__(
-        self, execution_context: ExecutionContext, lifecycle: LifecycleManager | None = None
+        self,
+        execution_context: ExecutionContext,
+        lifecycle: LifecycleManager | None = None,
+        *,
+        workflow_engine: InMemoryWorkflowEngine | None = None,
+        workflow_registry: WorkflowRegistry | None = None,
     ) -> None:
         self._xc = execution_context
         self._lc = lifecycle or LifecycleManager()
+        self._wf = workflow_engine or InMemoryWorkflowEngine(
+            execution_context.authorizer, execution_context.clock
+        )
+        self._registry = workflow_registry if workflow_registry is not None else WorkflowRegistry()
 
     async def resume_after_ceo_decision(
         self,
@@ -101,14 +112,48 @@ class CEODecisionResumer:
         # (4) Aiguillage APPLIQUE de la decision du CEO (jamais une decision creee ici).
         outcome = decision.outcome
         if outcome == DecisionOutcome.APPROUVE:
-            return await self._apply_approve(octx, decision, actor)
-        if outcome == DecisionOutcome.AJUSTE:
-            return await self._apply_adjust(
+            result = await self._apply_approve(octx, decision, actor)
+        elif outcome == DecisionOutcome.AJUSTE:
+            result = await self._apply_adjust(
                 octx, decision, decision_input.allowed_adjustments, actor
             )
-        if outcome == DecisionOutcome.REPORTE:
-            return await self._apply_defer(octx, decision, actor)
-        return await self._apply_reject(octx, decision, actor)
+        elif outcome == DecisionOutcome.REPORTE:
+            result = await self._apply_defer(octx, decision, actor)
+        else:
+            result = await self._apply_reject(octx, decision, actor)
+
+        # (5) Synchronisation du workflow avec l'issue du CEO (running/completed/terminated/paused).
+        workflow_state = self._sync_workflow(request_context, decision, ceo)
+        return result.model_copy(update={"workflow_state": workflow_state})
+
+    # -- Synchronisation du workflow avec l'issue du CEO -------------------------------------
+    def _sync_workflow(
+        self, request_context: RequestContext, decision: HumanDecision, ceo: Principal
+    ) -> WorkflowState:
+        """Fait transitionner le workflow selon l'issue du CEO (double controle CEO du moteur).
+
+        APPROVE/ADJUST : PAUSED_CEO -> RUNNING -> COMPLETED (execution par un service).
+        REJECT : PAUSED_CEO -> TERMINATED. DEFER : reste PAUSED_CEO (aucune transition).
+        Si aucun workflow n'existe (reprise directe), un workflow en pause est synthetise.
+        """
+        instance = self._registry.get(request_context.request.id)
+        if instance is None:
+            instance = WorkflowInstance(
+                request_context.request.id,
+                created_at=self._xc.clock(),
+                state=WorkflowState.PAUSED_CEO,
+            )
+            self._registry.put(instance)
+
+        outcome = decision.outcome
+        if outcome in (DecisionOutcome.APPROUVE, DecisionOutcome.AJUSTE):
+            self._wf.resume_after_ceo(instance, decision, ceo)  # PAUSED_CEO -> RUNNING
+            service_actor = f"service:{request_context.principal.subject}"
+            self._wf.complete(instance, actor=service_actor, reason="reprise CEO terminee")
+        elif outcome == DecisionOutcome.REJETTE:
+            self._wf.resume_after_ceo(instance, decision, ceo)  # PAUSED_CEO -> TERMINATED
+        # DEFER (REPORTE) : le workflow reste en pause CEO (aucune transition).
+        return instance.state
 
     # -- Application des quatre issues -------------------------------------------------------
     async def _apply_approve(
