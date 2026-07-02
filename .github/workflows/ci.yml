@@ -1,0 +1,47 @@
+# CI minimale — cf docs/engineering/06-ci-cd-strategy.md.
+# Portee Phase 13 : lint, typage, tests du squelette. La CI VERIFIE, elle ne DECIDE pas
+# de fusionner : l'ARP + l'audit interne + la validation explicite du CEO restent obligatoires.
+name: ci
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install project (dev)
+        # `--system` cible l'interpreteur fourni par actions/setup-python (present sur le PATH).
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Type check (mypy strict)
+        run: mypy
+
+      - name: Tests (pytest)
+        run: pytest
+
+      - name: Dependency audit (pip-audit)
+        run: pip-audit || true
