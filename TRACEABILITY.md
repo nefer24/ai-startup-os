@@ -466,3 +466,38 @@ Intégration des **adaptateurs de persistance mémoire (Phase 23)** à l'**Orche
 | Couverture `src/aisos/orchestrator/` + `src/aisos/workflow/` + `src/aisos/repositories/` | ✅ 100 % |
 
 La Phase 24 respecte la Baseline v1.0 et les Phases 8 à 23 ; aucune base réelle, aucun SQLAlchemy, aucun réseau, aucune API réelle, aucun LangGraph, aucun LLM, aucune décision automatique. L'orchestration persiste dans une transaction ; l'Orchestrateur ne dépend que des ports.
+
+## Phase 25 — Application Service Layer (interface client unique)
+
+Couche **Application** : l'interface entre les futurs clients (API, CLI, Web UI, Workers) et le noyau. Elle ne contient **AUCUNE logique métier** — elle traduit des DTO en appels à l'**Orchestrateur** (et aux ports de lecture) puis retraduit les résultats. Tous les services partagent le **même Orchestrateur** ; le noyau n'est jamais appelé directement par un client. **Sans FastAPI, sans REST/GraphQL/WebSocket, sans CLI, sans LangGraph, sans PostgreSQL/Redis/RabbitMQ, sans LLM, sans décision automatique.**
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/application/dto.py` (`CreateRequestCommand`, `ResumeWorkflowCommand`, `RequestResult`, `WorkflowResult`, `AuditResult` + vues) | DTO **immuables** — seule monnaie d'échange client ↔ noyau | [`docs/engineering/03-module-boundaries.md`](docs/engineering/03-module-boundaries.md) |
+| `aisos/application/services.py` (`ApplicationService`, `RequestApplicationService`, `GovernanceApplicationService`, `WorkflowApplicationService`, `AuditApplicationService`, `MemoryApplicationService`) | services d'orchestration des appels au noyau ; aucune logique métier | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `aisos/application/services.py` (`AISOSApplication`) | assemblage : point d'entrée unique des clients, un Orchestrateur partagé | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `tests/unit/test_application_services.py` | tests unitaires (soumission, reprise, lecture, DTO, délégation) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_application_services.py` | preuves des invariants de la couche Application | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 25)
+
+| Invariant | Test |
+| --- | --- |
+| Tous les services utilisent le même Orchestrateur | `test_all_services_share_the_same_orchestrator` |
+| Aucune logique métier dans la couche Application | `test_application_layer_has_no_business_logic` |
+| Le client ne reçoit que des DTO (aucun objet du noyau) | `test_client_only_receives_dtos_never_core_objects` |
+| Les DTO sont immuables | `test_dtos_are_immutable` |
+| Les erreurs sont propagées (jamais avalées) | `test_errors_are_propagated_not_swallowed` |
+| Aucune décision automatique | `test_application_takes_no_automatic_decision` |
+| La couche Application ne dépend pas de l'infrastructure | `test_application_does_not_import_infrastructure` |
+
+### Vérification Phase 25 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 72 source files |
+| `pytest` | ✅ 247 passed (dont 94 `governance`) |
+| Couverture `src/aisos/application/` | ✅ 100 % |
+
+La Phase 25 respecte la Baseline v1.0 et les Phases 8 à 24 ; aucune FastAPI, aucun REST/GraphQL/WebSocket, aucune CLI, aucun LangGraph, aucune base, aucun LLM, aucune décision automatique. Les clients passent exclusivement par la couche Application ; le noyau n'est plus appelé directement.
