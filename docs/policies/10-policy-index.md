@@ -29,19 +29,26 @@ Quelle que soit la politique appliquée, le **CEO reste la seule autorité humai
 
 Le long du cycle de vie d'une demande ([`../behavior/01-request-lifecycle.md`](../behavior/01-request-lifecycle.md)), les politiques s'appliquent dans un ordre logique :
 
-1. **Évaluation** — la demande est caractérisée par sa **complexité** (01), son **risque** (02) et son **incertitude** (03).
-2. **Cadrage** — selon ces évaluations, on décide d'**activer ou non le Conseil Stratégique Dynamique** (05, activation par le CEO seul) et on **compose l'équipe** d'agents et de Conseils (06).
-3. **Classification** — la décision visée est rattachée à une **classe** (07 : courante / importante / structurante / critique), qui détermine son mode de validation.
-4. **Validation** — les décisions de faible portée peuvent suivre une **politique pré-approuvée** du CEO (08) ; les décisions structurantes et critiques reviennent **directement au CEO**. Toute situation qui dépasse le cadre remonte selon la **politique d'escalade** (04).
-5. **Garde-fou de sortie** — avant d'être présentée au CEO, une recommandation doit franchir le **quality gate** (09) ; sinon elle est renvoyée en délibération.
+1. **Pré-analyse à la réception** — dès l'arrivée d'une demande, une lecture rapide permet à l'Orchestrateur de **proposer** l'activation du Conseil Stratégique Dynamique (05). Cette activation reste une **décision du CEO seul** : la pré-analyse ne fait que signaler l'opportunité, sans trancher. Ce mécanisme lève le paradoxe de l'amorçage (activer avant d'avoir tout évalué) en séparant la *proposition* rapide de l'*évaluation* approfondie.
+2. **Évaluation** — pendant l'étape Analyse, la demande est caractérisée par sa **complexité** (01), son **risque** (02) et son **incertitude** (03).
+3. **Cadrage** — selon ces évaluations, on confirme l'**activation ou non du Conseil Stratégique Dynamique** (05, activation par le CEO seul) et on **compose l'équipe** d'agents et de Conseils (06).
+4. **Classification** — la décision visée est rattachée à l'une des **quatre classes officielles** définies par [`07-decision-classification-policy.md`](./07-decision-classification-policy.md) : **courante**, **importante**, **structurante** ou **critique**. La classe détermine le mode de validation.
+5. **Validation** — les décisions de faible portée peuvent suivre une **politique pré-approuvée** du CEO (08) ; les décisions structurantes et critiques reviennent **directement au CEO**. Toute situation qui dépasse le cadre remonte selon la **politique d'escalade** (04).
+6. **Garde-fou de sortie** — avant d'être présentée au CEO, une recommandation doit franchir le **quality gate** (09) ; sinon elle est renvoyée en délibération.
 
-Les seuils chiffrés de ces politiques sont fixés par le CEO (ou par l'Orchestrateur au cadrage, dans les limites du CEO) et documentés dans [`../behavior/13-bounds-and-thresholds.md`](../behavior/13-bounds-and-thresholds.md).
+**Préséance inter-axes.** Lorsque les trois axes d'évaluation divergent, la **mobilisation** (ampleur de l'équipe et des Conseils) comme la **classe** de décision suivent l'**axe le plus contraignant** parmi la complexité (01), le risque (02) et l'incertitude (03). Un seul axe élevé suffit à tirer la mobilisation et la classe vers le haut.
+
+**Seuils de routage.** Les **seuils qui déterminent la remontée au CEO sont fixés par le CEO seul**. L'Orchestrateur ne fait qu'**appliquer** des seuils **dans les limites** fixées par le CEO ; il ne les fixe jamais. Ces seuils sont documentés dans [`../behavior/13-bounds-and-thresholds.md`](../behavior/13-bounds-and-thresholds.md).
 
 ## Structure d'une politique
 
 Chaque politique suit la même structure : **Objectif · Critères · Règles · Exemples · Cas limites · Questions ouvertes**.
 
+## Note éditoriale
+
+La Constitution ([`../00-vision.md`](../00-vision.md), Article VIII) mentionne encore l'« Executive Board », remplacé par le **Conseil Stratégique Dynamique** (décision 014). Il s'agit d'un **écart à arbitrer par le CEO** ; en attendant, les politiques suivent la révision de la Phase 2.
+
 ## Portée
 
-- **Ce que couvre cette phase :** les règles de choix comportemental d'AI-SOS (évaluation, cadrage, classification, validation, qualité).
+- **Ce que couvre cette phase :** les règles de choix comportemental d'AI-SOS (pré-analyse, évaluation, cadrage, classification, validation, qualité).
 - **Ce que cette phase ne couvre pas :** le code, les langages, les cadres et toute technologie d'implémentation.
