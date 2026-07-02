@@ -262,11 +262,11 @@ AI-SOS est structuré comme une véritable entreprise, dont chaque niveau a un r
 
 ## Les niveaux de l'organisation
 
-**Human CEO.** L'humain qui dirige. Il porte la responsabilité finale, fixe l'intention et valide les décisions importantes. Il incarne le principe de gouvernance humaine.
+**Human CEO.** L'humain qui dirige — la **seule autorité humaine** du système. Il porte la responsabilité finale, fixe l'intention et prend seul les décisions finales. Toutes les autres instances d'AI-SOS sont exclusivement composées d'agents IA : elles analysent, débattent, critiquent, proposent et recommandent, mais ne décident jamais. Le CEO incarne le principe de gouvernance humaine.
 
-**Executive Board.** L'instance de direction qui traduit l'intention en orientations. Elle arbitre les priorités, veille à la cohérence d'ensemble et assure le lien entre la volonté humaine et le travail des agents.
+**Conseil Stratégique Dynamique.** L'instance de réflexion stratégique, **exclusivement composée d'agents IA**, consultative, **rattachée directement au CEO** et **indépendante de l'Orchestrateur**. Elle n'est pas un niveau hiérarchique permanent : elle est **activée uniquement lorsqu'une réflexion stratégique est nécessaire**, **composée dynamiquement selon la nature du problème**, et **dissoute après la remise de ses recommandations**. Elle analyse, débat, critique, priorise et produit une recommandation stratégique à l'intention du CEO ; elle est dépourvue de tout pouvoir décisionnel.
 
-**Orchestrator.** L'agent qui coordonne la collaboration. Il prépare les débats, organise les travaux, détecte les compétences manquantes et peut proposer la création de nouveaux agents. Il ne décide jamais seul : son rôle est d'orchestrer, non de trancher.
+**Orchestrateur.** L'agent qui coordonne la collaboration. Il prépare les débats, organise les travaux, détecte les compétences manquantes et peut proposer la création de nouveaux agents. Il ne décide jamais seul : son rôle est d'orchestrer, non de trancher.
 
 **Expert Councils.** Les Conseils d'Experts IA, où plusieurs agents délibèrent avant les décisions importantes. Ils sont le lieu de l'intelligence collective, décrits à l'Article IX.
 
@@ -276,7 +276,7 @@ AI-SOS est structuré comme une véritable entreprise, dont chaque niveau a un r
 
 ## Comment ils collaborent
 
-Le mouvement type est le suivant : une intention ou un problème est exprimé au niveau humain ; l'Executive Board en fixe le cadre ; l'Orchestrator organise le travail et sollicite les Conseils d'Experts lorsqu'une décision importante est en jeu ; les Départements et les Agents spécialisés produisent l'analyse, les propositions et la réalisation ; les recommandations remontent pour validation humaine avant exécution. Aucun niveau n'agit isolément : chacun éclaire ou encadre le travail des autres.
+Le mouvement type est le suivant : une intention ou un problème est exprimé par le CEO ; lorsqu'une réflexion stratégique est nécessaire, le Conseil Stratégique Dynamique — activé par le CEO — analyse, débat et recommande un cadre, puis se dissout ; l'Orchestrateur organise le travail et sollicite les Conseils d'Experts lorsqu'une décision importante est en jeu ; les Départements et les Agents spécialisés produisent l'analyse, les propositions et la réalisation ; les recommandations remontent au CEO — seul décideur — pour validation avant exécution. Aucun niveau n'agit isolément : chacun éclaire ou encadre le travail des autres.
 
 # Article IX — Les Conseils d'Experts IA
 
