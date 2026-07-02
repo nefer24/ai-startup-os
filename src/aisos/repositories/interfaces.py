@@ -12,6 +12,7 @@ FORME des ports : les stores d'audit et de memoire n'exposent AUCUNE ecriture de
 from __future__ import annotations
 
 from collections.abc import Sequence
+from types import TracebackType
 from typing import Protocol, runtime_checkable
 
 from aisos.schemas.audit import AuditRecord
@@ -96,3 +97,28 @@ class CheckpointStore(Protocol):
 
     async def save(self, thread_id: str, state: dict[str, object]) -> str: ...
     async def load(self, thread_id: str) -> dict[str, object] | None: ...
+
+
+@runtime_checkable
+class OrchestrationUnitOfWork(Protocol):
+    """Frontiere transactionnelle exposant les repositories d'une orchestration.
+
+    Port cote coeur : l'Orchestrateur en depend, jamais d'un adaptateur concret. Une meme
+    transaction porte la demande, son workflow, ses evenements d'audit et ses ecritures memoire ;
+    `commit` applique atomiquement, `rollback` (ou une sortie sans commit) n'ecrit rien.
+    """
+
+    requests: RequestRepository
+    workflows: WorkflowRepository
+    audit: AuditStore
+    memory: MemoryStore
+
+    async def __aenter__(self) -> OrchestrationUnitOfWork: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None: ...
+    async def commit(self) -> None: ...
+    async def rollback(self) -> None: ...
