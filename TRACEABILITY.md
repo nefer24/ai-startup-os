@@ -92,3 +92,41 @@ Première logique métier, **déterministe, sans I/O, sans framework, sans persi
 | Couverture `src/aisos/policies/` | ✅ 99 % |
 
 La Phase 14 n'implémente aucun workflow LangGraph, aucune API réelle, aucune persistance réelle : uniquement la logique déterministe du Policy Engine, conforme aux Phases 4, 8, 12 et 13.
+
+---
+
+## Phase 15 — Audit Engine (cœur déterministe)
+
+Cœur append-only à chaînage de hachés, **déterministe, en mémoire, sans persistance réelle, sans framework, sans I/O externe, sans décision automatique**.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/audit/hashing.py` | corps canonique, hache déterministe `SHA-256(prev_hash ‖ body)`, recalcul | [`docs/contracts/08-audit-record-schema.md`](docs/contracts/08-audit-record-schema.md), [`docs/database/07-audit-event-store.md`](docs/database/07-audit-event-store.md) |
+| `aisos/audit/engine.py` (`build_record`) | création d'un AuditRecord scellé + refus d'un événement CEO-only avec acteur non-CEO | [`docs/components/08-audit-engine.md`](docs/components/08-audit-engine.md), [`docs/contracts/02-event-catalog.md`](docs/contracts/02-event-catalog.md) |
+| `aisos/audit/engine.py` (`verify_records`) | vérification de chaîne, détection de rupture (linkage, `seq`, altération) ; ne répare jamais | [`docs/runtime/09-audit-workflow.md`](docs/runtime/09-audit-workflow.md), [`docs/quality/09-audit-validation.md`](docs/quality/09-audit-validation.md) |
+| `aisos/audit/engine.py` (`InMemoryAuditEngine`) | Audit Engine append-only (aucune méthode update/delete) implémentant le Protocol | [`docs/components/08-audit-engine.md`](docs/components/08-audit-engine.md) |
+| `aisos/audit/engine.py` (`is_critical_event`) | marque les événements CEO-only comme critiques | [`docs/contracts/02-event-catalog.md`](docs/contracts/02-event-catalog.md) |
+| `tests/unit/test_audit_engine.py`, `test_audit_regression.py` | unitaires, cas limites, non-régression (golden hash) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_audit_governance.py` | preuves des invariants d'audit | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 15)
+
+| Invariant | Test |
+| --- | --- |
+| Un AuditRecord ne peut pas être modifié (WORM) | `test_audit_record_cannot_be_modified` |
+| Une chaîne valide passe | `test_valid_chain_passes` |
+| Une chaîne cassée échoue | `test_broken_chain_fails` |
+| Modification/suppression simulée détectée | `test_simulated_modification_is_detected`, `test_simulated_deletion_is_detected` |
+| Événement CEO-only marqué critique (acteur CEO obligatoire) | `test_ceo_only_event_requires_ceo_actor`, `test_engine_rejects_ceo_only_event_from_service` |
+| Aucune correction silencieuse ; aucune API de mutation | `test_no_silent_correction`, `test_audit_engine_has_no_mutation_api` |
+
+### Vérification Phase 15 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 51 source files |
+| `pytest` | ✅ 75 passed (dont 24 `governance`) |
+| Couverture `src/aisos/audit/` | ✅ 100 % |
+
+La Phase 15 respecte les Phases 8, 10, 12, 13 et 14 ; aucun workflow LangGraph, aucune API réelle, aucune persistance réelle, aucune décision automatique.
