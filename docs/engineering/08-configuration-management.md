@@ -42,6 +42,7 @@ Le chargement et la **validation** s'appuient sur **pydantic-settings** : la con
 - Gérés par un **gestionnaire de secrets** ou des **variables d'environnement** ; **jamais** en base, **jamais** en dépôt, **jamais** dans un prompt d'agent ([`../implementation/08-security-and-permissions.md`](../implementation/08-security-and-permissions.md)).
 - Un fichier **`.env.example`** est versionné, **sans valeurs**, pour documenter les clés attendues.
 - **Rotation** régulière des secrets ; les jetons de service sont courts (DT-07).
+- **Aucun secret dans un prompt d'agent** : conformément au modèle de sécurité, un secret ne transite jamais par le contexte d'un LLM, ce qui exclut de le charger comme une variable de configuration lisible par la couche agent.
 
 Extrait `.env.example` (illustration, sans valeurs) :
 
@@ -73,6 +74,7 @@ LANGSMITH_ENABLED=false
 | LangSmith | Off | Selon décision CEO | Feature flag (nature a) |
 | Bornes de gouvernance | Défauts conservateurs | `BoundsConfig` fixée par le CEO | **Base, jamais fichier** (nature c) |
 | Niveau de logs | Verbeux | JSON structuré (DT-06) | Fichier env |
+| Cache / Redis | Absent (table Postgres) | Absent au MVP | Défaut ; réévaluation = décision CEO |
 
 En **test**, le fournisseur LLM est bouchonné (déterministe, sans appel réseau) pour rendre les tests reproductibles et éviter tout coût ou fuite. Les environnements ne diffèrent que par la nature (a) et (b) : les **bornes de gouvernance (c) obéissent à la même règle partout** — elles vivent en base et n'ont pas de variante « dev » relâchée qui pourrait fuiter en production.
 
@@ -115,6 +117,8 @@ Ce partage n'est pas une commodité d'exploitation : c'est la traduction techniq
 - **pydantic-settings + fail-fast** : une config invalide doit empêcher le démarrage, jamais produire un comportement dégradé silencieux qui pourrait contourner un contrôle.
 - **Défaut conservateur en cas d'absence** : cohérent avec « tout doute → CEO » ; l'absence de configuration ne doit jamais ouvrir une brèche permissive.
 - **`.env.example` sans valeurs + secrets hors dépôt** : réduit la surface de fuite et documente les clés attendues sans exposer de secret.
+- **Feature flags de gouvernance réservés au CEO** : un flag comme LangSmith ouvre un flux de données vers un tiers ; le traiter comme une décision (et non comme un réglage d'opérateur) évite qu'une activation technique ne contourne un arbitrage qui revient au CEO.
+- **Séparation stricte CEO / opérateur** : donner à l'exploitation le pouvoir sur la technique et les secrets, mais jamais sur les bornes, aligne la surface d'administration sur la Constitution — l'opérateur maintient le système, le CEO le gouverne.
 
 ## Questions ouvertes (CEO)
 
@@ -123,3 +127,4 @@ Ce partage n'est pas une commodité d'exploitation : c'est la traduction techniq
 3. **Périmètre exact des overrides** autorisés en production et leur niveau de traçabilité.
 4. **Politique de confirmation renforcée** pour les changements de bornes critiques via l'endpoint CEO (double confirmation ?).
 5. **Fréquence de revue** des valeurs par défaut conservatrices à mesure de la calibration en exploitation.
+6. **Frontière opérateur / gouvernance** : liste explicite des clés de config qu'un opérateur technique peut modifier sans validation CEO, à figer avant la mise en exploitation.

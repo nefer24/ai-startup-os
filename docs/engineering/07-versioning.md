@@ -34,6 +34,8 @@ Plusieurs versions coexistent et évoluent à des rythmes différents. Les confo
 
 **Rappel de baseline (traçabilité décisionnelle) :** chaque décision consignée référence la **version de protocole et de politique** en vigueur au moment où elle a été prise. Une évolution des règles ne réécrit jamais le passé : les anciennes décisions restent lisibles avec la version qui les a produites.
 
+Ces cinq versions ne sont pas indépendantes : un release logiciel donné épingle une version d'API, une tête de migration, une version de corpus de protocoles/politiques et un ensemble de manifests. Cet ensemble cohérent est ce qui est effectivement déployé, et c'est lui que l'audit référence — de sorte qu'on peut toujours reconstituer, pour une décision passée, l'exact assemblage de versions qui l'a produite.
+
 ## Migrations de base de données
 
 Les migrations suivent la stratégie déjà fixée ([`../implementation/06-storage-strategy.md`](../implementation/06-storage-strategy.md)), reprise et détaillée ici côté procédure.
@@ -41,7 +43,7 @@ Les migrations suivent la stratégie déjà fixée ([`../implementation/06-stora
 - **Alembic** est l'outil unique de migration de schéma.
 - **En avant uniquement en production** : pas de rollback destructif automatique sur des données, a fortiori sur l'audit immuable.
 - **Revue par PR** : toute migration passe par une Pull Request avec ARP et audit interne, conformément aux règles de la baseline.
-- **Migrations testées** : appliquées et vérifiées sur une base de test avant toute application en environnement supérieur.
+- **Migrations testées** : appliquées et vérifiées sur une base de test avant toute application en environnement supérieur, y compris le rejeu des tests d'intégrité de gouvernance.
 - **Garde-fou de gouvernance** : une migration qui **affaiblirait une contrainte d'invariant** (par exemple relâcher `validated_by ≠ agent`, ou lever l'interdiction d'UPDATE/DELETE sur `audit`) est un **échec de revue**, jamais un simple choix technique.
 - **Réversibilité applicative, pas de données** : on peut redéployer l'application en version antérieure, mais on ne « défait » pas une migration de données ; le schéma n'évolue qu'en avant, l'audit ne recule jamais.
 
@@ -71,6 +73,7 @@ Synthèse des politiques de compatibilité :
 | Checkpoints LangGraph | Non garantie inter-versions | Tolérée | Drainer / rejouer depuis l'audit |
 | Format d'événement d'audit | Ascendante en lecture | Jamais destructive | Format versionné, évolution additive |
 | Contrats LLM | Isolée du cœur | N/A pour le cœur | Adaptateur `LLMProvider` (DT-03) |
+| Manifests d'agents | Versionnée en base | Via gouvernance | Ancienne version conservée pour l'audit |
 
 ## Versionnement des décisions et de la baseline
 
@@ -124,3 +127,4 @@ Le **choix du fournisseur et du modèle par défaut relève du CEO** : une bascu
 3. **Cadence de release** cible (rythme des MINOR/PATCH) et fenêtre de maintenance des versions antérieures.
 4. **Seuil déclenchant une nouvelle baseline** `vX.Y` plutôt qu'une simple décision (quelle ampleur de changement justifie de refiger le socle).
 5. **Politique de version des manifests d'agents** : historisation complète, ou conservation des seules versions ayant produit des décisions.
+6. **Rythme de revalidation** de la version des protocoles/politiques et articulation avec les échéances déjà fixées ([`../behavior/13-bounds-and-thresholds.md`](../behavior/13-bounds-and-thresholds.md)).
