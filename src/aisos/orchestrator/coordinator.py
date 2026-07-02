@@ -30,19 +30,30 @@ from aisos.orchestrator.context import (
     OrchestrationStatus,
 )
 from aisos.orchestrator.lifecycle import LifecycleManager
+from aisos.orchestrator.workflow_link import WorkflowRegistry
 from aisos.schemas.entities import PreapprovedPolicy
 from aisos.schemas.memory import MemoryRecord, Provenance
 from aisos.security import Action
+from aisos.workflow import InMemoryWorkflowEngine, WorkflowState
 
 
 class ComponentCoordinator:
     """Coordonne les composants existants selon un pipeline deterministe. Ne decide jamais."""
 
     def __init__(
-        self, execution_context: ExecutionContext, lifecycle: LifecycleManager | None = None
+        self,
+        execution_context: ExecutionContext,
+        lifecycle: LifecycleManager | None = None,
+        *,
+        workflow_engine: InMemoryWorkflowEngine | None = None,
+        workflow_registry: WorkflowRegistry | None = None,
     ) -> None:
         self._xc = execution_context
         self._lc = lifecycle or LifecycleManager()
+        self._wf = workflow_engine or InMemoryWorkflowEngine(
+            execution_context.authorizer, execution_context.clock
+        )
+        self._registry = workflow_registry if workflow_registry is not None else WorkflowRegistry()
 
     async def coordinate(
         self,
@@ -56,7 +67,12 @@ class ComponentCoordinator:
         principal = rc.principal
         actor = f"service:{principal.subject}"
 
+        # (0) Chaque demande cree un workflow (etat CREATED, aucune transition encore).
+        instance = self._wf.create(request.id)
+        self._registry.put(instance)
+
         # (1) SECURITE — premier controle : aucune demande ne contourne l'autorisation.
+        # Tant que la securite n'est pas passee, AUCUNE transition de workflow n'a lieu.
         if not self._xc.authorizer.can(principal, Action.WORKFLOW_EXECUTE, request.id):
             await self._emit(
                 octx, EventType.ESCALATION_RAISED, actor=actor, payload={"reason": "unauthorized"}
@@ -67,10 +83,12 @@ class ComponentCoordinator:
                 validation_mode=None,
                 interrupted=True,
                 reason=f"securite : principal '{principal.role}' non autorise a coordonner",
+                workflow_state=instance.state,
             )
 
-        # (2) Reception : evenement + audit.
+        # (2) Reception : demarrage du workflow (CREATED -> RUNNING) + evenement + audit.
         self._lc.advance(octx, LifecycleState.PRE_ANALYSIS)
+        self._wf.start(instance, actor=actor)
         await self._emit(octx, EventType.REQUEST_RECEIVED, actor=actor)
 
         # (3) POLICY ENGINE — toujours consulte avant toute execution.
@@ -95,7 +113,8 @@ class ComponentCoordinator:
         validator_ref = policy_result.routing.policy_ref
         no_delegated_validation = mode != ValidationMode.PREAPPROVED_POLICY or not validator_ref
         if no_delegated_validation:
-            # Interruption propre : la validation revient au CEO ; aucune execution, aucune memoire.
+            # Pause propre du workflow (RUNNING -> PAUSED_CEO) : la validation revient au CEO.
+            self._wf.pause_for_ceo(instance, reason="routage CEO", actor=actor)
             await self._emit(octx, EventType.DECISION_PENDING, actor=actor)
             return self._result(
                 octx,
@@ -103,6 +122,7 @@ class ComponentCoordinator:
                 validation_mode=mode,
                 interrupted=True,
                 reason="routage CEO : validation humaine requise (aucune decision automatique)",
+                workflow_state=instance.state,
             )
 
         # (5) Validation pre-accordee par le CEO via politique : appliquer puis executer.
@@ -125,6 +145,7 @@ class ComponentCoordinator:
                 validation_mode=mode,
                 interrupted=True,
                 reason="securite : ecriture memoire refusee",
+                workflow_state=instance.state,
             )
 
         record = MemoryRecord(
@@ -142,6 +163,8 @@ class ComponentCoordinator:
             octx, EventType.MEMORY_UPDATED, actor=actor, payload={"memory_id": record.id}
         )
 
+        # Workflow termine sous politique pre-approuvee (RUNNING -> COMPLETED).
+        self._wf.complete(instance, actor=actor, reason="execute sous politique")
         self._lc.advance(octx, LifecycleState.CLOSED)
         return self._result(
             octx,
@@ -149,6 +172,7 @@ class ComponentCoordinator:
             validation_mode=mode,
             interrupted=False,
             reason="execute sous politique pre-approuvee (validation du CEO par avance)",
+            workflow_state=instance.state,
         )
 
     # -- Emission d'un evenement : publier au bus PUIS auditer (jamais l'un sans l'autre) ------
@@ -185,6 +209,7 @@ class ComponentCoordinator:
         validation_mode: ValidationMode | None,
         interrupted: bool,
         reason: str,
+        workflow_state: WorkflowState | None = None,
     ) -> OrchestrationResult:
         return OrchestrationResult(
             request_id=octx.request_context.request.id,
@@ -195,4 +220,5 @@ class ComponentCoordinator:
             audit_ids=list(octx.audit_ids),
             interrupted=interrupted,
             reason=reason,
+            workflow_state=workflow_state,
         )
