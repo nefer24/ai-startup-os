@@ -44,10 +44,6 @@ Le long du cycle de vie d'une demande ([`../behavior/01-request-lifecycle.md`](.
 
 Chaque politique suit la même structure : **Objectif · Critères · Règles · Exemples · Cas limites · Questions ouvertes**.
 
-## Note éditoriale
-
-La Constitution ([`../00-vision.md`](../00-vision.md), Article VIII) mentionne encore l'« Executive Board », remplacé par le **Conseil Stratégique Dynamique** (décision 014). Il s'agit d'un **écart à arbitrer par le CEO** ; en attendant, les politiques suivent la révision de la Phase 2.
-
 ## Portée
 
 - **Ce que couvre cette phase :** les règles de choix comportemental d'AI-SOS (pré-analyse, évaluation, cadrage, classification, validation, qualité).
