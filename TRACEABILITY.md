@@ -241,3 +241,40 @@ Publication / abonnement **en mémoire**, validation du catalogue et du versionn
 | Couverture `src/aisos/events/` | ✅ 100 % |
 
 La Phase 18 respecte les Phases 8 à 17 ; aucun broker réel, aucune API réelle, aucune persistance réelle, aucun workflow LangGraph, aucune décision automatique.
+
+## Phase 19 — Orchestrator Core (coordination déterministe)
+
+Cœur de l'Orchestrateur : **réception → contexte → Policy Engine → événements → Audit → Memory → Security → résultat**. L'Orchestrateur **coordonne uniquement les composants existants** (Phases 14 à 18) et **ne décide jamais** — il suit le routage du Policy Engine et s'arrête proprement lorsque la validation revient au CEO. **Sans LangGraph, sans Workflow Engine, sans API, sans base, sans broker, sans LLM, sans décision automatique.**
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/orchestrator/context.py` (`RequestContext`, `OrchestrationContext`, `OrchestrationResult`, `ExecutionContext`, `OrchestrationStatus`) | contextes immuables + conteneur de dépendances ; le résultat porte un **routage**, jamais une issue de décision | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `aisos/orchestrator/lifecycle.py` (`LifecycleManager`) | progression déterministe, strictement vers l'avant, du cycle de vie | [`docs/behavior/01-request-lifecycle.md`](docs/behavior/01-request-lifecycle.md), [`docs/runtime/02-main-request-workflow.md`](docs/runtime/02-main-request-workflow.md) |
+| `aisos/orchestrator/coordinator.py` (`ComponentCoordinator`) | pipeline fixe : Security → événement+Audit → Policy → routage → (Memory sous validation) | [`docs/runtime/02-main-request-workflow.md`](docs/runtime/02-main-request-workflow.md), [`docs/runtime/06-policy-evaluation-workflow.md`](docs/runtime/06-policy-evaluation-workflow.md) |
+| `aisos/orchestrator/dispatcher.py` (`RequestDispatcher`) | point d'entrée : reçoit une `Request`, construit le contexte, lance la coordination | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `tests/unit/test_orchestrator.py` | tests unitaires (chemins CEO/politique, cycle de vie, audit, bus) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_orchestrator_governance.py` | preuves des invariants d'orchestration | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 19)
+
+| Invariant | Test |
+| --- | --- |
+| Le Policy Engine est toujours consulté avant toute exécution | `test_policy_always_consulted_before_execution` |
+| Aucune demande ne contourne Security | `test_no_request_bypasses_security` |
+| Chaque demande produit un Audit | `test_each_request_produces_an_audit` |
+| Aucune écriture mémoire sans validation (routage CEO) | `test_no_memory_write_when_routed_to_ceo` |
+| L'écriture mémoire est indépendamment contrôlée par Security | `test_memory_write_is_independently_security_gated` |
+| L'Orchestrateur ne prend aucune décision | `test_orchestrator_takes_no_decision` |
+| Les événements sont publiés dans le bon ordre (deux chemins) | `test_events_published_in_correct_order_both_paths` |
+| Interruption propre si le Policy Engine renvoie au CEO | `test_clean_interruption_when_policy_routes_to_ceo` |
+
+### Vérification Phase 19 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 60 source files |
+| `pytest` | ✅ 147 passed (dont 53 `governance`) |
+| Couverture `src/aisos/orchestrator/` | ✅ 100 % |
+
+La Phase 19 respecte la Baseline v1.0 et les Phases 8 à 18 ; aucun workflow LangGraph, aucun Workflow Engine, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. L'Orchestrateur coordonne ; le CEO décide.
