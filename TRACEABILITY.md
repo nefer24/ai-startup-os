@@ -429,3 +429,40 @@ Squelette déterministe des **adaptateurs de persistance** : ports déclarés pa
 | Couverture `src/aisos/infrastructure/` + `src/aisos/repositories/` | ✅ 100 % |
 
 La Phase 23 respecte la Baseline v1.0 et les Phases 8 à 22 ; aucune base réelle, aucun SQLAlchemy, aucun réseau, aucune API, aucun LangGraph, aucune décision automatique. Le cœur déclare les ports ; l'infrastructure les implémente, jamais l'inverse.
+
+## Phase 24 — Orchestrator Persistence Integration (transaction par orchestration)
+
+Intégration des **adaptateurs de persistance mémoire (Phase 23)** à l'**Orchestrateur** et au **Workflow** : chaque orchestration s'exécute **dans une Unit of Work** — demande, workflow, audit et mémoire persistés puis **commités atomiquement** ; toute erreur avant le commit déclenche un **rollback total** (aucune écriture partielle). Le workflow est **checkpointé** (un thread par demande) et **reconstructible depuis le checkpoint**. L'Orchestrateur ne dépend que de **ports** (`aisos.repositories`), jamais de l'infrastructure. **Sans base réelle, sans SQLAlchemy, sans réseau, sans API réelle, sans LangGraph, sans LLM, sans décision automatique.**
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/repositories/interfaces.py` (`OrchestrationUnitOfWork`) | port de frontière transactionnelle exposant requests/workflows/audit/memory + commit/rollback | [`docs/engineering/03-module-boundaries.md`](docs/engineering/03-module-boundaries.md), [`docs/implementation/06-storage-strategy.md`](docs/implementation/06-storage-strategy.md) |
+| `aisos/orchestrator/context.py` (`ExecutionContext.unit_of_work_factory`/`checkpoint_store`, `OrchestrationContext.uow`) | dépendances de persistance **optionnelles** (ports uniquement) | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `aisos/orchestrator/coordinator.py` (`ComponentCoordinator`) | persiste chaque `AuditRecord` et `MemoryRecord` dans la transaction courante | [`docs/database/07-audit-event-store.md`](docs/database/07-audit-event-store.md) |
+| `aisos/orchestrator/dispatcher.py` (`RequestDispatcher._dispatch_persistent`, `resume_from_checkpoint`) | UnitOfWork autour de l'orchestration ; persiste request + workflow ; checkpoint ; commit/rollback ; reprise depuis checkpoint | [`docs/implementation/06-storage-strategy.md`](docs/implementation/06-storage-strategy.md), [`docs/database/06-checkpointing-strategy.md`](docs/database/06-checkpointing-strategy.md) |
+| `aisos/workflow/serialization.py` (`to_snapshot`, `from_snapshot`, `WorkflowSnapshot`) | sérialisation/reconstruction d'une instance pour le checkpoint | [`docs/database/06-checkpointing-strategy.md`](docs/database/06-checkpointing-strategy.md) |
+| `tests/unit/test_orchestrator_persistence.py` | tests unitaires (persistance, rollback, checkpoint, reprise) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_orchestrator_persistence_governance.py` | preuves des invariants d'intégration persistance | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 24)
+
+| Invariant | Test |
+| --- | --- |
+| Chaque orchestration persiste request + workflow + audit | `test_each_orchestration_persists_request_workflow_audit` |
+| Rollback si erreur avant commit (aucune écriture partielle) | `test_rollback_leaves_no_partial_write` |
+| Audit et mémoire commités ensemble (atomicité) | `test_audit_and_memory_are_committed_atomically` |
+| Workflow checkpoint sauvegardé | `test_workflow_checkpoint_is_saved` |
+| Reprise depuis checkpoint mémoire | `test_resume_from_checkpoint_reconstructs_workflow` |
+| L'Orchestrateur ne dépend pas de l'infrastructure | `test_orchestrator_does_not_depend_on_infrastructure` |
+| Aucune décision automatique (même persistée) | `test_persisted_orchestration_takes_no_decision` |
+
+### Vérification Phase 24 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 69 source files |
+| `pytest` | ✅ 228 passed (dont 87 `governance`) |
+| Couverture `src/aisos/orchestrator/` + `src/aisos/workflow/` + `src/aisos/repositories/` | ✅ 100 % |
+
+La Phase 24 respecte la Baseline v1.0 et les Phases 8 à 23 ; aucune base réelle, aucun SQLAlchemy, aucun réseau, aucune API réelle, aucun LangGraph, aucun LLM, aucune décision automatique. L'orchestration persiste dans une transaction ; l'Orchestrateur ne dépend que des ports.

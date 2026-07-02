@@ -11,6 +11,7 @@ from __future__ import annotations
 from aisos.workflow.engine import InMemoryWorkflowEngine
 from aisos.workflow.instance import WorkflowInstance, WorkflowTransition
 from aisos.workflow.interfaces import Checkpointer, WorkflowEngine
+from aisos.workflow.serialization import WorkflowSnapshot, from_snapshot, to_snapshot
 from aisos.workflow.states import (
     ALLOWED_TRANSITIONS,
     CEO_RESUME_TRANSITIONS,
@@ -30,8 +31,11 @@ __all__ = [
     "InMemoryWorkflowEngine",
     "WorkflowEngine",
     "WorkflowInstance",
+    "WorkflowSnapshot",
     "WorkflowState",
     "WorkflowTransition",
+    "from_snapshot",
     "is_allowed_transition",
     "is_generic_transition",
+    "to_snapshot",
 ]

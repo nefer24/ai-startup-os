@@ -26,11 +26,15 @@ from aisos.domain.enums import DecisionOutcome, LifecycleState, ValidationMode
 from aisos.events import InMemoryEventBus
 from aisos.memory.interfaces import MemorySystem
 from aisos.policies.interfaces import PolicyEngine
+from aisos.repositories import CheckpointStore, OrchestrationUnitOfWork
 from aisos.schemas.base import ImmutableModel
 from aisos.schemas.entities import Request
 from aisos.schemas.policy import PolicyResult
 from aisos.security.interfaces import Authorizer, Principal
 from aisos.workflow.states import WorkflowState
+
+#: Fabrique d'unite de travail (port) : produit une transaction par orchestration.
+UnitOfWorkFactory = Callable[[], OrchestrationUnitOfWork]
 
 
 def _utc_now() -> dt.datetime:
@@ -107,6 +111,8 @@ class OrchestrationContext:
     published_events: list[str] = field(default_factory=list)
     audit_ids: list[str] = field(default_factory=list)
     event_seq: int = 0
+    #: Transaction courante (port) : si presente, l'audit et la memoire y sont aussi persistes.
+    uow: OrchestrationUnitOfWork | None = None
 
 
 @dataclass(frozen=True)
@@ -124,3 +130,7 @@ class ExecutionContext:
     memory_system: MemorySystem
     authorizer: Authorizer
     clock: Callable[[], dt.datetime] = _utc_now
+    #: Persistance OPTIONNELLE (ports uniquement) : fabrique d'unite de travail + checkpoint
+    #: store. Absents => comportement des Phases 19-22 inchange (aucune persistance).
+    unit_of_work_factory: UnitOfWorkFactory | None = None
+    checkpoint_store: CheckpointStore | None = None

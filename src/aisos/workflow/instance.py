@@ -10,6 +10,7 @@ methode `record` ajoute une transition ; aucune methode ne supprime ni ne modifi
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Sequence
 
 from aisos.schemas.base import ImmutableModel
 from aisos.workflow.states import WorkflowState
@@ -60,3 +61,17 @@ class WorkflowInstance:
         """Ajoute une transition et fait avancer l'etat. Append-only : jamais de suppression."""
         self._history.append(transition)
         self._state = transition.to_state
+
+    @classmethod
+    def restored(
+        cls,
+        workflow_id: str,
+        *,
+        created_at: dt.datetime,
+        state: WorkflowState,
+        history: Sequence[WorkflowTransition],
+    ) -> WorkflowInstance:
+        """Reconstruit une instance depuis un checkpoint (etat + historique). Pour la reprise."""
+        instance = cls(workflow_id, created_at=created_at, state=state)
+        instance._history = list(history)
+        return instance

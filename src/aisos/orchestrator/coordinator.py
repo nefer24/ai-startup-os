@@ -159,6 +159,8 @@ class ComponentCoordinator:
         )
         self._lc.advance(octx, LifecycleState.MEMORY)
         await self._xc.memory_system.store(record)
+        if octx.uow is not None:
+            await octx.uow.memory.append_revision(record)  # persistance transactionnelle memoire
         await self._emit(
             octx, EventType.MEMORY_UPDATED, actor=actor, payload={"memory_id": record.id}
         )
@@ -198,6 +200,8 @@ class ComponentCoordinator:
         )
         await self._xc.event_bus.publish(envelope)
         record = await self._xc.audit_engine.append(envelope)
+        if octx.uow is not None:
+            await octx.uow.audit.append(record)  # persistance transactionnelle de l'audit
         octx.published_events.append(str(event_type))
         octx.audit_ids.append(record.id)
 
