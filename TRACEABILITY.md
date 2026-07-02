@@ -315,3 +315,39 @@ Cœur de **reprise après décision du CEO** : lorsque l'Orchestrateur s'est arr
 | Couverture `src/aisos/orchestrator/` | ✅ 100 % |
 
 La Phase 20 respecte la Baseline v1.0 et les Phases 8 à 19 ; aucun LangGraph, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. La reprise **applique** la décision du CEO ; elle ne la crée jamais.
+
+## Phase 21 — Workflow Engine Core (machine à états déterministe)
+
+Cœur du **Workflow Engine** : machine à états déterministe, **en mémoire, sans LangGraph**. Transitions déclarées explicitement, pause/reprise, historique append-only. On ne quitte une pause CEO que par une **reprise sur décision valide du CEO** — **aucun workflow ne décide à la place du CEO**. **Sans API, sans base, sans broker, sans LLM, sans décision automatique.**
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/workflow/states.py` (`WorkflowState`, `GENERIC_TRANSITIONS`, `CEO_RESUME_TRANSITIONS`, `TERMINAL_STATES`, `is_allowed_transition`, `is_generic_transition`) | états officiels + table des transitions autorisées ; aucune arête générique ne sort de `paused_ceo` | [`docs/components/07-workflow-engine.md`](docs/components/07-workflow-engine.md), [`docs/behavior/01-request-lifecycle.md`](docs/behavior/01-request-lifecycle.md) |
+| `aisos/workflow/instance.py` (`WorkflowTransition`, `WorkflowInstance`) | transition immuable + instance à historique **append-only** (aucune suppression/modification) | [`docs/components/07-workflow-engine.md`](docs/components/07-workflow-engine.md) |
+| `aisos/workflow/engine.py` (`InMemoryWorkflowEngine`) | création, transition déterministe, `pause_for_ceo`, `resume_after_ceo` (double contrôle CEO), rejet des transitions invalides | [`docs/components/07-workflow-engine.md`](docs/components/07-workflow-engine.md), [`docs/runtime/07-human-interrupt-workflow.md`](docs/runtime/07-human-interrupt-workflow.md) |
+| `tests/unit/test_workflow_engine.py` | tests unitaires (création, transitions, pause/reprise, historique) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_workflow_engine_governance.py` | preuves des invariants du workflow | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 21)
+
+| Invariant | Test |
+| --- | --- |
+| Une transition invalide est refusée (jamais silencieuse) | `test_invalid_transition_is_refused_never_silent` |
+| Aucun retour arrière non autorisé | `test_no_unauthorized_backward_transition` |
+| Pause propre quand une validation CEO est requise | `test_pause_is_clean_when_ceo_validation_required` |
+| On ne quitte pas une pause CEO sans décision du CEO | `test_cannot_leave_ceo_pause_generically` |
+| Reprise uniquement après une décision valide du CEO | `test_resume_only_after_a_valid_ceo_decision` |
+| Aucun workflow ne décide à la place du CEO | `test_no_workflow_decides_for_the_ceo` |
+| Historique append-only et immuable | `test_history_is_append_only_and_immutable` |
+| Transition déterministe et reproductible | `test_deterministic_transition_is_reproducible` |
+
+### Vérification Phase 21 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 64 source files |
+| `pytest` | ✅ 184 passed (dont 69 `governance`) |
+| Couverture `src/aisos/workflow/` | ✅ 100 % |
+
+La Phase 21 respecte la Baseline v1.0 et les Phases 8 à 20 ; aucun LangGraph réel, aucune API réelle, aucune base réelle, aucun broker réel, aucun LLM, aucune décision automatique. Le workflow transitionne ; le CEO décide.
