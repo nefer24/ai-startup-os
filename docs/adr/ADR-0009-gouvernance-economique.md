@@ -1,10 +1,25 @@
 # ADR-0009 — Gouvernance économique (DT-09)
 
-- **Statut** : Proposé (en attente de ratification CEO — porte M0)
+- **Statut** : Accepted (ratifié par le CEO — porte M0-001, 2026-07-02)
 - **Date** : 2026-07-02
 - **Origine** : Revue stratégique n°2, risque N2 (« Absence de gouvernance économique »)
 - **Décideur** : CEO (ratification requise) · **Instructeur** : Chief Software Architect
-- **Portée** : `AgentRuntime`, `Orchestrator`, `Policy`, `Workflow`, futur `LLMProvider`
+- **Portée** : `AgentRuntime` (point d'application), `Orchestrator`, `Workflow`, futur `LLMProvider`.
+  Le `Policy Engine` **n'est pas** dans la portée d'application : il reste dédié à la classification.
+
+## Ratification CEO — M0-001
+
+- **Décision** : **APPROVED WITH MINOR CHANGES** (Porte M0, item **M0-001**), 2026-07-02.
+- **Corrections intégrées** : A1 (point d'application unique = `AgentRuntime`, réutilisant
+  `DefaultManifestEnforcer.within_budget()` ; `Policy Engine` non modifié), A2 (source unique de
+  consommation dérivée du *record* d'interaction LLM d'ADR-0010 ; le ledger agrège, ne duplique
+  pas), A3 (dépassement ⇒ suspension + événement `escalation.raised` audité, pas d'interrupt CEO
+  synchrone). La remarque éditoriale A4 (devise du champ coût) est notée non bloquante.
+- **Justification courte** : les trois corrections précisent des frontières de responsabilité et la
+  non-duplication ; elles ne touchent pas la substance de la décision (les cinq mécanismes, les
+  invariants et les alternatives restent inchangés). La décision est mûre et débloque la Vertical
+  Slice adverse (scénarios F3 hors-budget, F4 boucle).
+- **Référence** : M0-001 · Revue de ratification instruite par le Chief Software Architect.
 
 ## Contexte
 
@@ -37,11 +52,17 @@ mécanismes.
 | Niveau | Borne | Défaut conservateur | Dépassement |
 | --- | --- | --- | --- |
 | **Par appel LLM** | `max_tokens`, `max_latency_ms` | fournis par le manifest | tronque / annule l'appel, audité |
-| **Par agent / par demande** | `token_budget`, `cost_budget_eur`, `max_steps` | manifest + politique | `AgentBudgetExceededError` → escalade CEO |
+| **Par agent / par demande** | `token_budget`, `cost_budget_eur`, `max_steps` | manifest + politique | `AgentBudgetExceededError` → **suspension + escalade auditée** |
 | **Global (plateforme)** | plafond de coût horaire/journalier, taux d'appels | configuration CEO-only | dégradation contrôlée + alerte |
 
 Règle : **un budget non déclaré vaut refus** (cohérent avec le least privilege de la Phase 17).
 Un agent sans `token_budget` ne s'exécute pas.
+
+**Sémantique de l'escalade (A3).** Un dépassement de budget (comme une récursion ou un timeout
+dépassés) produit une **suspension du workflow** assortie d'un événement `escalation.raised`
+**audité**, que le CEO revoit de façon asynchrone. Ce **n'est pas** un interrupt CEO synchrone
+levé à chaque dépassement : on évite ainsi d'aggraver le goulot d'étranglement décisionnel du CEO
+(risque R-CEO), tout en préservant l'invariant « aucune exécution au-delà d'une borne ».
 
 ### 2. Limite de récursion et de profondeur
 
@@ -57,17 +78,24 @@ avec la stratégie de checkpointing : « pas d'effet non idempotent rejoué en a
 
 ### 4. Comptabilité des ressources (ledger économique)
 
-Chaque appel LLM produit une **entrée de consommation** (tokens in/out, coût estimé, latence,
-modèle) rattachée à la demande et **auditée**. Le coût réel d'une décision devient une donnée de
-première classe, base de la métrique « coût par recommandation utile »
+Chaque appel LLM est comptabilisé (tokens in/out, coût estimé, latence, modèle) et rattaché à la
+demande. Cette comptabilité **n'est pas un enregistrement séparé** : l'entrée de consommation
+**dérive du *record* d'interaction LLM défini par ADR-0010** (`token_usage`/`cost`), qui est la
+**source unique** de cette donnée. Le ledger économique **agrège** ces enregistrements (par
+demande, par agent, par période) ; il ne les **duplique pas** — cela éviterait précisément le
+double-write que corrige ADR-0011. Le coût réel d'une décision devient ainsi une donnée de première
+classe, base de la métrique « coût par recommandation utile »
 (voir [cadre de valeur](../consolidation/05-VALUE-METRICS-FRAMEWORK.md)).
 
 ### 5. Point d'application
 
-Les bornes sont **câblées dans l'`AgentRuntime` dès sa première ligne** (Vertical Slice n°1),
-et vérifiées par le Policy Engine au routage. Aucune borne ne peut être contournée par un chemin
-alternatif : c'est un **invariant de gouvernance**, prouvé par test (le stub LLM « hors-budget »
-doit être arrêté et escaladé).
+Les bornes sont **câblées dans l'`AgentRuntime`** (point d'application **unique**), dès sa première
+ligne (Vertical Slice n°1). L'`AgentRuntime` **réutilise la primitive
+`DefaultManifestEnforcer.within_budget()`** existante (Phase 17) plutôt que de ré-implémenter une
+vérification de budget. Le **`Policy Engine` n'est pas modifié** : il reste dédié à la
+**classification** et ne porte aucune logique économique. Aucune borne ne peut être contournée par
+un chemin alternatif : c'est un **invariant de gouvernance**, prouvé par test (le stub LLM
+« hors-budget » doit être arrêté et escaladé).
 
 ## Conséquences
 
