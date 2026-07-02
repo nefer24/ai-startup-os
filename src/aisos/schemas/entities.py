@@ -20,6 +20,7 @@ from aisos.domain.enums import (
     Level,
     LifecycleState,
     PolicyStatus,
+    RiskLevel,
 )
 from aisos.schemas.base import AISOSModel
 
@@ -32,7 +33,7 @@ class Request(AISOSModel):
     statement: str
     lifecycle_state: LifecycleState = LifecycleState.RECEIVED
     complexity: Level | None = None
-    risk: Level | None = None
+    risk: RiskLevel | None = None
     uncertainty: Level | None = None
     thread_id: str | None = None
     created_at: dt.datetime

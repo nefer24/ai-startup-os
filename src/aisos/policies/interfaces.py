@@ -11,14 +11,16 @@ deleguees ; delegation seulement si politique active et dans les plafonds ; defa
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
-from aisos.domain.enums import DecisionClass, Level
+from aisos.domain.enums import DecisionClass, Level, RiskLevel
 from aisos.schemas.decision import Recommendation
 from aisos.schemas.entities import PreapprovedPolicy, Request
 from aisos.schemas.policy import (
     Classification,
     PolicyEligibility,
+    PolicyResult,
     QualityGateResult,
     ValidationRouting,
 )
@@ -27,7 +29,7 @@ from aisos.schemas.policy import (
 class PolicyEngine(Protocol):
     """Moteur deterministe d'evaluation et de routage des decisions."""
 
-    def precedence(self, complexity: Level, risk: Level, uncertainty: Level) -> DecisionClass:
+    def precedence(self, complexity: Level, risk: RiskLevel, uncertainty: Level) -> DecisionClass:
         """Classe = axe le plus contraignant (preseance inter-axes)."""
         ...
 
@@ -38,5 +40,11 @@ class PolicyEngine(Protocol):
     def evaluate_policy(
         self, classification: Classification, policy: PreapprovedPolicy
     ) -> PolicyEligibility: ...
+
+    def evaluate(
+        self, request: Request, policies: Sequence[PreapprovedPolicy] = ()
+    ) -> PolicyResult:
+        """Sortie standard : classification + routage + defaut conservateur + eligibilite."""
+        ...
 
     def quality_gate(self, recommendation: Recommendation) -> QualityGateResult: ...
