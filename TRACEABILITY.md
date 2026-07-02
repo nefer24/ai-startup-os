@@ -130,3 +130,42 @@ Cœur append-only à chaînage de hachés, **déterministe, en mémoire, sans pe
 | Couverture `src/aisos/audit/` | ✅ 100 % |
 
 La Phase 15 respecte les Phases 8, 10, 12, 13 et 14 ; aucun workflow LangGraph, aucune API réelle, aucune persistance réelle, aucune décision automatique.
+
+---
+
+## Phase 16 — Memory System (cœur déterministe)
+
+Journal append-only de révisions, **déterministe, en mémoire, sans persistance réelle, sans framework, sans I/O externe, sans décision automatique**.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/memory/engine.py` (`provenance_is_valid`) | validation de provenance (origine non vide) | [`docs/contracts/07-memory-record-schema.md`](docs/contracts/07-memory-record-schema.md), [`docs/behavior/06-memory-update-rules.md`](docs/behavior/06-memory-update-rules.md) |
+| `aisos/memory/engine.py` (`InMemoryMemorySystem.store`) | création d'un MemoryRecord ; conflit sur id existant ; quarantaine si provenance invalide ou incertitude | [`docs/components/05-memory-system.md`](docs/components/05-memory-system.md), [`docs/runtime/08-memory-update-workflow.md`](docs/runtime/08-memory-update-workflow.md) |
+| `...revise` | révision non écrasante (revision incrémentée, ancienne conservée), provenance obligatoire | [`docs/behavior/06-memory-update-rules.md`](docs/behavior/06-memory-update-rules.md) |
+| `...quarantine` | mise en quarantaine logique (non destructive) | [`docs/components/05-memory-system.md`](docs/components/05-memory-system.md) |
+| `...promote` | promotion durable réservée au CEO ou à une politique pré-approuvée (jamais un agent) | [`docs/behavior/06-memory-update-rules.md`](docs/behavior/06-memory-update-rules.md), [`docs/policies/08-preapproved-policy.md`](docs/policies/08-preapproved-policy.md) |
+| `...retrieve`, `...search_semantic` | recherche simple (par portée/clé ; lexicale déterministe, sans embedding en Phase 16) | [`docs/components/05-memory-system.md`](docs/components/05-memory-system.md) |
+| `tests/unit/test_memory_system.py`, `test_memory_edge_and_regression.py` | unitaires, cas limites, non-régression | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_memory_governance.py` | preuves des invariants mémoire | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 16)
+
+| Invariant | Test |
+| --- | --- |
+| Aucune mémoire durable sans provenance | `test_no_durable_memory_without_provenance` |
+| Aucune promotion durable sans CEO ou politique pré-approuvée | `test_no_durable_promotion_without_ceo_or_policy`, `test_promotion_by_policy_is_allowed`, `test_promotion_guard_rejects_non_validator` |
+| Conflit détecté, jamais fusionné silencieusement | `test_conflict_detected_never_merged` |
+| Révision incrémentée (non écrasante) | `test_revision_is_incremented_not_overwritten` |
+| Suppression destructive interdite | `test_no_destructive_delete_api` |
+| Quarantaine en cas d'incertitude | `test_uncertainty_triggers_quarantine` |
+
+### Vérification Phase 16 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 52 source files |
+| `pytest` | ✅ 101 passed (dont 32 `governance`) |
+| Couverture `src/aisos/memory/` | ✅ 100 % |
+
+La Phase 16 respecte les Phases 8, 10, 12, 13, 14 et 15 ; aucun workflow LangGraph, aucune API réelle, aucune persistance réelle, aucune décision automatique.
