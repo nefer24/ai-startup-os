@@ -1,0 +1,28 @@
+# Pre-commit hooks — cf docs/engineering/04-coding-standards.md, docs/engineering/06-ci-cd-strategy.md.
+# La CI verifie ; elle ne decide jamais de fusionner (autorite du CEO, cf docs/governance/).
+minimum_pre_commit_version: "3.7.0"
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        additional_dependencies: ["pydantic>=2.7"]
+        args: ["--config-file=pyproject.toml"]
+        pass_filenames: false

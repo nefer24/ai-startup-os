@@ -1,0 +1,102 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aisos"
+version = "0.0.0"
+description = "AI-SOS — Artificial Intelligence Solution Operating System (foundation skeleton, Phase 13). No business logic."
+readme = "src/aisos/README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "AI-SOS" }]
+
+# Dépendances de runtime — déclarées d'après les décisions techniques proposées DT-01..08 (Phase 5).
+# Aucune n'est exercée par du code métier en Phase 13 : le squelette n'importe que `pydantic`
+# (schémas) ; les frameworks (fastapi, langgraph, sqlalchemy...) ne sont utilisés que par de
+# futurs adaptateurs, non présents ici, afin que le coeur reste indépendant des frameworks.
+dependencies = [
+    "pydantic>=2.7",          # DT-03 — schémas et validation
+    "pydantic-settings>=2.2", # DT — gestion de configuration (12-factor)
+    "fastapi>=0.110",         # DT-04 — API REST/JSON + SSE (adaptateurs futurs)
+    "langgraph>=0.2",         # DT-02 — moteur de workflow (adaptateurs futurs)
+    "sqlalchemy>=2.0",        # DT-05 — persistance (adaptateurs futurs)
+    "alembic>=1.13",          # DT-05 — migrations (adaptateurs futurs)
+    "psycopg[binary]>=3.1",   # DT-05 — pilote PostgreSQL (adaptateurs futurs)
+    "pgvector>=0.2",          # DT-05 — mémoire sémantique (adaptateurs futurs)
+    "opentelemetry-api>=1.24",# DT-06 — observabilité (adaptateurs futurs)
+    "authlib>=1.3",           # DT-07 — OIDC/JWT (adaptateurs futurs)
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "coverage[toml]>=7.5",
+    "pre-commit>=3.7",
+    "pip-audit>=2.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aisos"]
+
+# ---------------------------------------------------------------------------
+# Ruff — lint + format (outil unique, cf docs/engineering/04-coding-standards.md,
+# docs/engineering/06-ci-cd-strategy.md)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PT", "RUF"]
+ignore = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["aisos"]
+
+# ---------------------------------------------------------------------------
+# Mypy — mode strict (cf docs/engineering/04-coding-standards.md)
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+packages = ["aisos"]
+warn_unused_ignores = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+# Les frameworks non installés en environnement de squelette n'ont pas de stubs ici.
+module = ["langgraph.*", "pgvector.*", "authlib.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# Pytest + coverage (cf docs/engineering/05-testing-strategy.md,
+# docs/quality/02-unit-testing.md)
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "governance: preuve d'un invariant de gouvernance (bloquant, cf docs/quality/05-governance-validation.md)",
+    "unit: test unitaire",
+    "integration: test d'integration",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["src/aisos"]
+
+[tool.coverage.report]
+show_missing = true
+# Seuils indicatifs (cf docs/quality/01-quality-overview.md) — a activer quand du code exercable existera.
+# fail_under = 85
