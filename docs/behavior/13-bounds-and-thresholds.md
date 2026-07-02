@@ -15,6 +15,8 @@ Les deux s'appliquent **conjointement** : la première des deux limites atteinte
 
 Le principe directeur est celui du **budget de délibération proportionné à la portée** : plus l'enjeu d'une demande est élevé, plus les bornes sont larges (davantage de temps, davantage d'itérations, conseils plus grands) ; plus l'enjeu est faible, plus les bornes sont resserrées. Une décision structurante « mérite » plus de délibération qu'un choix opérationnel réversible. Cette proportionnalité est portée par la **classe de décision** (voir [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md)) : la classe présumée d'une demande détermine le budget que l'Orchestrateur alloue au cadrage.
 
+Les classes de décision sont désignées, dans tout ce document, par leurs **quatre noms canoniques** : **courante**, **importante**, **structurante**, **critique**. Toute borne indexée sur la classe s'exprime sur ces quatre valeurs, du moins contraignant (courante) au plus contraignant (critique).
+
 ## Qui fixe les bornes et comment
 
 Il n'existe que deux sources légitimes de bornes, et un filet de sécurité :
@@ -31,7 +33,58 @@ Trois règles encadrent ces sources :
 - **L'Orchestrateur ajuste dans un couloir, il ne l'invente pas.** Au cadrage, l'Orchestrateur peut resserrer ou élargir une borne, mais uniquement à l'intérieur du couloir min/max défini par la politique CEO. S'il estime nécessaire de sortir de ce couloir, il **escalade** au CEO plutôt que de le franchir.
 - **Les défauts s'appliquent en dernier recours.** Si aucune politique ne couvre la demande et que l'Orchestrateur n'a rien ajusté, les valeurs par défaut du présent document s'appliquent automatiquement, afin qu'aucune boucle ne reste jamais sans borne.
 
-Les valeurs par défaut ci-dessous sont **indicatives** : elles fournissent un point de départ implémentable, destiné à être remplacé par les couloirs qu'une politique CEO précisera.
+Les valeurs par défaut ci-dessous sont **indicatives** : elles fournissent un point de départ implémentable, destiné à être remplacé par les couloirs qu'une politique CEO précisera. Toutes sont volontairement **conservatrices** : elles penchent vers **plus d'implication du CEO** (bornes resserrées, escalade plus précoce, classe plus haute en cas de doute). **Seul le CEO peut les assouplir**, par une politique pré-approuvée explicite ; ni l'Orchestrateur ni aucun agent ne peut relâcher une borne au-delà de son défaut conservateur.
+
+## Grille de risque
+
+Rattachée à [`../policies/02-risk-policy.md`](../policies/02-risk-policy.md). La politique de risque croise **impact** et **probabilité** pour produire un niveau de risque ; le présent document fournit l'**échelle de probabilité** et la **matrice** par défaut qui rendent ce croisement reproductible. **Qui la fixe :** politique CEO ; à défaut, la grille ci-dessous s'applique automatiquement. **Défaut conservateur :** la matrice penche vers le haut (à croisement ambigu, on retient le niveau supérieur). **Assouplissement :** seul le CEO peut, par politique, abaisser un croisement ; aucun agent ne peut déclasser un risque.
+
+Échelle de probabilité (qualitative, quatre paliers) :
+
+| Palier de probabilité | Lecture observable |
+| --- | --- |
+| **Rare** | Théoriquement possible, sans précédent connu ni facteur déclencheur identifié |
+| **Occasionnel** | Plausible, déjà observé dans des contextes comparables, sans être fréquent |
+| **Probable** | Attendu dans une part significative des cas si rien n'est fait |
+| **Quasi certain** | Se produira selon toute vraisemblance |
+
+Matrice **impact × probabilité → niveau de risque** (faible / modéré / élevé / critique). Les lignes déclinent l'ampleur de l'impact le plus élevé parmi les natures listées par la politique de risque (financier, réputationnel, humain, juridique, sécurité/confidentialité) :
+
+| Impact \ Probabilité | Rare | Occasionnel | Probable | Quasi certain |
+| --- | --- | --- | --- | --- |
+| **Mineur** | Faible | Faible | Modéré | Modéré |
+| **Modéré** | Faible | Modéré | Élevé | Élevé |
+| **Majeur** | Modéré | Élevé | Élevé | Critique |
+| **Catastrophique** | Élevé | Critique | Critique | Critique |
+
+**Règle de plafond irréversible.** Un **impact catastrophique irréversible** impose le niveau **critique indépendamment de la probabilité** : même jugé rare, il ne descend jamais sous critique, et déclenche la remontée obligatoire au CEO ([`../policies/04-escalation-policy.md`](../policies/04-escalation-policy.md)). La faible probabilité ne rachète jamais l'irréversibilité catastrophique.
+
+**Règle de rehaussement.** Conformément à la politique de risque, l'irréversibilité, une portée large, un horizon latent ou une faible détectabilité **relèvent d'au moins un cran** le niveau lu dans la matrice. Le rehaussement s'applique après lecture de la case, jamais avant.
+
+## Mapping complexité → budget de délibération et règle de préséance
+
+Rattaché à [`../policies/01-complexity-policy.md`](../policies/01-complexity-policy.md). La complexité oriente le curseur du budget de délibération à l'intérieur des couloirs définis par les tables de ce document ; elle ne les invente ni ne les franchit. **Qui le fixe :** politique CEO pour les couloirs ; Orchestrateur au cadrage pour le point choisi dans le couloir. **Défaut conservateur :** à niveau ambigu, retenir le niveau supérieur (budget plus large plutôt que sous-traité). **Assouplissement :** seul le CEO peut, par politique, redéfinir la correspondance ci-dessous.
+
+| Niveau de complexité | Budget de délibération | Bornes appliquées (renvoi aux tables ci-dessous) |
+| --- | --- | --- |
+| **Faible** | Resserré | **Bornes basses** : débat ~1 tour, conseil ~3 membres, time-box courte, coordination minimale |
+| **Moyenne** | Élargi | **Bornes intermédiaires** : débat ~2 tours, plusieurs conseils coordonnés, time-box étendue |
+| **Élevée** | Large | **Bornes hautes** : débat au plafond d'itérations, conseils étendus, time-box longue, **proposition d'activation stratégique** |
+
+**Règle de préséance (axe le plus contraignant).** Le budget de délibération **et** la classe présumée sont fixés par **l'axe le plus contraignant** parmi les trois évaluations menées au cadrage : **complexité** ([`../policies/01-complexity-policy.md`](../policies/01-complexity-policy.md)), **risque** ([`../policies/02-risk-policy.md`](../policies/02-risk-policy.md)) et **incertitude** ([`../policies/03-uncertainty-policy.md`](../policies/03-uncertainty-policy.md)). Une demande de complexité faible mais de risque élevé, ou d'incertitude forte, hérite du budget et de la classe qu'impose l'axe le plus haut : on ne moyenne jamais les axes, on retient le maximum. C'est la traduction, au niveau du cadrage, du défaut conservateur : le doute monte la classe, il ne la descend jamais.
+
+## Confiance minimale du quality gate
+
+Rattachée à [`../policies/09-quality-gate-policy.md`](../policies/09-quality-gate-policy.md) et à [`../policies/03-uncertainty-policy.md`](../policies/03-uncertainty-policy.md). Le quality gate externalise ici son **seuil de confiance minimal** : le niveau de confiance déclaré en dessous duquel une recommandation **ne franchit pas** le gate et n'est **pas** présentée au CEO comme aboutie. **Qui le fixe :** politique CEO, par classe ; à défaut, le seuil ci-dessous s'applique. **Défaut conservateur :** exiger au moins un niveau de confiance **moyen**. **Assouplissement :** seul le CEO peut abaisser ce seuil par politique.
+
+| Classe présumée | Confiance minimale pour franchir le gate | Comportement en deçà |
+| --- | --- | --- |
+| **Courante** | Moyenne | Renvoi en analyse jusqu'à atteindre le seuil, ou clôture encadrée |
+| **Importante** | Moyenne | Renvoi en analyse ; présentation seulement si l'incertitude résiduelle est bornée, déclarée et expliquée |
+| **Structurante** | Élevée | Renvoi ; à défaut, remontée au CEO avec incertitude explicitement assumée |
+| **Critique** | Élevée | Remontée obligatoire au CEO ; jamais franchie sur une confiance basse |
+
+Une confiance **basse** ne franchit jamais le gate de sa propre force. L'exception unique est l'**incertitude irréductible** : lorsqu'aucune information supplémentaire n'est disponible, une recommandation à confiance basse peut être présentée **uniquement** si cette incertitude est bornée, déclarée et expliquée, et signalée comme telle au CEO — jamais masquée. Une lacune d'information **critique** non résolue bloque le gate quel que soit le niveau de confiance affiché.
 
 ## Bornes du débat des Conseils d'Experts
 
@@ -111,14 +164,45 @@ Comportement à l'atteinte : une lacune durable **propose** une création (elle 
 
 ## Bornes du mode dégradé
 
-Rattachées à [`05-decision-protocol.md`](./05-decision-protocol.md), section « Mode dégradé » (CEO indisponible). Le mode dégradé n'ouvre **aucune** brèche décisionnelle : ses bornes règlent l'attente et l'escalade, jamais une décision automatique.
+Rattachées à [`05-decision-protocol.md`](./05-decision-protocol.md), section « Mode dégradé » (CEO indisponible). Le mode dégradé n'ouvre **aucune** brèche décisionnelle : ses bornes règlent l'attente et l'escalade, jamais une décision automatique. Le **délai d'attente par classe** est renseigné pour les **quatre** classes canoniques.
 
-| Borne | Base observable | Défaut indicatif | Qui / quand |
+| Classe | Délai d'attente avant relance/escalade | Traitement automatique possible ? | Qui / quand |
 | --- | --- | --- | --- |
-| **Délai d'attente par classe avant escalade** (relance) | Temps en file d'une recommandation, selon sa classe | Classe critique : 4 h ; classe importante : 1 jour ouvré ; classe courante : 3 jours ouvrés | Politique CEO ; file tenue par l'Orchestrateur |
+| **Courante** | 3 jours ouvrés | Oui, uniquement si couverte par une politique pré-approuvée dont toutes les conditions sont remplies | Politique CEO ; file tenue par l'Orchestrateur |
+| **Importante** | 1 jour ouvré | Oui, uniquement si couverte par une politique pré-approuvée dont toutes les conditions sont remplies | Politique CEO ; file tenue par l'Orchestrateur |
+| **Structurante** | 1 jour ouvré (relances renforcées et régulières) | **Non.** Jamais validée ni close automatiquement ; maintenue en file jusqu'au retour du CEO | Politique CEO ; file tenue par l'Orchestrateur |
+| **Critique** | 4 h | **Non.** Jamais validée automatiquement ; remontée renforcée jusqu'au retour du CEO | Politique CEO ; file tenue par l'Orchestrateur |
+
+| Borne complémentaire | Base observable | Défaut indicatif | Qui / quand |
+| --- | --- | --- | --- |
 | **Délai de sécurité terminal pour une décision à échéance** | Temps restant avant l'échéance externe d'une décision | Escalade renforcée déclenchée à 20 % du temps restant avant l'échéance (au plus tard) | Politique CEO |
 
-Comportement à l'atteinte : l'écoulement d'un délai **n'entraîne jamais** de validation automatique. Il augmente l'urgence signalée et déclenche des relances/escalades. Seules les décisions de **classes couvertes** par une politique pré-approuvée, dont toutes les conditions sont remplies, sont validées pendant l'indisponibilité — exactement comme en fonctionnement normal. Les décisions structurantes restent en file jusqu'au retour du CEO, même après expiration de tout délai.
+Comportement à l'atteinte : l'écoulement d'un délai **n'entraîne jamais** de validation automatique. Il augmente l'urgence signalée et déclenche des relances/escalades. Seules les décisions de classes **courante** et **importante** couvertes par une politique pré-approuvée, dont toutes les conditions sont remplies, sont validées pendant l'indisponibilité — exactement comme en fonctionnement normal. Les décisions **structurantes** et **critiques** restent en file jusqu'au retour du CEO, même après expiration de tout délai ; aucune politique ne peut les couvrir.
+
+## Bornes des politiques pré-approuvées
+
+Rattachées à [`../policies/08-preapproved-policy.md`](../policies/08-preapproved-policy.md) et à [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md). Ces bornes gouvernent la vie des politiques que le CEO a lui-même approuvées : le plafond qui empêche de fractionner une décision structurante, le rythme auquel le CEO doit revalider une politique, et l'intensité de l'audit qui vérifie a posteriori les validations automatiques. **Qui les fixe :** politique CEO ; à défaut, les valeurs ci-dessous. **Défaut conservateur :** plafonds bas, revalidation fréquente, audit intense. **Assouplissement :** réservé au CEO, par politique explicite.
+
+### Seuil de portée cumulée (anti-fractionnement)
+
+Objet : empêcher qu'un empilement de décisions individuellement « courantes » ou « importantes » aboutisse, par fractionnement, à automatiser une décision **structurante**. La mesure repose sur trois éléments.
+
+| Élément | Définition observable | Défaut conservateur | Qui / quand |
+| --- | --- | --- | --- |
+| **Unité commune de portée** | Une unité de portée normalisée à laquelle chaque engagement (dépense, durée, effet sur des tiers, ampleur) est ramené pour être additionné, quelles que soient les politiques qui le couvrent | Chaque politique déclare la conversion de son engagement en unités de portée ; une politique sans conversion chiffrable est inapplicable | Politique CEO ; conversion vérifiée au registre |
+| **Fenêtre temporelle de rattachement** | La période glissante sur laquelle les portées de décisions liées (même objet, même séquence, même bénéficiaire) sont additionnées | 30 jours glissants | Politique CEO ; fenêtre suivie par l'Orchestrateur |
+| **Plafond de portée cumulée** | Le total d'unités de portée au-delà duquel l'automatisation s'arrête et la décision remonte au CEO | Plafond bas, fixé sous le seuil d'entrée dans la classe **structurante** ; à l'approche du plafond, suspension des validations automatiques suivantes | Politique CEO ; cumul tenu par l'Orchestrateur |
+
+Comportement à l'atteinte : dès que le cumul sur la fenêtre atteint le plafond, l'automatisation **s'interrompt**, même si chaque décision prise isolément resterait sous son propre plafond, et les décisions concernées **remontent au CEO**. Le fractionnement délibéré d'une décision structurante en fragments de classe inférieure est traité comme une sous-qualification (voir [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md)).
+
+### Revalidation et audit des politiques
+
+| Borne | Base observable | Défaut conservateur | Qui / quand |
+| --- | --- | --- | --- |
+| **Fréquence de revalidation par défaut** (par classe couverte) | Temps écoulé depuis la dernière revalidation d'une politique par le CEO | **Courante** : 180 jours · **Importante** : 90 jours. À échéance sans revalidation, la politique **expire** et cesse de s'appliquer | Politique CEO ; échéancier tenu par le système. Les classes structurante et critique ne sont jamais couvertes par politique |
+| **Taux d'échantillonnage de l'audit a posteriori** | Part des validations par politique sélectionnées pour réexamen | Au moins **20 %** des validations par politique, **100 %** des validations approchant le plafond de portée (individuel ou cumulé) | Système ; revue rattachée au CEO |
+
+Comportement à l'atteinte : une politique **non revalidée** à l'échéance expire et ne « revit » pas d'elle-même ; seule une revalidation par le CEO la réactive. L'audit qui détecte une **misclassification** (décision qui aurait dû remonter au CEO) signale la décision pour réexamen et corrige la cause (condition resserrée, plafond ajusté, instance de classification recadrée), conformément à [`09-error-handling.md`](./09-error-handling.md). L'audit ne rend jamais l'autorité au CEO — il ne l'a jamais perdue — il lui donne la visibilité pour l'exercer.
 
 ## Exemple concret
 
@@ -126,9 +210,9 @@ Le CEO a pré-approuvé, en amont, une politique pour la classe « choix d'outil
 
 Arrive la demande : « Choisir un outil de suivi des tickets support. »
 
-1. **Cadrage (Orchestrateur).** L'Orchestrateur reconnaît la classe présumée et lit le couloir de la politique CEO. L'enjeu étant modéré et bien cerné, il **ajuste au bas du couloir** : débat à 2 tours, conseil de 3 membres, time-box d'une demi-journée. Il fixe aussi le plafond de renvois externes à 3 et le progrès mesurable à « ≥ 1 question ouverte résolue par itération ». Aucune de ces valeurs ne sort du couloir CEO ; il ne décide rien du fond.
+1. **Cadrage (Orchestrateur).** L'Orchestrateur reconnaît la classe présumée et lit le couloir de la politique CEO. L'enjeu étant modéré et bien cerné, il **ajuste au bas du couloir** : débat à 2 tours, conseil de 3 membres, time-box d'une demi-journée. Il fixe aussi le plafond de renvois externes à 3 et le progrès mesurable à « ≥ 1 question ouverte résolue par itération ». Il vérifie enfin, par la **règle de préséance**, que ni le risque ni l'incertitude n'imposent une classe plus haute que la complexité. Aucune de ces valeurs ne sort du couloir CEO ; il ne décide rien du fond.
 2. **Débat borné.** Le Conseil d'Experts converge au 2ᵉ tour (la liste des désaccords ne diminue plus) : la borne d'itérations n'est même pas saturée.
-3. **Décision.** La recommandation relève de la classe couverte, conditions remplies → validée par application de la politique CEO, sans passage explicite. Consignée avec la classe, le canal (politique) et les bornes appliquées.
+3. **Décision.** La recommandation relève de la classe couverte, conditions remplies, confiance au moins moyenne (quality gate franchi) → validée par application de la politique CEO, sans passage explicite. Consignée avec la classe, le canal (politique) et les bornes appliquées.
 
 À aucun moment un agent n'a fixé une borne de sa propre autorité : l'Orchestrateur a paramétré dans un couloir que le CEO avait défini à l'avance.
 
@@ -138,7 +222,9 @@ Arrive la demande : « Choisir un outil de suivi des tickets support. »
 - **Enjeu élevé.** Une demande relève d'une classe structurante. Comportement : la politique CEO prévoit des **bornes élargies** (time-box plus longue, plafond d'itérations plus haut, conseil plus grand), au nom de la proportionnalité budget/portée. Cet élargissement reste **plafonné** par la politique ; l'Orchestrateur ne peut pas élargir au-delà du couloir — s'il le juge nécessaire, il escalade au CEO.
 - **Borne insuffisante en cours de route.** Un débat atteint sa borne sans converger alors que l'Orchestrateur pense qu'un tour de plus suffirait. Comportement : il **n'étend pas** la borne de lui-même au-delà du couloir. Il produit la sortie prévue (options à parité + escalade), et peut recommander au CEO un élargissement de la politique pour les cas futurs — ce qui est une amélioration de cadre, pas une décision de fond.
 - **Bornes contradictoires (politique vs défaut).** Si une politique CEO couvre partiellement la demande, ses valeurs priment toujours sur les défauts ; les défauts ne comblent que les bornes que la politique laisse ouvertes.
+- **Faible probabilité, impact catastrophique.** La matrice de risque pourrait, par simple croisement, ranger bas un événement rare. Comportement : la **règle de plafond irréversible** prévaut — un impact catastrophique irréversible est **critique** quelle que soit la probabilité, et remonte au CEO. La rareté ne rachète jamais l'irréversibilité catastrophique.
+- **Axes divergents au cadrage.** La complexité est faible mais le risque est élevé, ou l'incertitude forte. Comportement : la **règle de préséance** retient l'axe le plus contraignant pour fixer le budget et la classe. On ne moyenne jamais ; le doute monte la classe.
 
 ---
 
-Renvois : [`03-orchestrator-workflow.md`](./03-orchestrator-workflow.md), [`04-debate-protocol.md`](./04-debate-protocol.md), [`05-decision-protocol.md`](./05-decision-protocol.md), [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md).
+Renvois : [`03-orchestrator-workflow.md`](./03-orchestrator-workflow.md), [`04-debate-protocol.md`](./04-debate-protocol.md), [`05-decision-protocol.md`](./05-decision-protocol.md), [`11-decision-classification-and-policies.md`](./11-decision-classification-and-policies.md), [`../policies/01-complexity-policy.md`](../policies/01-complexity-policy.md), [`../policies/02-risk-policy.md`](../policies/02-risk-policy.md), [`../policies/03-uncertainty-policy.md`](../policies/03-uncertainty-policy.md), [`../policies/08-preapproved-policy.md`](../policies/08-preapproved-policy.md), [`../policies/09-quality-gate-policy.md`](../policies/09-quality-gate-policy.md).
