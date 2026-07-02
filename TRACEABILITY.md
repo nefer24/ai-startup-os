@@ -169,3 +169,40 @@ Journal append-only de révisions, **déterministe, en mémoire, sans persistanc
 | Couverture `src/aisos/memory/` | ✅ 100 % |
 
 La Phase 16 respecte les Phases 8, 10, 12, 13, 14 et 15 ; aucun workflow LangGraph, aucune API réelle, aucune persistance réelle, aucune décision automatique.
+
+---
+
+## Phase 17 — Security & Authorization Core (cœur déterministe)
+
+Autorisation RBAC déterministe et application des manifests, **sans OIDC réel, sans persistance réelle, sans framework, sans décision automatique**. Refus par défaut.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/security/authorization.py` (`Action`, `CEO_ONLY_ACTIONS`, `SERVICE_ONLY_ACTIONS`) | taxonomie des actions gouvernées et matrices CEO-only / service-only | [`docs/implementation/08-security-and-permissions.md`](docs/implementation/08-security-and-permissions.md), [`docs/api/02-authentication.md`](docs/api/02-authentication.md) |
+| `...DefaultAuthorizer` | contrôle d'accès déterministe (RBAC minimal, refus par défaut) ; `is_ceo`, `can`, `authorize` | [`docs/implementation/08-security-and-permissions.md`](docs/implementation/08-security-and-permissions.md) |
+| `...DefaultManifestEnforcer` | manifest agent least privilege (outils/portées/egress/budget refusés par défaut) | [`docs/components/02-agent-runtime.md`](docs/components/02-agent-runtime.md) |
+| `aisos/security/authentication.py` (`StaticAuthenticator`) | authentification en mémoire (jeton → Principal), **sans OIDC réel** | [`docs/api/02-authentication.md`](docs/api/02-authentication.md) |
+| `tests/unit/test_security.py` | tests unitaires (matrice, manifest, authentification) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_security_governance.py` | preuves des invariants de sécurité | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test (Phase 17)
+
+| Invariant | Test |
+| --- | --- |
+| Seul le CEO peut effectuer les actions CEO-only | `test_only_ceo_can_do_ceo_only_actions` |
+| Un agent ne peut jamais valider | `test_agent_can_never_validate` |
+| Un service ne peut pas prendre une décision CEO | `test_service_cannot_take_ceo_decision` |
+| Permissions absentes ⇒ refus | `test_absent_permission_is_denied` |
+| Le manifest limite les capacités | `test_manifest_limits_capabilities` |
+| Refus par défaut en cas d'incertitude | `test_default_deny_on_uncertainty` |
+
+### Vérification Phase 17 (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 54 source files |
+| `pytest` | ✅ 116 passed (dont 39 `governance`) |
+| Couverture `src/aisos/security/` | ✅ 100 % |
+
+La Phase 17 respecte les Phases 8 à 16 ; aucun workflow LangGraph, aucune API réelle, aucune persistance réelle, aucun OIDC réel, aucune décision automatique.
