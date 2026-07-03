@@ -18,6 +18,7 @@ import pytest
 import aisos.infrastructure.llm
 from aisos.infrastructure.llm import (
     DisabledLLMHttpClient,
+    EnvironmentSecretResolver,
     HttpSimulation,
     InvalidHttpResponseError,
     LLMHttpClient,
@@ -27,7 +28,6 @@ from aisos.infrastructure.llm import (
     NetworkDisabledError,
     ProviderName,
     RealLLMProviderConfig,
-    RealLLMProviderNotWiredError,
     Secret,
     SimulatedTimeoutError,
     validate_http_response,
@@ -135,9 +135,14 @@ def test_secret_is_never_a_field_of_the_request() -> None:
 
 
 def test_real_provider_still_not_wired() -> None:
-    # L'abstraction reseau ne cable RIEN : l'adaptateur reel refuse toujours l'appel.
-    with pytest.raises(RealLLMProviderNotWiredError):
-        LLMProviderAdapter(_active_config()).complete(LLMRequest(request_id="r", prompt="p"))
+    # L'abstraction reseau ne cable aucun backend : meme avec un secret resolvable, l'appel reel
+    # est refuse par le client desactive.
+    adapter = LLMProviderAdapter(
+        _active_config(),
+        secret_resolver=EnvironmentSecretResolver({"AISOS_LLM_API_KEY": _SECRET_VALUE}),
+    )
+    with pytest.raises(NetworkDisabledError):
+        adapter.complete(LLMRequest(request_id="r", prompt="p"))
 
 
 def test_http_client_yields_no_decision() -> None:

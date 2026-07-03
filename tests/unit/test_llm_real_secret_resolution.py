@@ -23,11 +23,11 @@ from aisos.infrastructure.llm import (
     EnvironmentSecretResolver,
     InvalidSecretNameError,
     LLMProviderAdapter,
+    NetworkDisabledError,
     ProviderName,
     RealLLMActivationGuard,
     RealLLMActivationRequest,
     RealLLMProviderConfig,
-    RealLLMProviderNotWiredError,
     Secret,
     SecretNotFoundError,
     SecretResolutionError,
@@ -166,10 +166,11 @@ def test_secret_value_absent_from_record_replay() -> None:
 
 
 def test_real_provider_still_not_wired_after_secret_resolution() -> None:
-    # Resoudre un secret ne cable RIEN : l'adaptateur reel refuse toujours l'appel.
-    _ = resolve_api_key(_active_config(), EnvironmentSecretResolver(_ENV))
-    with pytest.raises(RealLLMProviderNotWiredError):
-        LLMProviderAdapter(_active_config()).complete(LLMRequest(request_id="r", prompt="p"))
+    # Resoudre un secret ne cable RIEN : meme avec un secret resolvable, l'appel reel est refuse
+    # par le client desactive (aucun backend, aucun reseau).
+    adapter = LLMProviderAdapter(_active_config(), secret_resolver=EnvironmentSecretResolver(_ENV))
+    with pytest.raises(NetworkDisabledError):
+        adapter.complete(LLMRequest(request_id="r", prompt="p"))
 
 
 def test_secret_resolution_yields_no_decision() -> None:
