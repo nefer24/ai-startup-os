@@ -15,6 +15,12 @@ from aisos.orchestrator.context import (
     RequestContext,
 )
 from aisos.orchestrator.coordinator import ComponentCoordinator
+from aisos.orchestrator.deliberation import (
+    ConsumptionRecord,
+    DeliberationKind,
+    DeliberationPort,
+    DeliberationVerdict,
+)
 from aisos.orchestrator.dispatcher import RequestDispatcher
 from aisos.orchestrator.interfaces import Orchestrator, StrategicCouncilProposal
 from aisos.orchestrator.lifecycle import LifecycleManager
@@ -24,6 +30,10 @@ __all__ = [
     "CEODecisionInput",
     "CEODecisionResumer",
     "ComponentCoordinator",
+    "ConsumptionRecord",
+    "DeliberationKind",
+    "DeliberationPort",
+    "DeliberationVerdict",
     "ExecutionContext",
     "LifecycleManager",
     "OrchestrationContext",

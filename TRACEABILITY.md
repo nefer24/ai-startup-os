@@ -501,3 +501,45 @@ Couche **Application** : l'interface entre les futurs clients (API, CLI, Web UI,
 | Couverture `src/aisos/application/` | ✅ 100 % |
 
 La Phase 25 respecte la Baseline v1.0 et les Phases 8 à 24 ; aucune FastAPI, aucun REST/GraphQL/WebSocket, aucune CLI, aucun LangGraph, aucune base, aucun LLM, aucune décision automatique. Les clients passent exclusivement par la couche Application ; le noyau n'est plus appelé directement.
+
+## Vertical Slice adverse — phase 1 (« la gouvernance rattrape le pire »)
+
+Première tranche verticale **end-to-end** : `Request Application Service → Orchestrateur → Workflow → Agent Runtime (stub) → LLM Provider (stub) → Recommendation → Quality Gate → Policy → pause CEO si nécessaire → Audit → Persistence → Response`. Son but n'est **pas** le chemin nominal mais de prouver que la gouvernance **refuse, borne ou escalade** chaque comportement dégénéré de l'agent — en le traçant, sans jamais produire de décision automatique ni d'état incohérent. Trois pièces neuves, câblées au **noyau existant** ; **aucune couche horizontale**, aucun LLM réel, aucun FastAPI/LangGraph/PostgreSQL/Redis/RabbitMQ.
+
+Décisions appliquées : **ADR-0009** (A1 : `AgentRuntime` = point d'application **unique** des bornes, réutilisant `DefaultManifestEnforcer.within_budget()` ; A2 : consommation de source unique — la réponse LLM — **agrégée** par le ledger, non dupliquée ; A3 : dépassement ⇒ **suspension + `escalation.raised` audité**, pas d'interruption CEO synchrone). Les erreurs `AgentBudgetExceededError`, `WorkflowRecursionLimitError`, `WorkflowTimeoutError`, `LLMUnavailableError` — jusqu'ici déclarées mais jamais levées (DT-09) — deviennent **applicables**.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/slice/llm.py` (`StubLLMProvider`, `LLMProvider`, `LLMMode`, `LLMRequest`, `LLMResponse`) | fournisseur LLM **entièrement simulé** et déterministe (mode stub), sorties nominales et dégénérées | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
+| `aisos/slice/runtime.py` (`AgentRuntime`, `RuntimeReport`, `RuntimeStatus`) | orchestrateur minimal d'un agent stub, **borné** (budget/récursion/timeout) — point d'application unique | [`docs/adr/ADR-0009-gouvernance-economique.md`](docs/adr/ADR-0009-gouvernance-economique.md) |
+| `aisos/slice/quality_gate.py` (`DeterministicQualityGate`, `QualityGate`) | Quality Gate **réel** (remplace le stub, dette D15) : rejette recommandation vide/faible | [`docs/policies/09-quality-gate-policy.md`](docs/policies/09-quality-gate-policy.md) |
+| `aisos/slice/deliberation.py` (`SliceDeliberation`) | étage de délibération : agent → quality gate → **verdict** (proceed/renvoi/escalade), jamais une décision | [`docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md`](docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md) |
+| `aisos/slice/ledger.py` (`ConsumptionLedger`, `LedgerEntry`) | registre économique **abonné à l'Event Bus** (dette D8) : agrège la consommation depuis `agent.invoked` | [`docs/adr/ADR-0009-gouvernance-economique.md`](docs/adr/ADR-0009-gouvernance-economique.md) |
+| `aisos/orchestrator/deliberation.py` (`DeliberationPort`, `DeliberationVerdict`, `ConsumptionRecord`, `DeliberationKind`) | **contrat core** de délibération (le noyau déclare, la Slice implémente ; inversion de dépendance) | [`docs/components/01-orchestrator.md`](docs/components/01-orchestrator.md) |
+| `aisos/orchestrator/coordinator.py` (étage `_deliberate`, opt-in) | insère la délibération avant le routage Policy ; garde-fou ⇒ suspension + escalade auditée | [`docs/runtime/02-main-request-workflow.md`](docs/runtime/02-main-request-workflow.md) |
+| `tests/unit/test_vertical_slice.py` | tests unitaires (stub LLM, runtime borné, quality gate, délibération, ledger) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_vertical_slice_governance.py` | preuves des scénarios adverses F1–F6 + chemin nominal S1 | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Scénarios adverses prouvés par test
+
+| # | Comportement dégénéré injecté | Garde-fou attendu | Test |
+| --- | --- | --- | --- |
+| F1 | timeout LLM | suspension + escalade auditée | `test_f1_llm_timeout_is_escalated_and_audited` |
+| F2 | réponse vide | Quality Gate rejette (renvoi), aucune décision | `test_f2_empty_response_is_rejected_by_quality_gate` |
+| F3 | budget dépassé | escalade, **aucune** exécution ni écriture mémoire | `test_f3_budget_exceeded_is_escalated_no_execution` |
+| F4 | boucle (auto-invocation) | récursion bornée + escalade | `test_f4_loop_is_bounded_and_escalated` |
+| F5 | recommandation faible | Quality Gate rejette | `test_f5_weak_recommendation_is_rejected` |
+| F6 | escalade CEO (routage) | reco valide ⇒ routage CEO, `PAUSED_CEO` | `test_f6_high_risk_routes_to_ceo_after_valid_recommendation` |
+| — | reprise correcte | seul le CEO reprend ; checkpoint reconstruit l'état | `test_escalated_flow_resumes_only_on_ceo_decision` |
+| S1 | nominal sous politique | délégation ⇒ `COMPLETED`, pipeline complet audité | `test_s1_with_policy_completes_under_delegation` |
+
+### Vérification Vertical Slice (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 79 source files |
+| `pytest` | ✅ 284 passed (dont 103 `governance`) |
+| Couverture `src/aisos/slice/` + `src/aisos/orchestrator/deliberation.py` | ✅ 100 % |
+
+La Vertical Slice respecte la Baseline v1.0 et les Phases 8 à 25, ainsi que les ADR-0009/0010 ratifiés/instruits. Elle est **opt-in** (l'`ExecutionContext` reçoit un port de délibération optionnel) : sans elle, le comportement des Phases 19–25 est inchangé — les 247 tests antérieurs restent verts. Aucun LLM réel, aucun réseau, aucune base réelle, aucun framework d'orchestration, aucune décision automatique.
