@@ -20,8 +20,19 @@ from aisos.infrastructure.llm.config import (
     RealLLMProviderDisabledError,
     RealLLMProviderNotWiredError,
 )
+from aisos.infrastructure.llm.secrets import (
+    EnvironmentSecretResolver,
+    InvalidSecretNameError,
+    Secret,
+    SecretNotFoundError,
+    SecretResolutionError,
+    SecretResolver,
+    resolve_api_key,
+)
 
 __all__ = [
+    "EnvironmentSecretResolver",
+    "InvalidSecretNameError",
     "LLMProviderAdapter",
     "ProviderName",
     "RealLLMActivationDecision",
@@ -30,4 +41,9 @@ __all__ = [
     "RealLLMProviderConfig",
     "RealLLMProviderDisabledError",
     "RealLLMProviderNotWiredError",
+    "Secret",
+    "SecretNotFoundError",
+    "SecretResolutionError",
+    "SecretResolver",
+    "resolve_api_key",
 ]
