@@ -4,8 +4,9 @@ Tracabilite : docs/system/03-expert-councils.md, docs/behavior/04-debate-protoco
 docs/components/01-orchestrator.md (pause CEO), docs/reports/M1_STRATEGIC_REVIEW_AFTER_PR52.md.
 
 Composant CONCRET (pas de port generique, pas de registry, pas de framework multi-agent) : deux
-`AgentRuntime` d'angles differents (ex. « value/product » et « risk/governance ») deliberent sur la
-MEME tache, puis leurs deux `AgentRecommendation` sont **synthetisees** en une recommandation
+`AgentRuntime` d'angles differents (ex. « value/product » et « risk/governance ») debattent en
+**deux tours** — tour 1 : recommandations initiales ; tour 2 : chaque agent recoit l'avis structure
+de l'autre et peut maintenir ou reviser — puis leurs deux avis revises sont **synthetises** en une
 unique (points d'accord/desaccord, justification, hypotheses, limites, incertitude, references aux
 sources). La synthese est transmise a la **meme pause CEO gouvernee** (`seal_ceo_pause` ->
 `decision.pending`). Le Conseil ne decide jamais et n'execute aucune action. Providers
@@ -24,6 +25,16 @@ from aisos.audit.interfaces import AuditEngine
 from aisos.domain.enums import DecisionState
 from aisos.schemas.base import ImmutableModel
 from aisos.schemas.decision import Recommendation
+
+
+def _peer_summary(rec: AgentRecommendation) -> str:
+    """Resume structure et deterministe d'une recommandation, transmis a l'autre agent au tour 2."""
+    options = ", ".join(rec.recommendation.options_considered) or "(aucune)"
+    return (
+        f"perspective options: [{options}] ; "
+        f"justification: {rec.justification} ; "
+        f"incertitude: {rec.uncertainty}"
+    )
 
 
 class CouncilSynthesis(ImmutableModel):
@@ -82,9 +93,13 @@ class ExpertCouncil:
         self._clock = clock
 
     async def deliberate(self, task: AgentTask) -> CouncilOutcome:
-        """Fait deliberer les deux agents, synthetise, puis s'arrete a la pause CEO gouvernee."""
-        value_rec = self._value_agent.deliberate(task)
-        risk_rec = self._risk_agent.deliberate(task)
+        """Debat a deux tours, synthetise les avis revises, puis s'arrete a la pause CEO."""
+        # Tour 1 : chaque agent produit sa recommandation initiale.
+        value_r1 = self._value_agent.deliberate(task)
+        risk_r1 = self._risk_agent.deliberate(task)
+        # Tour 2 : chaque agent recoit l'avis structure de l'autre et peut maintenir ou reviser.
+        value_rec = self._value_agent.deliberate(task, peer_summary=_peer_summary(risk_r1))
+        risk_rec = self._risk_agent.deliberate(task, peer_summary=_peer_summary(value_r1))
         synthesis = self._synthesize(task, value_rec, risk_rec)
         audit_id, event_type = await seal_ceo_pause(
             self._audit,
