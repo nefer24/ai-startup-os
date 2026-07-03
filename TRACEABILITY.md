@@ -565,6 +565,8 @@ Extension de la Slice **sans nouvelle couche horizontale ni refactor large** : l
 
 **Vérification phase 2 (exécutée, Python 3.12)** : `ruff check` + `ruff format --check` ✅ · `mypy` strict ✅ (80 fichiers) · `pytest` ✅ **301 passed** (dont **109** `governance`) · couverture **100 %** sur `src/aisos/slice/` et `src/aisos/orchestrator/deliberation.py`. Non-régression : les scénarios **F1–F6** et les **284 tests** antérieurs restent verts. Contraintes respectées : aucun LLM réel, aucun FastAPI, aucun LangGraph, aucun PostgreSQL/Redis/RabbitMQ, aucun nouveau framework, aucun refactor large.
 
+**Rapport de validation** : [`docs/reports/vertical-slice-01-validation.md`](docs/reports/vertical-slice-01-validation.md) — constat **factuel** de la Slice adverse (objectif, pipeline complet, F1–F10, S1, métriques de valeur, résultats des tests, invariants prouvés, **limites** — LLM stub / persistance mémoire / pas d'API / pas d'adaptateur réel —, risques restants, recommandations). N'affirme pas que le système est prêt pour la production.
+
 ## Cadre de mesure de la valeur métier (`src/aisos/value/`)
 
 Premier jalon de la **cinquième dimension d'évaluation** : mesurer non seulement si la gouvernance *fonctionne*, mais si les recommandations sont **utiles** — et à quel coût. **Principe fondateur** : la valeur se mesure **de l'extérieur**, contre un **banc gold** dont les attentes sont connues et **indépendantes** du système. Le système ne se note jamais lui-même ; **aucun LLM** n'est utilisé pour évaluer, le benchmark est **externe au raisonnement de l'agent**. Le cadre **lit** les résultats de la Vertical Slice ; il ne modifie **aucune** gouvernance et ne produit **aucune** décision. Déterministe et reproductible.
