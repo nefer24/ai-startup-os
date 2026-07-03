@@ -10,7 +10,10 @@ Squelette uniquement :
 
 - Contrat de manifest d'agent (capacités, permissions déclarées).
 - Interfaces d'exécution d'agent respectant le principe de moindre privilège.
-- Points d'intégration vers politiques, mémoire et audit.
+- Pur service de délibération : reçoit tâche + contexte, produit une
+  recommandation. La gouvernance (audit, pause CEO, décisions) et la mémoire
+  appartiennent à l'orchestrateur, qui appelle le cerveau via le port de
+  délibération et lui injecte le contexte nécessaire.
 
 ## Traçabilité
 
