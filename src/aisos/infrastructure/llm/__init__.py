@@ -8,6 +8,11 @@ c'est un squelette d'infrastructure, pret a recevoir un backend reel sur decisio
 
 from __future__ import annotations
 
+from aisos.infrastructure.llm.activation import (
+    RealLLMActivationDecision,
+    RealLLMActivationGuard,
+    RealLLMActivationRequest,
+)
 from aisos.infrastructure.llm.adapter import LLMProviderAdapter
 from aisos.infrastructure.llm.config import (
     ProviderName,
@@ -19,6 +24,9 @@ from aisos.infrastructure.llm.config import (
 __all__ = [
     "LLMProviderAdapter",
     "ProviderName",
+    "RealLLMActivationDecision",
+    "RealLLMActivationGuard",
+    "RealLLMActivationRequest",
     "RealLLMProviderConfig",
     "RealLLMProviderDisabledError",
     "RealLLMProviderNotWiredError",
