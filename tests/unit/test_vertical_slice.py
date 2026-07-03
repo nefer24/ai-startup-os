@@ -16,6 +16,7 @@ import pytest
 
 from aisos.domain.errors import (
     AgentBudgetExceededError,
+    AgentPermissionDeniedError,
     LLMUnavailableError,
     WorkflowRecursionLimitError,
     WorkflowTimeoutError,
@@ -28,12 +29,16 @@ from aisos.slice import (
     AgentRuntime,
     ConsumptionLedger,
     DeterministicQualityGate,
+    LLMInteractionRegistry,
     LLMMode,
+    RecordingLLMProvider,
+    ReplayLLMProvider,
     RuntimeStatus,
     SliceDeliberation,
     StubLLMProvider,
+    prompt_hash,
 )
-from aisos.slice.llm import LLMRequest
+from aisos.slice.llm import LLMRequest, LLMResponse
 
 pytestmark = pytest.mark.unit
 
@@ -44,8 +49,10 @@ def _request(rid: str = "req-1") -> Request:
     return Request(id=rid, source="cli", statement="faire X", created_at=_WHEN)
 
 
-def _runtime(mode: LLMMode, *, budget: int | None = 10_000) -> AgentRuntime:
-    manifest = AgentManifest(token_budget=budget)
+def _runtime(
+    mode: LLMMode, *, budget: int | None = 10_000, tools: list[str] | None = None
+) -> AgentRuntime:
+    manifest = AgentManifest(token_budget=budget, allowed_tools=tools or [])
     llm = StubLLMProvider(mode)
     return AgentRuntime(llm, manifest, timeout_ms=1_000, max_recursion_depth=3)
 
@@ -173,6 +180,31 @@ def test_runtime_unavailable_is_captured() -> None:
     assert report.consumption.model == "n/a"
 
 
+def test_runtime_tool_outside_manifest_is_denied() -> None:
+    # F7 : outil reclame hors manifest => refus (least privilege), aucune execution.
+    report = _runtime(LLMMode.TOOL_DENIED).run(_request())
+    assert report.status is RuntimeStatus.PERMISSION_DENIED
+    assert report.recommendation is None
+
+
+def test_runtime_declared_tool_is_allowed() -> None:
+    # Le meme outil, une fois DECLARE au manifest, passe (refus par defaut, jamais implicite).
+    report = _runtime(LLMMode.TOOL_DENIED, tools=["shell.exec"]).run(_request())
+    assert report.status is RuntimeStatus.OK
+    assert report.recommendation is not None
+
+
+def test_runtime_captures_attempted_decision_but_never_in_recommendation() -> None:
+    # F8 : l'agent tente de decider ; l'issue est observee pour audit, jamais dans la reco.
+    report = _runtime(LLMMode.DECIDES).run(_request())
+    assert report.status is RuntimeStatus.OK
+    assert report.attempted_decision == "approuve"
+    assert report.recommendation is not None
+    # Le schema Recommendation ne porte AUCUN champ de decision (structurellement).
+    assert not hasattr(report.recommendation, "outcome")
+    assert not hasattr(report.recommendation, "attempted_decision")
+
+
 @pytest.mark.parametrize(
     ("mode", "error"),
     [
@@ -180,6 +212,7 @@ def test_runtime_unavailable_is_captured() -> None:
         (LLMMode.OVER_BUDGET, AgentBudgetExceededError),
         (LLMMode.LOOP, WorkflowRecursionLimitError),
         (LLMMode.UNAVAILABLE, LLMUnavailableError),
+        (LLMMode.TOOL_DENIED, AgentPermissionDeniedError),
     ],
 )
 def test_report_raise_for_status_maps_domain_errors(mode: LLMMode, error: type[Exception]) -> None:
@@ -219,6 +252,21 @@ def test_deliberation_returns_on_empty_and_weak() -> None:
     weak = _deliberation(LLMMode.WEAK).deliberate(_request())
     assert weak.kind is DeliberationKind.RETURN_TO_DELIBERATION
     assert weak.guardrail == "weak"
+
+
+def test_deliberation_escalates_on_tool_denied() -> None:
+    # F7 : outil hors manifest => escalade avec garde-fou "permission_denied".
+    verdict = _deliberation(LLMMode.TOOL_DENIED).deliberate(_request())
+    assert verdict.kind is DeliberationKind.ESCALATE
+    assert verdict.guardrail == "permission_denied"
+
+
+def test_deliberation_proceeds_but_flags_attempted_decision() -> None:
+    # F8 : l'agent tente de decider ; le verdict poursuit mais consigne l'issue tentee (ignoree).
+    verdict = _deliberation(LLMMode.DECIDES).deliberate(_request())
+    assert verdict.kind is DeliberationKind.PROCEED
+    assert verdict.attempted_decision == "approuve"
+    assert verdict.recommendation is not None
 
 
 @pytest.mark.parametrize(
@@ -309,3 +357,85 @@ def test_ledger_subscribes_to_bus() -> None:
 def test_consumption_record_tokens_total() -> None:
     record = ConsumptionRecord(model="m", tokens_in=5, tokens_out=7)
     assert record.tokens_total == 12
+
+
+# --- Enregistrement / rejeu deterministe (ADR-0010, F9) -------------------------------------
+
+
+class _TripwireLLM:
+    """Fournisseur LLM qui ECHOUE si on l'appelle : prouve qu'aucun appel modele n'a lieu."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        self.calls += 1
+        raise AssertionError("le modele ne doit jamais etre rappele en rejeu")
+
+
+def test_prompt_hash_is_deterministic_and_discriminant() -> None:
+    a = LLMRequest(request_id="r", prompt="p", step=0)
+    assert prompt_hash(a) == prompt_hash(LLMRequest(request_id="r", prompt="p", step=0))
+    assert prompt_hash(a) != prompt_hash(LLMRequest(request_id="r", prompt="p", step=1))
+    assert prompt_hash(a) != prompt_hash(LLMRequest(request_id="r2", prompt="p", step=0))
+
+
+def test_recording_provider_records_once_and_is_idempotent() -> None:
+    registry = LLMInteractionRegistry()
+    inner = StubLLMProvider(LLMMode.NOMINAL)
+    recorder = RecordingLLMProvider(inner, registry)
+    req = LLMRequest(request_id="r", prompt="p")
+    first = recorder.complete(req)
+    assert len(registry) == 1
+    # Deuxieme appel : la reponse enregistree est renvoyee (append-only, jamais ecrasee).
+    second = recorder.complete(req)
+    assert second == first
+    assert len(registry) == 1
+
+
+def test_registry_record_is_append_only() -> None:
+    # Enregistrer deux fois le meme prompt ne l'ecrase jamais (immuabilite du rejeu, ADR-0010).
+    registry = LLMInteractionRegistry()
+    req = LLMRequest(request_id="r", prompt="p")
+    first = registry.record(req, LLMResponse(content="v1", model="m"))
+    again = registry.record(req, LLMResponse(content="v2", model="m"))
+    assert again is first
+    assert len(registry) == 1
+    assert registry.records[0].response.content == "v1"
+
+
+def test_replay_returns_exact_recorded_output() -> None:
+    registry = LLMInteractionRegistry()
+    RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), registry).complete(
+        LLMRequest(request_id="r", prompt="p")
+    )
+    replayer = ReplayLLMProvider(registry)
+    replayed = replayer.complete(LLMRequest(request_id="r", prompt="p"))
+    assert replayed == registry.records[0].response
+
+
+def test_replay_refuses_unknown_prompt_no_blind_call() -> None:
+    replayer = ReplayLLMProvider(LLMInteractionRegistry())
+    with pytest.raises(LLMUnavailableError):
+        replayer.complete(LLMRequest(request_id="absent", prompt="p"))
+
+
+def test_resume_replays_without_recalling_the_model() -> None:
+    # F9 (cle) : une interaction enregistree se rejoue sans jamais rappeler le modele.
+    registry = LLMInteractionRegistry()
+    manifest = AgentManifest(token_budget=10_000)
+
+    # Enregistrement (avant crash).
+    record_runtime = AgentRuntime(
+        RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), registry), manifest
+    )
+    recorded = record_runtime.run(_request("r9"))
+    assert recorded.status is RuntimeStatus.OK
+
+    # Reprise : meme registre, modele remplace par un tripwire — il ne doit PAS etre appele.
+    tripwire = _TripwireLLM()
+    replay_runtime = AgentRuntime(RecordingLLMProvider(tripwire, registry), manifest)
+    replayed = replay_runtime.run(_request("r9"))
+    assert tripwire.calls == 0
+    assert replayed.status is RuntimeStatus.OK
+    assert replayed.recommendation == recorded.recommendation

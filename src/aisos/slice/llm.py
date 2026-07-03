@@ -14,6 +14,8 @@ chemin nominal ET sur des comportements degeneres :
 - `LOOP`        : demande sans fin de continuer (F4) — l'AgentRuntime doit borner la recursion.
 - `OVER_BUDGET` : consommation au-dela du budget (F3) — l'AgentRuntime doit borner.
 - `UNAVAILABLE` : indisponibilite du fournisseur — leve `LLMUnavailableError`.
+- `TOOL_DENIED` : l'agent reclame un outil hors manifest (F7) — le manifest doit refuser.
+- `DECIDES`     : l'agent tente de produire une "decision" (F8) — l'issue doit etre ignoree.
 
 La reponse porte sa propre comptabilite (tokens/cout/latence, modele) : elle est la SOURCE
 UNIQUE de la consommation (ADR-0010) que le registre economique agregera (ADR-0009).
@@ -40,6 +42,8 @@ class LLMMode(StrEnum):
     LOOP = "loop"
     OVER_BUDGET = "over_budget"
     UNAVAILABLE = "unavailable"
+    TOOL_DENIED = "tool_denied"
+    DECIDES = "decides"
 
 
 class LLMRequest(ImmutableModel):
@@ -67,6 +71,10 @@ class LLMResponse(ImmutableModel):
     latency_ms: int = 0
     model: str = "stub-llm-1"
     wants_more: bool = False
+    #: Outil reclame par l'agent (F7). L'AgentRuntime le confronte au manifest (least privilege).
+    requested_tool: str | None = None
+    #: "Decision" que l'agent tente de produire (F8). Elle est IGNOREE : un agent ne decide jamais.
+    attempted_decision: str | None = None
 
 
 @runtime_checkable
@@ -96,6 +104,8 @@ class StubLLMProvider:
         latency_ms: int = 10,
         timeout_latency_ms: int = 10_000,
         over_budget_tokens_out: int = 1_000_000,
+        denied_tool: str = "shell.exec",
+        attempted_decision: str = "approuve",
     ) -> None:
         self._mode = mode
         self._model = model
@@ -105,6 +115,8 @@ class StubLLMProvider:
         self._latency_ms = latency_ms
         self._timeout_latency_ms = timeout_latency_ms
         self._over_budget_tokens_out = over_budget_tokens_out
+        self._denied_tool = denied_tool
+        self._attempted_decision = attempted_decision
 
     def complete(self, request: LLMRequest) -> LLMResponse:
         """Emet une reponse deterministe selon le mode. Aucun appel reel."""
@@ -155,6 +167,34 @@ class StubLLMProvider:
                 content="avis partiel",
                 options=["option A"],
                 arguments=[],
+                tokens_in=self._tokens_in,
+                tokens_out=self._tokens_out,
+                cost_eur=self._cost_eur,
+                latency_ms=self._latency_ms,
+                model=self._model,
+            )
+        if self._mode == LLMMode.TOOL_DENIED:
+            # L'agent reclame un outil non declare au manifest (F7). L'AgentRuntime doit refuser.
+            return LLMResponse(
+                content="je veux utiliser un outil",
+                options=["option A", "option B"],
+                arguments=["argument 1", "argument 2"],
+                devils_advocate="risque principal identifie",
+                requested_tool=self._denied_tool,
+                tokens_in=self._tokens_in,
+                tokens_out=self._tokens_out,
+                cost_eur=self._cost_eur,
+                latency_ms=self._latency_ms,
+                model=self._model,
+            )
+        if self._mode == LLMMode.DECIDES:
+            # L'agent tente de trancher (F8). L'issue est portee mais DEVRA etre ignoree.
+            return LLMResponse(
+                content="je decide",
+                options=["option A", "option B"],
+                arguments=["argument 1", "argument 2"],
+                devils_advocate="risque principal identifie",
+                attempted_decision=self._attempted_decision,
                 tokens_in=self._tokens_in,
                 tokens_out=self._tokens_out,
                 cost_eur=self._cost_eur,

@@ -29,20 +29,33 @@ from aisos.domain.enums import (
     PolicyStatus,
     RiskLevel,
     Role,
+    ValidatorType,
 )
-from aisos.events import EventType, InMemoryEventBus
+from aisos.domain.errors import GovernanceViolationError
+from aisos.events import EventEnvelope, EventType, InMemoryEventBus
 from aisos.infrastructure import InMemoryCheckpointStore, InMemoryDatabase, InMemoryUnitOfWork
 from aisos.memory import InMemoryMemorySystem
-from aisos.orchestrator import ExecutionContext, OrchestrationStatus
+from aisos.orchestrator import (
+    CEODecisionInput,
+    ExecutionContext,
+    OrchestrationStatus,
+    RequestContext,
+)
 from aisos.policies import DefaultPolicyEngine
 from aisos.repositories import OrchestrationUnitOfWork
+from aisos.schemas.decision import HumanDecision, Validator
 from aisos.schemas.entities import AgentManifest, PreapprovedPolicy, Request
+from aisos.schemas.memory import MemoryRecord
 from aisos.security import DefaultAuthorizer, Principal
 from aisos.slice import (
     AgentRuntime,
     ConsumptionLedger,
     DeterministicQualityGate,
+    LLMInteractionRegistry,
     LLMMode,
+    LLMProvider,
+    RecordingLLMProvider,
+    ReplayLLMProvider,
     SliceDeliberation,
     StubLLMProvider,
 )
@@ -54,15 +67,27 @@ _WHEN = dt.datetime(2026, 7, 3, tzinfo=dt.UTC)
 _ACTOR = "orchestrator"
 
 
+class _FailingMemory(InMemoryMemorySystem):
+    """Systeme de memoire qui echoue a l'ecriture : simule un crash APRES l'appel LLM (F9)."""
+
+    async def store(self, record: MemoryRecord, *, uncertain: bool = False) -> MemoryRecord:
+        raise RuntimeError("crash simule apres l'appel LLM")
+
+
 class _Harness:
     """Composition root de test : cable la Slice au noyau (in-memory), abonne le ledger au bus."""
 
     def __init__(
-        self, app: AISOSApplication, audit: InMemoryAuditEngine, ledger: ConsumptionLedger
+        self,
+        app: AISOSApplication,
+        audit: InMemoryAuditEngine,
+        ledger: ConsumptionLedger,
+        bus: InMemoryEventBus,
     ) -> None:
         self.app = app
         self.audit = audit
         self.ledger = ledger
+        self.bus = bus
 
 
 def _harness(
@@ -71,10 +96,13 @@ def _harness(
     budget: int | None = 10_000,
     timeout_ms: int = 1_000,
     max_recursion_depth: int = 3,
+    tools: list[str] | None = None,
+    llm: LLMProvider | None = None,
+    memory: InMemoryMemorySystem | None = None,
 ) -> _Harness:
     bus = InMemoryEventBus()
     audit = InMemoryAuditEngine()
-    memory = InMemoryMemorySystem()
+    memory = memory or InMemoryMemorySystem()
     policy = DefaultPolicyEngine()
     authorizer = DefaultAuthorizer()
     database = InMemoryDatabase()
@@ -83,9 +111,9 @@ def _harness(
     ledger = ConsumptionLedger()
     ledger.subscribe(bus)  # abonne reel du bus (dette D8) : agrege la consommation (ADR-0009)
 
-    manifest = AgentManifest(token_budget=budget)
+    manifest = AgentManifest(token_budget=budget, allowed_tools=tools or [])
     runtime = AgentRuntime(
-        StubLLMProvider(mode),
+        llm or StubLLMProvider(mode),
         manifest,
         timeout_ms=timeout_ms,
         max_recursion_depth=max_recursion_depth,
@@ -106,7 +134,7 @@ def _harness(
         checkpoint_store=checkpoints,
         deliberation=deliberation,
     )
-    return _Harness(AISOSApplication(xc), audit, ledger)
+    return _Harness(AISOSApplication(xc), audit, ledger, bus)
 
 
 def _command(
@@ -329,3 +357,167 @@ async def test_s1_with_policy_completes_under_delegation() -> None:
         assert str(expected) in events
     integrity = await harness.app.audit.read(request_id="s1b")
     assert integrity.chain_valid is True
+
+
+# --- F7 : action hors manifest --------------------------------------------------------------
+
+
+async def test_f7_tool_outside_manifest_is_denied_and_audited() -> None:
+    # Manifest sans outil declare : l'agent reclame `shell.exec` => refus (least privilege).
+    harness = _harness(LLMMode.TOOL_DENIED)
+    result = await harness.app.requests.submit(_command("f7"))
+
+    assert result.status is OrchestrationStatus.AWAITING_CEO_VALIDATION
+    assert result.ceo_outcome is None
+    # Refus audite specifiquement en `agent.permission_denied` (jamais silencieux).
+    assert str(EventType.AGENT_PERMISSION_DENIED) in result.published_events
+    # Aucune execution dangereuse : ni politique appliquee, ni ecriture memoire.
+    assert str(EventType.POLICY_APPLIED) not in result.published_events
+    assert str(EventType.MEMORY_UPDATED) not in result.published_events
+    await _assert_clean_paused(harness, "f7")
+
+
+async def test_f7_declared_tool_would_pass() -> None:
+    # Le meme outil, DECLARE au manifest, ne declenche pas de refus (refus par defaut, pas absolu).
+    harness = _harness(LLMMode.TOOL_DENIED, tools=["shell.exec"])
+    result = await harness.app.requests.submit(_command("f7ok", risk=RiskLevel.HIGH))
+    # Reco valide => routage CEO (aucun refus de manifest).
+    assert result.status is OrchestrationStatus.AWAITING_CEO_VALIDATION
+    assert str(EventType.AGENT_PERMISSION_DENIED) not in result.published_events
+    assert str(EventType.QUALITY_GATE_PASSED) in result.published_events
+
+
+# --- F8 : agent tente de decider ------------------------------------------------------------
+
+
+async def test_f8_agent_decision_is_ignored_only_ceo_decides() -> None:
+    harness = _harness(LLMMode.DECIDES)
+    captured: list[EventEnvelope] = []
+
+    async def _capture(event: EventEnvelope) -> None:
+        captured.append(event)
+
+    harness.bus.subscribe(str(EventType.AGENT_INVOKED), _capture)
+
+    # Demande structurante : apres une reco valide, le routage revient au CEO.
+    result = await harness.app.requests.submit(_command("f8", risk=RiskLevel.HIGH))
+
+    # L'issue tentee par l'agent n'a AUCUN effet : aucune decision automatique.
+    assert result.status is OrchestrationStatus.AWAITING_CEO_VALIDATION
+    assert result.ceo_outcome is None
+    assert result.recommendation_id == "rec-f8"
+    # La tentative de decision est auditée comme IGNORÉE (visibilité de gouvernance).
+    assert captured
+    assert captured[0].payload.get("attempted_decision_ignored") == "approuve"
+    await _assert_clean_paused(harness, "f8")
+
+    # Seul le CEO produit une decision : l'issue finale vient du CEO, jamais de l'agent.
+    resume = await harness.app.governance.apply_ceo_decision(
+        ResumeWorkflowCommand(
+            request_id="f8",
+            ceo_subject="ange",
+            decision_id="dec-f8",
+            recommendation_id="rec-f8",
+            decision_class=DecisionClass.STRUCTURANTE,
+            outcome=DecisionOutcome.REJETTE,
+            thread_id="thread-f8",
+            rejection_reason="je tranche moi-meme",
+        )
+    )
+    assert resume.ceo_outcome is DecisionOutcome.REJETTE  # decision du CEO, pas celle de l'agent
+
+
+# --- F9 : crash apres appel LLM + reprise deterministe (record / replay) ---------------------
+
+
+def _delegable(rid: str) -> Request:
+    return Request(
+        id=rid,
+        source="cli",
+        statement="tache simple",
+        complexity=Level.LOW,
+        risk=RiskLevel.LOW,
+        uncertainty=Level.LOW,
+        created_at=_WHEN,
+        thread_id=f"thread-{rid}",
+    )
+
+
+async def test_f9_crash_after_llm_then_replay_without_recall() -> None:
+    registry = LLMInteractionRegistry()
+    svc = Principal(subject=_ACTOR, role=Role.ORCHESTRATOR_SVC)
+    request = _delegable("f9")
+
+    # Tentative 1 : l'appel LLM est ENREGISTRE, puis un crash (mémoire) déclenche un rollback.
+    crash = _harness(
+        LLMMode.NOMINAL,
+        llm=RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), registry),
+        memory=_FailingMemory(),
+    )
+    with pytest.raises(RuntimeError):
+        await crash.app.requests._dispatcher.dispatch(
+            request, svc, policies=(_preapproved(),), thread_id="thread-f9"
+        )
+    # L'interaction LLM a bien été enregistrée AVANT le crash (registre durable, hors transaction).
+    assert len(registry) == 1
+    recorded_response = registry.records[0].response
+
+    # Tentative 2 (reprise) : rejeu depuis le registre ; le modèle n'est JAMAIS rappelé.
+    resume = _harness(LLMMode.NOMINAL, llm=ReplayLLMProvider(registry))
+    result = await resume.app.requests._dispatcher.dispatch(
+        request, svc, policies=(_preapproved(),), thread_id="thread-f9"
+    )
+    assert result.status is OrchestrationStatus.EXECUTED_UNDER_POLICY
+    assert result.workflow_state is WorkflowState.COMPLETED
+    assert result.recommendation_id == "rec-f9"
+    # Le rejeu restaure EXACTEMENT la sortie enregistrée ; l'audit de la reprise reste cohérent.
+    assert registry.records[0].response == recorded_response
+    audit = await resume.app.audit.read(request_id="f9")
+    assert audit.chain_valid is True
+
+
+# --- F10 : non-CEO tente de reprendre -------------------------------------------------------
+
+
+async def test_f10_non_ceo_cannot_resume_suspended_flow() -> None:
+    harness = _harness(LLMMode.OVER_BUDGET)
+    submit = await harness.app.requests.submit(_command("f10"))
+    assert submit.status is OrchestrationStatus.AWAITING_CEO_VALIDATION
+
+    dispatcher = harness.app.requests._dispatcher
+    non_ceo = Principal(subject="mallory", role=Role.ORCHESTRATOR_SVC)
+    request_context = RequestContext(
+        request=Request(id="f10", source="app", statement="reprise", created_at=_WHEN),
+        principal=non_ceo,
+        correlation_id="f10",
+        thread_id="thread-f10",
+    )
+    decision = HumanDecision(
+        id="d-f10",
+        decision_id="d-f10",
+        recommendation_id="rec-f10",
+        decision_class=DecisionClass.STRUCTURANTE,
+        outcome=DecisionOutcome.APPROUVE,
+        validator=Validator(type=ValidatorType.CEO, id="mallory"),
+        decided_at=_WHEN,
+    )
+    decision_input = CEODecisionInput(principal=non_ceo, decision=decision)
+
+    # Seul le CEO reprend : une tentative non-CEO est refusée (invariant de gouvernance).
+    with pytest.raises(GovernanceViolationError):
+        await dispatcher.resume_after_ceo_decision(request_context, decision_input)
+
+    # Le workflow reste SUSPENDU : aucune reprise n'a eu lieu.
+    workflow = harness.app.workflows.get_workflow("f10")
+    assert workflow is not None
+    assert workflow.state is WorkflowState.PAUSED_CEO
+
+
+# --- Couverture des 10 scenarios adverses F1..F10 -------------------------------------------
+
+
+def test_all_ten_adverse_scenarios_are_covered() -> None:
+    """Verifie que chaque scenario F1..F10 dispose d'au moins un test de gouvernance."""
+    defined = [name for name in globals() if name.startswith("test_f")]
+    for n in range(1, 11):
+        assert any(name.startswith(f"test_f{n}_") for name in defined), f"scenario F{n} non couvert"

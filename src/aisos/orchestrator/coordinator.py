@@ -220,23 +220,29 @@ class ComponentCoordinator:
         self._lc.advance(octx, LifecycleState.DELIBERATION)
         verdict = self._xc.deliberation.deliberate(request)
 
-        # Chaque appel LLM est comptabilise ET audite (ADR-0009 : economie comptabilisee).
+        # Chaque appel LLM est comptabilise ET audite (ADR-0009 : economie comptabilisee). Toute
+        # "decision" tentee par l'agent (F8) est consignee comme IGNOREE — l'agent ne decide pas.
+        agent_payload = _consumption_payload(verdict.consumption, verdict.guardrail)
+        agent_payload["attempted_decision_ignored"] = verdict.attempted_decision
         await self._emit(
-            octx,
-            EventType.AGENT_INVOKED,
-            actor="agent:slice-agent",
-            payload=_consumption_payload(verdict.consumption, verdict.guardrail),
+            octx, EventType.AGENT_INVOKED, actor="agent:slice-agent", payload=agent_payload
         )
         self._lc.advance(octx, LifecycleState.QUALITY_GATE)
 
-        # Garde-fou economique : SUSPENSION + escalade auditee (ADR-0009, A3), aucune decision.
+        # Garde-fou : SUSPENSION + escalade auditee (ADR-0009, A3), aucune decision. Un refus de
+        # manifest (F7) est audite specifiquement en `agent.permission_denied` ; les garde-fous
+        # economiques (timeout/budget/recursion/indisponibilite) en `escalation.raised`.
         if verdict.kind == DeliberationKind.ESCALATE:
-            self._wf.pause_for_ceo(
-                instance, reason=f"garde-fou economique: {verdict.guardrail}", actor=actor
+            permission_denied = verdict.guardrail == "permission_denied"
+            escalation_event = (
+                EventType.AGENT_PERMISSION_DENIED
+                if permission_denied
+                else EventType.ESCALATION_RAISED
             )
+            self._wf.pause_for_ceo(instance, reason=f"garde-fou: {verdict.guardrail}", actor=actor)
             await self._emit(
                 octx,
-                EventType.ESCALATION_RAISED,
+                escalation_event,
                 actor=actor,
                 payload={"guardrail": verdict.guardrail, "reason": verdict.reason},
             )
@@ -245,7 +251,7 @@ class ComponentCoordinator:
                 OrchestrationStatus.AWAITING_CEO_VALIDATION,
                 validation_mode=None,
                 interrupted=True,
-                reason=f"escalade garde-fou economique ({verdict.guardrail}) : validation CEO",
+                reason=f"escalade garde-fou ({verdict.guardrail}) : validation CEO",
                 workflow_state=instance.state,
             )
 

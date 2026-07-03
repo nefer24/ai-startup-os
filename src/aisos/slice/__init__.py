@@ -29,20 +29,32 @@ from aisos.slice.llm import (
     StubLLMProvider,
 )
 from aisos.slice.quality_gate import DeterministicQualityGate, QualityGate
+from aisos.slice.replay import (
+    LLMInteractionRecord,
+    LLMInteractionRegistry,
+    RecordingLLMProvider,
+    ReplayLLMProvider,
+    prompt_hash,
+)
 from aisos.slice.runtime import AgentRuntime, RuntimeReport, RuntimeStatus
 
 __all__ = [
     "AgentRuntime",
     "ConsumptionLedger",
     "DeterministicQualityGate",
+    "LLMInteractionRecord",
+    "LLMInteractionRegistry",
     "LLMMode",
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",
     "LedgerEntry",
     "QualityGate",
+    "RecordingLLMProvider",
+    "ReplayLLMProvider",
     "RuntimeReport",
     "RuntimeStatus",
     "SliceDeliberation",
     "StubLLMProvider",
+    "prompt_hash",
 ]

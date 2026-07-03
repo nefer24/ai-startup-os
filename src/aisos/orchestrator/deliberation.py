@@ -77,6 +77,9 @@ class DeliberationVerdict(ImmutableModel):
     quality_gate: QualityGateResult | None = None
     guardrail: str | None = None
     reason: str = ""
+    #: "Decision" que l'agent a tente de produire (F8), consignee pour audit puis IGNOREE — un
+    #: agent ne decide jamais ; seul le CEO produit une decision.
+    attempted_decision: str | None = None
 
 
 @runtime_checkable
