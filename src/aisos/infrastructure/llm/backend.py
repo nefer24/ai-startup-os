@@ -16,6 +16,7 @@ erreur.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from pydantic import Field
@@ -51,6 +52,13 @@ class InvalidProviderResponseError(ProviderBackendError):
 
     code = "llm.provider_response_invalid"
     http_status = 502
+
+
+class InvalidProviderRequestError(ProviderBackendError):
+    """Requete fournisseur invalide (model ou prompt manquant) : refusee, sans secret."""
+
+    code = "llm.provider_request_invalid"
+    http_status = 422
 
 
 class ProviderBackendRequest(ImmutableModel):
@@ -115,3 +123,41 @@ def validate_provider_response(response: ProviderBackendResponse) -> ProviderBac
     if not response.content:
         raise InvalidProviderResponseError("reponse fournisseur invalide : contenu vide")
     return response
+
+
+def validate_provider_request(request: ProviderBackendRequest) -> ProviderBackendRequest:
+    """Valide une requete fournisseur : model et prompt non vides. Ne consigne aucun secret."""
+    if not request.model:
+        raise InvalidProviderRequestError("requete fournisseur invalide : model manquant")
+    if not request.prompt:
+        raise InvalidProviderRequestError("requete fournisseur invalide : prompt manquant")
+    return request
+
+
+class DeterministicProviderBackend:
+    """Backend fournisseur **deterministe en memoire** (aucun reseau/SDK, aucun secret stocke).
+
+    Renvoie des `ProviderBackendResponse` **preconfigurees**, dans l'ordre (la derniere est
+    reutilisee une fois la liste epuisee). Valide chaque requete (`validate_provider_request`).
+    Compte les appels (`calls`) afin de prouver qu'un rejeu ne le sollicite pas. Un eventuel
+    `secret` est **ignore** et n'est ni stocke ni journalise. Il ne remplace pas
+    `DisabledProviderBackend` (defaut) : c'est un double de test, injecte explicitement, pour
+    exercer le **chemin backend** de l'adapter et le pipeline record/replay **sans reseau reel**.
+    """
+
+    def __init__(self, responses: Sequence[ProviderBackendResponse] | None = None) -> None:
+        self._responses: tuple[ProviderBackendResponse, ...] = (
+            tuple(responses) if responses else (ProviderBackendResponse(content="ok"),)
+        )
+        self._index = 0
+        self.calls = 0
+
+    def complete(
+        self, request: ProviderBackendRequest, *, secret: Secret | None = None
+    ) -> ProviderBackendResponse:
+        """Valide la requete puis renvoie la reponse preconfiguree suivante. Aucun reseau."""
+        validate_provider_request(request)
+        self.calls += 1
+        response = self._responses[min(self._index, len(self._responses) - 1)]
+        self._index += 1
+        return response
