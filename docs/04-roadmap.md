@@ -18,20 +18,26 @@ barrière d'activation CEO-only. ADR ratifiées : **ADR-0009** (M0-001), **ADR-0
 
 ## Current Focus
 
-M1 en **conception** : plan détaillé du premier branchement réel soumis à ratification.
-**Aucun** provider réel branché, aucune clé, aucun appel réseau à ce stade.
+### M1 — Premier branchement réel gouverné (plan **ratifié**, M1-001)
+
+Plan détaillé **ratifié par le CEO** (M1-001, 2026-07-03) :
+[`docs/reports/M1_GOVERNED_REAL_LLM_PLAN.md`](reports/M1_GOVERNED_REAL_LLM_PLAN.md) — statut
+`Accepted`. L'ouverture de M1 est acquise : implémentation d'un backend derrière le port
+`LLMProvider`, chargement sécurisé du secret depuis la variable d'environnement référencée,
+consommation de `activated_config` par un composant racine **passant par la barrière d'activation
+CEO-only**, première campagne record/replay contre un modèle réel — le tout sous décision CEO
+explicite. Voir les risques restants RR1–RR7 du rapport M0.
+
+**À ce stade : aucun provider réel branché, aucune clé, aucun appel réseau.** La ratification
+ouvre la conception ; elle n'active rien. La première activation réelle restera conditionnée à
+une `RealLLMActivationDecision.granted` du CEO. Choix du fournisseur (OpenAI vs Anthropic) :
+décision CEO ultérieure, non tranchée.
 
 ## Upcoming Milestones
 
-### M1 — Premier branchement réel gouverné (plan soumis, non ratifié)
-
-Implémentation d'un backend derrière le port `LLMProvider`, chargement sécurisé du secret depuis
-la variable d'environnement référencée, consommation de `activated_config` par un composant
-racine **passant par la barrière d'activation CEO-only**, première campagne record/replay contre
-un modèle réel — le tout sous décision CEO explicite. Plan détaillé (15 sections) :
-[`docs/reports/M1_GOVERNED_REAL_LLM_PLAN.md`](reports/M1_GOVERNED_REAL_LLM_PLAN.md). Voir les
-risques restants RR1–RR7 du rapport M0. **Aucune activation ni code avant ratification CEO du
-plan.**
+Suite de M1 (post-conception) : première **activation réelle** d'un fournisseur sur
+`RealLLMActivationDecision.granted` du CEO, puis campagne record/replay contre un modèle réel
+selon les critères d'acceptation du plan M1.
 
 ## Future Exploration
 
