@@ -31,7 +31,7 @@ doit devenir un ADR `Accepté` (ou être révisée) avant toute mise en producti
 | --- | --- | --- | --- |
 | **ADR-0009** | Gouvernance économique | *Ratifié (M0-001).* Risque N2. Prérequis de la Slice. | **P1** |
 | **ADR-0010** | Déterminisme des interactions LLM | *Ratifié (M0-002).* Risque N1. Implémenté (`aisos.llm`). | **P1** |
-| **ADR-0011** | **Audit : source unique de vérité** | *Rédigé & implémenté.* Résout le double-write d'audit (D1) : le moteur délègue le stockage à un `AuditStore` unique ; écriture unique, divergence impossible. Ratification M0-003 recommandée. | **P1** |
+| **ADR-0011** | **Audit : source unique de vérité** | *Ratifié (M0-003) & implémenté.* Résout le double-write d'audit (D1) : le moteur délègue le stockage à un `AuditStore` unique ; écriture unique, divergence impossible. | **P1** |
 | ADR-0012 | **Modèle d'état d'exécution unifié** | Clarifie la relation `WorkflowState` ⟂ `LifecycleState` (redondance identifiée). Décider d'une source de vérité unique de l'état, ou d'une projection explicite de l'un vers l'autre. | P2 |
 | ADR-0013 | **Sécurité de contenu / frontière agent** | Traite l'injection de prompt et la validation de sortie (risque N4), au-delà du RBAC. À aligner avec DT-07. | P2 |
 | ADR-0014 | **Évolution et migration de schéma append-only** | Stratégie de compatibilité ascendante/descendante des données immuables (audit, mémoire) — risque N5. | P2 |

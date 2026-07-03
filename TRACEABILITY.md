@@ -684,4 +684,4 @@ Consolidation **ciblée** de l'audit : suppression du **double-write** (`coordin
 | `pytest` | ✅ 336 passed (dont 118 `governance`) |
 | Couverture `src/aisos/audit/`, `CommittedAuditStore`, `coordinator._emit` | ✅ 100 % |
 
-La consolidation respecte l'inversion de dépendance (le moteur dépend du **port** `AuditStore`, jamais d'un adaptateur) et **ne modifie aucune gouvernance**. Décision documentée : [`ADR-0011`](docs/adr/ADR-0011-audit-source-unique.md) (statut `Proposé`, implémenté ; ratification **M0-003** recommandée). Refactor **ciblé** ; aucune régression (336 tests verts).
+La consolidation respecte l'inversion de dépendance (le moteur dépend du **port** `AuditStore`, jamais d'un adaptateur) et **ne modifie aucune gouvernance**. Décision documentée : [`ADR-0011`](docs/adr/ADR-0011-audit-source-unique.md) **ratifié** (statut `Accepted`, **porte M0-003**, 2026-07-03). Refactor **ciblé** ; aucune régression (336 tests verts).
