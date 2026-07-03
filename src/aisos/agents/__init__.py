@@ -9,6 +9,13 @@ aucune couche d'abstraction et ne modifient aucune gouvernance.
 from __future__ import annotations
 
 from aisos.agents.brain_slice import BrainDeliberationOutcome, BrainSlice
+from aisos.agents.ceo_resume import (
+    CeoAction,
+    CeoResumeCycle,
+    CeoResumeOutcome,
+    NonCeoResumeError,
+    ResumeWithoutPauseError,
+)
 from aisos.agents.council import CouncilOutcome, CouncilSynthesis, ExpertCouncil
 from aisos.agents.runtime import (
     AgentDeliberationError,
@@ -24,7 +31,12 @@ __all__ = [
     "AgentTask",
     "BrainDeliberationOutcome",
     "BrainSlice",
+    "CeoAction",
+    "CeoResumeCycle",
+    "CeoResumeOutcome",
     "CouncilOutcome",
     "CouncilSynthesis",
     "ExpertCouncil",
+    "NonCeoResumeError",
+    "ResumeWithoutPauseError",
 ]
