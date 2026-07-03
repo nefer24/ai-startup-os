@@ -21,12 +21,19 @@ from __future__ import annotations
 
 import json
 
+from aisos.infrastructure.llm.backend import (
+    ProviderBackend,
+    ProviderBackendRequest,
+    ProviderBackendResponse,
+    validate_provider_response,
+)
 from aisos.infrastructure.llm.config import (
     RealLLMProviderConfig,
     RealLLMProviderDisabledError,
 )
 from aisos.infrastructure.llm.secrets import (
     EnvironmentSecretResolver,
+    Secret,
     SecretResolver,
     resolve_api_key,
 )
@@ -54,31 +61,62 @@ class LLMProviderAdapter:
         *,
         secret_resolver: SecretResolver | None = None,
         http_client: LLMHttpClient | None = None,
+        backend: ProviderBackend | None = None,
     ) -> None:
         self._config = config or RealLLMProviderConfig()
         self._secret_resolver: SecretResolver = secret_resolver or EnvironmentSecretResolver()
         self._http_client: LLMHttpClient = http_client or DisabledLLMHttpClient()
+        #: Backend fournisseur optionnel. Fourni ⇒ chemin backend ; sinon ⇒ chemin transport HTTP.
+        self._backend = backend
 
     @property
     def config(self) -> RealLLMProviderConfig:
         return self._config
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        """Refuse si inactif ; sinon resout le secret, appelle le client (aucun reseau reel)."""
-        # (1) Refus explicite AVANT toute resolution de secret si la configuration est inactive.
+        """Refuse si inactif ; sinon resout le secret puis appelle backend/client (sans reseau)."""
+        # (1) Refus explicite AVANT toute resolution de secret ET avant tout appel backend/client
+        # si la configuration est inactive : un backend « actif » ne peut pas etre appele sans
+        # configuration CEO active.
         if not self._config.is_active:
             raise RealLLMProviderDisabledError(
                 "adaptateur LLM reel desactive : aucune configuration active "
                 "(activation CEO-only, jamais par defaut)"
             )
-        # (2) Configuration active : resolution du secret (peut lever une erreur explicite sans
-        # fuite si la variable est absente/invalide), puis appel via l'abstraction reseau.
+        # (2) Configuration active : resolution du secret (erreur explicite sans fuite si absent),
+        # puis appel — par le backend fournisseur s'il est fourni, sinon par l'abstraction reseau.
         secret = resolve_api_key(self._config, self._secret_resolver)
+        if self._backend is not None:
+            return self._complete_via_backend(request, secret, self._backend)
         http_request = self._build_http_request(request)
         # Le secret est transmis MASQUE (jamais serialise dans la requete) ; avec le client
         # desactive par defaut, cet appel leve `NetworkDisabledError` (aucun reseau reel).
         response = self._http_client.send(http_request, secret=secret)
         return self._to_llm_response(response)
+
+    def _complete_via_backend(
+        self, request: LLMRequest, secret: Secret, backend: ProviderBackend
+    ) -> LLMResponse:
+        """Appelle le backend fournisseur (secret masque) puis mappe la reponse. Aucun reseau."""
+        backend_request = ProviderBackendRequest(
+            model=self._config.model,
+            model_version=self._config.model_version,
+            prompt=request.prompt,
+            step=request.step,
+            parameters=dict(self._config.parameters),
+        )
+        response = backend.complete(backend_request, secret=secret)
+        return self._from_backend_response(response)
+
+    def _from_backend_response(self, response: ProviderBackendResponse) -> LLMResponse:
+        """Valide puis mappe une reponse fournisseur en `LLMResponse` (recommandation seulement)."""
+        validate_provider_response(response)
+        return LLMResponse(
+            content=response.content,
+            tokens_in=response.tokens_in,
+            tokens_out=response.tokens_out,
+            model=self._config.model,
+        )
 
     def _build_http_request(self, request: LLMRequest) -> LLMHttpRequest:
         """Construit la requete HTTP **sans secret** (corps metier non sensible uniquement)."""
