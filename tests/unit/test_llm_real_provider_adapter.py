@@ -17,11 +17,12 @@ from pydantic import ValidationError
 
 import aisos.infrastructure.llm
 from aisos.infrastructure.llm import (
+    EnvironmentSecretResolver,
     LLMProviderAdapter,
+    NetworkDisabledError,
     ProviderName,
     RealLLMProviderConfig,
     RealLLMProviderDisabledError,
-    RealLLMProviderNotWiredError,
 )
 from aisos.llm import LLMProvider, LLMRequest
 
@@ -64,10 +65,13 @@ def test_explicit_error_when_called_without_active_config() -> None:
 
 
 def test_active_config_still_makes_no_network_call() -> None:
-    # Meme active, le squelette refuse l'appel (aucun backend cable) : aucun reseau.
-    adapter = LLMProviderAdapter(_active_config())
+    # Meme active (secret resolvable), l'appel passe par le client desactive : aucun reseau reel.
+    adapter = LLMProviderAdapter(
+        _active_config(),
+        secret_resolver=EnvironmentSecretResolver({"AISOS_LLM_API_KEY": "sk-test-value-abcdef"}),
+    )
     assert adapter.config.is_active is True
-    with pytest.raises(RealLLMProviderNotWiredError):
+    with pytest.raises(NetworkDisabledError):
         adapter.complete(_req())
 
 
