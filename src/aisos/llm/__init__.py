@@ -2,9 +2,10 @@
 
 Stabilise le CONTRAT d'acces aux modeles de langage AVANT tout branchement reel : le port
 `LLMProvider`, ses objets (`LLMRequest`, `LLMResponse`), les trois modes (`STUB`/`RECORD`/
-`REPLAY`), et le mecanisme d'enregistrement/rejeu (`LLMInteractionRegistry`, `prompt_hash`,
-providers `RecordingLLMProvider`/`ReplayLLMProvider`) avec ses garanties : rejeu reproductible,
-validation de version de modele et de parametres, et « replay never calls model ».
+`REPLAY`), et le mecanisme d'enregistrement/rejeu (port `LLMInteractionStore` +
+`InMemoryLLMInteractionStore`, `prompt_hash`, providers `RecordingLLMProvider`/`ReplayLLMProvider`)
+avec ses garanties : stockage append-only, rejeu reproductible, validation de version de modele et
+de parametres, et « replay never calls model ».
 
 Aucun fournisseur reel (ni OpenAI, ni Anthropic), aucun reseau, aucune base reelle, aucun
 framework externe, aucune decision automatique. Uniquement le contrat et le rejeu deterministe.
@@ -25,16 +26,18 @@ from aisos.llm.errors import (
     ReplayMissError,
 )
 from aisos.llm.replay import (
+    InMemoryLLMInteractionStore,
     LLMInteractionRecord,
-    LLMInteractionRegistry,
+    LLMInteractionStore,
     RecordingLLMProvider,
     ReplayLLMProvider,
     prompt_hash,
 )
 
 __all__ = [
+    "InMemoryLLMInteractionStore",
     "LLMInteractionRecord",
-    "LLMInteractionRegistry",
+    "LLMInteractionStore",
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",

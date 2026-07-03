@@ -40,7 +40,7 @@ from aisos.infrastructure import (
     InMemoryUnitOfWork,
 )
 from aisos.llm import (
-    LLMInteractionRegistry,
+    InMemoryLLMInteractionStore,
     LLMProvider,
     RecordingLLMProvider,
     ReplayLLMProvider,
@@ -452,26 +452,26 @@ def _delegable(rid: str) -> Request:
 
 
 async def test_f9_crash_after_llm_then_replay_without_recall() -> None:
-    registry = LLMInteractionRegistry()
+    store = InMemoryLLMInteractionStore()
     svc = Principal(subject=_ACTOR, role=Role.ORCHESTRATOR_SVC)
     request = _delegable("f9")
 
     # Tentative 1 : l'appel LLM est ENREGISTRE, puis un crash (mémoire) déclenche un rollback.
     crash = _harness(
         LLMMode.NOMINAL,
-        llm=RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), registry),
+        llm=RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), store),
         memory=_FailingMemory(),
     )
     with pytest.raises(RuntimeError):
         await crash.app.requests._dispatcher.dispatch(
             request, svc, policies=(_preapproved(),), thread_id="thread-f9"
         )
-    # L'interaction LLM a bien été enregistrée AVANT le crash (registre durable, hors transaction).
-    assert len(registry) == 1
-    recorded_response = registry.records[0].response
+    # L'interaction LLM a bien été enregistrée AVANT le crash (store durable, hors transaction).
+    assert len(store) == 1
+    recorded_response = store.records[0].response
 
-    # Tentative 2 (reprise) : rejeu depuis le registre ; le modèle n'est JAMAIS rappelé.
-    resume = _harness(LLMMode.NOMINAL, llm=ReplayLLMProvider(registry))
+    # Tentative 2 (reprise) : rejeu depuis le store ; le modèle n'est JAMAIS rappelé.
+    resume = _harness(LLMMode.NOMINAL, llm=ReplayLLMProvider(store))
     result = await resume.app.requests._dispatcher.dispatch(
         request, svc, policies=(_preapproved(),), thread_id="thread-f9"
     )
@@ -479,7 +479,7 @@ async def test_f9_crash_after_llm_then_replay_without_recall() -> None:
     assert result.workflow_state is WorkflowState.COMPLETED
     assert result.recommendation_id == "rec-f9"
     # Le rejeu restaure EXACTEMENT la sortie enregistrée ; l'audit de la reprise reste cohérent.
-    assert registry.records[0].response == recorded_response
+    assert store.records[0].response == recorded_response
     audit = await resume.app.audit.read(request_id="f9")
     assert audit.chain_valid is True
 

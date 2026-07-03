@@ -16,7 +16,9 @@ import pytest
 
 import aisos.llm
 from aisos.llm import (
-    LLMInteractionRegistry,
+    InMemoryLLMInteractionStore,
+    LLMInteractionRecord,
+    LLMInteractionStore,
     LLMProvider,
     LLMRequest,
     LLMResponse,
@@ -89,47 +91,67 @@ def test_prompt_hash_independent_of_model_and_params() -> None:
 
 
 def test_recording_records_once_and_is_idempotent() -> None:
-    registry = LLMInteractionRegistry()
+    store = InMemoryLLMInteractionStore()
     stub = _ConstStub()
-    recorder = RecordingLLMProvider(stub, registry)
+    recorder = RecordingLLMProvider(stub, store)
     assert recorder.mode is ProviderMode.RECORD
     first = recorder.complete(_req("p"))
-    assert len(registry) == 1
+    assert len(store) == 1
     assert stub.calls == 1
     second = recorder.complete(_req("p"))  # deja enregistre : pas de nouvel appel
     assert second == first
-    assert len(registry) == 1
+    assert len(store) == 1
     assert stub.calls == 1
 
 
-def test_registry_record_is_append_only() -> None:
-    registry = LLMInteractionRegistry()
-    req = _req("p")
-    first = registry.record(req, LLMResponse(content="v1", model="stub-llm-1"))
-    again = registry.record(req, LLMResponse(content="v2", model="stub-llm-1"))
-    assert again is first
-    assert len(registry) == 1
-    assert registry.records[0].response.content == "v1"
-    assert registry.records[0].model_version == "stub-llm-1"
+def test_store_append_is_append_only() -> None:
+    store = InMemoryLLMInteractionStore()
+    key = prompt_hash(_req("p"))
+    first = store.append(
+        LLMInteractionRecord(
+            prompt_hash=key,
+            request=_req("p"),
+            response=LLMResponse(content="v1", model="stub-llm-1"),
+            model_version="stub-llm-1",
+        )
+    )
+    again = store.append(
+        LLMInteractionRecord(
+            prompt_hash=key,
+            request=_req("p"),
+            response=LLMResponse(content="v2", model="stub-llm-1"),
+            model_version="stub-llm-1",
+        )
+    )
+    assert again is first  # jamais ecrase
+    assert len(store) == 1
+    assert store.records[0].response.content == "v1"
+
+
+def test_store_lookup_is_exact_by_prompt_hash() -> None:
+    store = InMemoryLLMInteractionStore()
+    RecordingLLMProvider(_ConstStub(), store).complete(_req("p"))
+    assert store.get(prompt_hash(_req("p"))) is not None
+    assert store.get(prompt_hash(_req("autre"))) is None
 
 
 # --- Rejeu exact et sans rappel du modele ----------------------------------------------------
 
 
 def test_replay_reproduces_exact_response() -> None:
-    registry = LLMInteractionRegistry()
-    recorded = RecordingLLMProvider(_ConstStub(), registry).complete(_req("p"))
-    replayer = ReplayLLMProvider(registry)
+    store = InMemoryLLMInteractionStore()
+    recorded = RecordingLLMProvider(_ConstStub(), store).complete(_req("p"))
+    replayer = ReplayLLMProvider(store)
     assert replayer.mode is ProviderMode.REPLAY
     assert replayer.complete(_req("p")) == recorded
 
 
 def test_replay_never_calls_the_model() -> None:
-    registry = LLMInteractionRegistry()
-    RecordingLLMProvider(_ConstStub(), registry).complete(_req("p"))
+    store = InMemoryLLMInteractionStore()
+    RecordingLLMProvider(_ConstStub(), store).complete(_req("p"))
     # Un enregistreur place au-dessus d'un tripwire ne rappelle PAS le modele (deja enregistre).
     tripwire = _TripwireLLM()
-    assert RecordingLLMProvider(tripwire, registry).complete(_req("p")).content == "reply:p"
+    assert RecordingLLMProvider(tripwire, store).complete(_req("p")).content == "reply:p"
     assert tripwire.calls == 0
 
 
@@ -138,21 +160,21 @@ def test_replay_never_calls_the_model() -> None:
 
 def test_replay_fails_when_prompt_absent() -> None:
     with pytest.raises(ReplayMissError):
-        ReplayLLMProvider(LLMInteractionRegistry()).complete(_req("absent"))
+        ReplayLLMProvider(InMemoryLLMInteractionStore()).complete(_req("absent"))
 
 
 def test_replay_fails_on_model_version_mismatch() -> None:
-    registry = LLMInteractionRegistry()
-    RecordingLLMProvider(_ConstStub(), registry).complete(_req("p", model="stub-llm-1"))
+    store = InMemoryLLMInteractionStore()
+    RecordingLLMProvider(_ConstStub(), store).complete(_req("p", model="stub-llm-1"))
     with pytest.raises(ModelVersionMismatchError):
-        ReplayLLMProvider(registry).complete(_req("p", model="autre-modele"))
+        ReplayLLMProvider(store).complete(_req("p", model="autre-modele"))
 
 
 def test_replay_fails_on_parameters_mismatch() -> None:
-    registry = LLMInteractionRegistry()
-    RecordingLLMProvider(_ConstStub(), registry).complete(_req("p", temperature=0.0))
+    store = InMemoryLLMInteractionStore()
+    RecordingLLMProvider(_ConstStub(), store).complete(_req("p", temperature=0.0))
     with pytest.raises(ParametersMismatchError):
-        ReplayLLMProvider(registry).complete(_req("p", temperature=1.0))
+        ReplayLLMProvider(store).complete(_req("p", temperature=1.0))
 
 
 # --- Stub deterministe, absence de reseau, absence de decision -------------------------------
@@ -167,11 +189,12 @@ def test_provider_modes_are_first_class() -> None:
     assert {m.value for m in ProviderMode} == {"stub", "record", "replay"}
 
 
-def test_providers_conform_to_the_port() -> None:
-    registry = LLMInteractionRegistry()
+def test_providers_and_store_conform_to_their_ports() -> None:
+    store = InMemoryLLMInteractionStore()
+    assert isinstance(store, LLMInteractionStore)
     assert isinstance(_ConstStub(), LLMProvider)
-    assert isinstance(RecordingLLMProvider(_ConstStub(), registry), LLMProvider)
-    assert isinstance(ReplayLLMProvider(registry), LLMProvider)
+    assert isinstance(RecordingLLMProvider(_ConstStub(), store), LLMProvider)
+    assert isinstance(ReplayLLMProvider(store), LLMProvider)
 
 
 _IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+(\S+)", re.MULTILINE)
