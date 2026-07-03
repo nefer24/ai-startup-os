@@ -693,3 +693,13 @@ Consolidation **ciblée** de l'audit : suppression du **double-write** (`coordin
 | Couverture `src/aisos/audit/`, `CommittedAuditStore`, `coordinator._emit` | ✅ 100 % |
 
 La consolidation respecte l'inversion de dépendance (le moteur dépend du **port** `AuditStore`, jamais d'un adaptateur) et **ne modifie aucune gouvernance**. Décision documentée : [`ADR-0011`](docs/adr/ADR-0011-audit-source-unique.md) **ratifié** (statut `Accepted`, **porte M0-003**, 2026-07-03). Refactor **ciblé** ; aucune régression (336 tests verts).
+
+## Clôture du jalon M0 (rapport de readiness)
+
+Clôture officielle du jalon **M0 — préparation d'un fournisseur LLM réel sécurisé**. Rapport factuel : [`docs/reports/M0_LLM_READINESS_REPORT.md`](docs/reports/M0_LLM_READINESS_REPORT.md). Il démontre ce qui est **réellement prêt** (port `LLMProvider`, record/replay déterministe, `LLMInteractionStore`, persistance mémoire, Vertical Slice F1–F10, audit source unique, Value Metrics, squelette d'adaptateur réel désactivé, barrière d'activation CEO-only) et ce qui reste **volontairement hors périmètre** (aucun OpenAI, aucun Anthropic, aucun réseau, aucune API REST, aucun PostgreSQL/Redis/RabbitMQ, aucun provider réel branché).
+
+**ADR ratifiées du jalon** : [`ADR-0009`](docs/adr/ADR-0009-gouvernance-economique.md) (M0-001, *APPROVED WITH MINOR CHANGES*), [`ADR-0010`](docs/adr/ADR-0010-determinisme-interactions-llm.md) (M0-002, *APPROVED*), [`ADR-0011`](docs/adr/ADR-0011-audit-source-unique.md) (M0-003, *APPROVED*) — toutes `Accepted`.
+
+**Invariants prouvés par test** : *replay never calls model* · *append-only* · *audit single source of truth* · *CEO-only activation* · *deterministic replay* · *no automatic decision* · *governance before execution* · *no rollback loss* · *no hardcoded secret / no network*.
+
+**Vérification (mesurée, Python 3.12)** : `ruff check` + `ruff format --check` ✅ · `mypy` strict ✅ (90 fichiers) · `pytest` ✅ **367 tests** (dont **120** `governance`, **246** `unit`, **0** `integration`) · CI GitHub Actions job `quality` ✅ **success** (PR #43). Roadmap : [`docs/04-roadmap.md`](docs/04-roadmap.md) — M0 marqué **terminé**, M1 (branchement réel gouverné) **proposé**. **Recommandation du rapport** : M0 peut être considéré comme terminé — clôture d'un jalon de *préparation*, pas déclaration de *production-readiness* ; risques restants RR1–RR7 documentés. Contraintes : documentation uniquement, aucune modification de code, constat factuel non embelli.
