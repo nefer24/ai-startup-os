@@ -72,6 +72,10 @@ class RequestResult(ImmutableModel):
     published_events: list[str] = Field(default_factory=list)
     ceo_outcome: DecisionOutcome | None = None
     applied_adjustments: list[str] = Field(default_factory=list)
+    #: Trace de deliberation (Vertical Slice) : recommandation produite et verdict du Quality
+    #: Gate. Restent None hors deliberation (retro-compatibilite des Phases 19-25).
+    recommendation_id: str | None = None
+    quality_gate_passed: bool | None = None
 
 
 class WorkflowResult(ImmutableModel):

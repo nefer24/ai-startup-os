@@ -58,6 +58,8 @@ def _to_request_result(result: OrchestrationResult) -> RequestResult:
         published_events=list(result.published_events),
         ceo_outcome=result.ceo_outcome,
         applied_adjustments=list(result.applied_adjustments),
+        recommendation_id=result.recommendation_id,
+        quality_gate_passed=result.quality_gate_passed,
     )
 
 

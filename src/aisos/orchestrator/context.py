@@ -25,6 +25,7 @@ from aisos.audit.interfaces import AuditEngine
 from aisos.domain.enums import DecisionOutcome, LifecycleState, ValidationMode
 from aisos.events import InMemoryEventBus
 from aisos.memory.interfaces import MemorySystem
+from aisos.orchestrator.deliberation import DeliberationPort
 from aisos.policies.interfaces import PolicyEngine
 from aisos.repositories import CheckpointStore, OrchestrationUnitOfWork
 from aisos.schemas.base import ImmutableModel
@@ -99,6 +100,10 @@ class OrchestrationResult(ImmutableModel):
     applied_adjustments: list[str] = Field(default_factory=list)
     #: Etat du workflow synchronise avec l'orchestration (Phase 22) — None si non integre.
     workflow_state: WorkflowState | None = None
+    #: Identifiant de la recommandation produite par la deliberation (Slice) — None si absente.
+    recommendation_id: str | None = None
+    #: Verdict du Quality Gate de la deliberation (Slice) : True/False, ou None si non deliberee.
+    quality_gate_passed: bool | None = None
 
 
 @dataclass
@@ -113,6 +118,9 @@ class OrchestrationContext:
     event_seq: int = 0
     #: Transaction courante (port) : si presente, l'audit et la memoire y sont aussi persistes.
     uow: OrchestrationUnitOfWork | None = None
+    #: Traces de deliberation (Slice) reportees dans le resultat final.
+    recommendation_id: str | None = None
+    quality_gate_passed: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -134,3 +142,7 @@ class ExecutionContext:
     #: store. Absents => comportement des Phases 19-22 inchange (aucune persistance).
     unit_of_work_factory: UnitOfWorkFactory | None = None
     checkpoint_store: CheckpointStore | None = None
+    #: Etage de deliberation OPTIONNEL (port ; implemente par la Vertical Slice). Absent =>
+    #: comportement des Phases 19-25 inchange (aucune deliberation d'agent). Present => l'agent
+    #: produit une recommandation sous bornes avant le routage du Policy Engine.
+    deliberation: DeliberationPort | None = None

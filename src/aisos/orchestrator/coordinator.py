@@ -29,12 +29,29 @@ from aisos.orchestrator.context import (
     OrchestrationResult,
     OrchestrationStatus,
 )
+from aisos.orchestrator.deliberation import ConsumptionRecord, DeliberationKind
 from aisos.orchestrator.lifecycle import LifecycleManager
 from aisos.orchestrator.workflow_link import WorkflowRegistry
 from aisos.schemas.entities import PreapprovedPolicy
 from aisos.schemas.memory import MemoryRecord, Provenance
 from aisos.security import Action
-from aisos.workflow import InMemoryWorkflowEngine, WorkflowState
+from aisos.workflow import InMemoryWorkflowEngine, WorkflowInstance, WorkflowState
+
+
+def _consumption_payload(
+    consumption: ConsumptionRecord, guardrail: str | None
+) -> dict[str, object]:
+    """Charge utile d'audit de la consommation economique (ADR-0009, ledger)."""
+    return {
+        "model": consumption.model,
+        "tokens_in": consumption.tokens_in,
+        "tokens_out": consumption.tokens_out,
+        "tokens_total": consumption.tokens_total,
+        "cost_eur": consumption.cost_eur,
+        "latency_ms": consumption.latency_ms,
+        "calls": consumption.calls,
+        "guardrail": guardrail,
+    }
 
 
 class ComponentCoordinator:
@@ -91,8 +108,19 @@ class ComponentCoordinator:
         self._wf.start(instance, actor=actor)
         await self._emit(octx, EventType.REQUEST_RECEIVED, actor=actor)
 
+        # (2b) DELIBERATION (opt-in Slice) — l'agent produit une recommandation SOUS BORNES,
+        # AVANT tout routage. Un garde-fou economique suspend et escalade (ADR-0009, A3) ; une
+        # recommandation rejetee par le Quality Gate est renvoyee ; sinon le pipeline poursuit.
+        if self._xc.deliberation is not None:
+            terminal = await self._deliberate(octx, instance, actor)
+            if terminal is not None:
+                return terminal
+
         # (3) POLICY ENGINE — toujours consulte avant toute execution.
-        self._lc.advance(octx, LifecycleState.EVALUATION)
+        # Sans deliberation, on entre en EVALUATION ; avec deliberation, le cycle de vie a deja
+        # progresse jusqu'a QUALITY_GATE (etape suivante : CLASSIFICATION).
+        if self._xc.deliberation is None:
+            self._lc.advance(octx, LifecycleState.EVALUATION)
         policy_result = self._xc.policy_engine.evaluate(request, policies)
         octx.policy_result = policy_result
         self._lc.advance(octx, LifecycleState.CLASSIFICATION)
@@ -177,6 +205,85 @@ class ComponentCoordinator:
             workflow_state=instance.state,
         )
 
+    # -- Etage de deliberation (Slice) : agent borne -> quality gate -> routage interne ---------
+    async def _deliberate(
+        self, octx: OrchestrationContext, instance: WorkflowInstance, actor: str
+    ) -> OrchestrationResult | None:
+        """Fait deliberer l'agent sous bornes et traduit le verdict. Ne decide jamais.
+
+        Retourne un resultat TERMINAL (workflow suspendu, validation CEO) sur escalade
+        (garde-fou economique) ou renvoi (Quality Gate) ; retourne None si la recommandation
+        est validee et que le pipeline doit poursuivre vers le Policy Engine.
+        """
+        assert self._xc.deliberation is not None
+        request = octx.request_context.request
+        self._lc.advance(octx, LifecycleState.DELIBERATION)
+        verdict = self._xc.deliberation.deliberate(request)
+
+        # Chaque appel LLM est comptabilise ET audite (ADR-0009 : economie comptabilisee).
+        await self._emit(
+            octx,
+            EventType.AGENT_INVOKED,
+            actor="agent:slice-agent",
+            payload=_consumption_payload(verdict.consumption, verdict.guardrail),
+        )
+        self._lc.advance(octx, LifecycleState.QUALITY_GATE)
+
+        # Garde-fou economique : SUSPENSION + escalade auditee (ADR-0009, A3), aucune decision.
+        if verdict.kind == DeliberationKind.ESCALATE:
+            self._wf.pause_for_ceo(
+                instance, reason=f"garde-fou economique: {verdict.guardrail}", actor=actor
+            )
+            await self._emit(
+                octx,
+                EventType.ESCALATION_RAISED,
+                actor=actor,
+                payload={"guardrail": verdict.guardrail, "reason": verdict.reason},
+            )
+            return self._result(
+                octx,
+                OrchestrationStatus.AWAITING_CEO_VALIDATION,
+                validation_mode=None,
+                interrupted=True,
+                reason=f"escalade garde-fou economique ({verdict.guardrail}) : validation CEO",
+                workflow_state=instance.state,
+            )
+
+        # Rejet du Quality Gate : renvoi en deliberation, aucune decision sur une reco non valable.
+        if verdict.kind == DeliberationKind.RETURN_TO_DELIBERATION:
+            octx.quality_gate_passed = False
+            failures = verdict.quality_gate.failures if verdict.quality_gate is not None else []
+            await self._emit(
+                octx,
+                EventType.QUALITY_GATE_FAILED,
+                actor=actor,
+                payload={"guardrail": verdict.guardrail, "failures": list(failures)},
+            )
+            self._wf.pause_for_ceo(
+                instance, reason="quality gate : recommandation rejetee", actor=actor
+            )
+            return self._result(
+                octx,
+                OrchestrationStatus.AWAITING_CEO_VALIDATION,
+                validation_mode=None,
+                interrupted=True,
+                reason="quality gate rejette (renvoi en deliberation) : validation CEO",
+                workflow_state=instance.state,
+            )
+
+        # PROCEED : recommandation validee ; le pipeline poursuit vers le Policy Engine.
+        recommendation = verdict.recommendation
+        octx.recommendation_id = recommendation.id if recommendation is not None else None
+        octx.quality_gate_passed = True
+        score = verdict.quality_gate.score if verdict.quality_gate is not None else None
+        await self._emit(
+            octx,
+            EventType.QUALITY_GATE_PASSED,
+            actor=actor,
+            payload={"recommendation_id": octx.recommendation_id, "score": score},
+        )
+        return None
+
     # -- Emission d'un evenement : publier au bus PUIS auditer (jamais l'un sans l'autre) ------
     async def _emit(
         self,
@@ -225,4 +332,6 @@ class ComponentCoordinator:
             interrupted=interrupted,
             reason=reason,
             workflow_state=workflow_state,
+            recommendation_id=octx.recommendation_id,
+            quality_gate_passed=octx.quality_gate_passed,
         )
