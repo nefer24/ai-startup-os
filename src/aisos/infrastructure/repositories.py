@@ -17,6 +17,7 @@ from collections.abc import Sequence
 
 from aisos.domain.enums import PolicyStatus
 from aisos.infrastructure.memory_backend import Changeset, InMemoryDatabase
+from aisos.llm import LLMInteractionRecord
 from aisos.schemas.audit import AuditRecord
 from aisos.schemas.entities import PreapprovedPolicy, Request
 from aisos.schemas.memory import MemoryRecord
@@ -135,6 +136,37 @@ class InMemoryAuditStore:
     async def list(self, *, limit: int = 50, offset: int = 0) -> Sequence[AuditRecord]:
         items = [*self._db.audit, *self._cs.audit]
         return items[offset : offset + limit]
+
+
+class InMemoryDatabaseLLMInteractionStore:
+    """Store `LLMInteractionStore` adosse au magasin COMMITE `db.llm_interactions` (ADR-0010).
+
+    APPEND-ONLY, indexe par `prompt_hash`, ecriture DIRECTE (hors transaction) : une interaction
+    enregistree au moment de l'appel LLM reel **survit a un rollback** d'orchestration ; le rejeu
+    apres crash fonctionne donc. Distinct de l'audit (qui est transactionnel) — aucune
+    duplication : ce store ne porte que des interactions LLM, l'audit ne porte que des evenements.
+    """
+
+    def __init__(self, db: InMemoryDatabase) -> None:
+        self._db = db
+
+    def append(self, record: LLMInteractionRecord) -> LLMInteractionRecord:
+        existing = self._db.llm_interactions.get(record.prompt_hash)
+        if existing is not None:
+            return existing  # append-only : jamais d'ecrasement
+        self._db.llm_interactions[record.prompt_hash] = record
+        return record
+
+    def get(self, prompt_hash_value: str) -> LLMInteractionRecord | None:
+        return self._db.llm_interactions.get(prompt_hash_value)
+
+    def __len__(self) -> int:
+        return len(self._db.llm_interactions)
+
+    @property
+    def records(self) -> tuple[LLMInteractionRecord, ...]:
+        """Copie en lecture seule des interactions enregistrees."""
+        return tuple(self._db.llm_interactions.values())
 
 
 class CommittedAuditStore:

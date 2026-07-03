@@ -13,6 +13,7 @@ from aisos.infrastructure.memory_backend import Changeset, InMemoryDatabase
 from aisos.infrastructure.repositories import (
     CommittedAuditStore,
     InMemoryAuditStore,
+    InMemoryDatabaseLLMInteractionStore,
     InMemoryMemoryStore,
     InMemoryPolicyRepository,
     InMemoryRequestRepository,
@@ -26,6 +27,7 @@ __all__ = [
     "InMemoryAuditStore",
     "InMemoryCheckpointStore",
     "InMemoryDatabase",
+    "InMemoryDatabaseLLMInteractionStore",
     "InMemoryMemoryStore",
     "InMemoryPolicyRepository",
     "InMemoryRequestRepository",
