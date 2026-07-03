@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from aisos.events.envelope import EventEnvelope
+from aisos.repositories.interfaces import AuditStore
 from aisos.schemas.audit import AuditRecord
 from aisos.schemas.base import AISOSModel
 
@@ -27,9 +28,16 @@ class ChainIntegrity(AISOSModel):
 
 
 class AuditEngine(Protocol):
-    """Journalisation immuable. Noter l'ABSENCE de toute methode update/delete."""
+    """Journalisation immuable. Noter l'ABSENCE de toute methode update/delete.
 
-    async def append(self, event: EventEnvelope) -> AuditRecord: ...
+    Le moteur SCELLE (seq/prev/hash) et delegue le STOCKAGE a un unique `AuditStore` : le `store`
+    optionnel cible le journal transactionnel de l'orchestration courante (une seule ecriture),
+    sinon le ledger par defaut du moteur. Aucun composant n'ecrit deux preuves independantes.
+    """
+
+    async def append(
+        self, event: EventEnvelope, *, store: AuditStore | None = None
+    ) -> AuditRecord: ...
 
     async def get(self, audit_id: str) -> AuditRecord | None: ...
 

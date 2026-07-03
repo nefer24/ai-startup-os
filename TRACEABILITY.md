@@ -650,3 +650,38 @@ Stabilisation du **contrat d'accès aux modèles de langage** (ADR-0010) **avant
 Le module respecte l'inversion de dépendance (aucun import d'infrastructure) et **ne modifie aucune gouvernance**. La Vertical Slice (F1–F10) et les **320 tests** antérieurs restent verts après migration. Uniquement le contrat + le record/replay déterministe ; aucun fournisseur réel n'est appelé.
 
 **Ratification** : [`ADR-0010`](docs/adr/ADR-0010-determinisme-interactions-llm.md) est **ratifié** (statut `Accepted`, **porte M0-002**, 2026-07-03) et **aligné** sur ce module core — port `LLMProvider`, `LLMRequest`/`LLMResponse`, `ProviderMode` (STUB/RECORD/REPLAY), registre append-only, refus explicites (replay miss / model mismatch / parameter mismatch), garantie « replay never calls model ».
+
+## Audit : source unique de vérité (ADR-0011, dette D1)
+
+Consolidation **ciblée** de l'audit : suppression du **double-write** (`coordinator._emit` écrivait la même preuve dans le journal du moteur **et** dans le store transactionnel — deux preuves qui **divergeaient au rollback**). Désormais **un seul ledger fait foi** : le moteur d'audit **scelle** (seq/prev/hash) puis **délègue le stockage** à un unique `AuditStore` ; en mode persistant, ce store est le **ledger commité partagé** avec l'Unit of Work. Aucun composant n'écrit deux preuves indépendantes ; **divergence engine/store impossible**. Aucune base réelle, aucun SQLAlchemy, aucun réseau, **aucune modification de gouvernance**.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/audit/engine.py` (`InMemoryAuditEngine` refondu, `InMemoryAuditLedger`) | moteur = création/validation/**scellement** ; stockage délégué à **un** `AuditStore` (écriture unique) | [`docs/adr/ADR-0011-audit-source-unique.md`](docs/adr/ADR-0011-audit-source-unique.md) |
+| `aisos/audit/interfaces.py` (`AuditEngine.append(event, *, store=…)`) | le port cible le journal transactionnel courant, ou le ledger par défaut | [`docs/database/07-audit-event-store.md`](docs/database/07-audit-event-store.md) |
+| `aisos/infrastructure/repositories.py` (`CommittedAuditStore`) | vue store du ledger commité `db.audit` — **source unique** partagée avec l'UoW | [`docs/database/07-audit-event-store.md`](docs/database/07-audit-event-store.md) |
+| `aisos/orchestrator/coordinator.py` (`_emit`) | **une seule** écriture d'audit (fin du double-write) ; publication/coordination uniquement | [`docs/runtime/09-audit-workflow.md`](docs/runtime/09-audit-workflow.md) |
+| `tests/governance/test_audit_single_source_governance.py` | preuves de la source unique de vérité | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Invariants prouvés par test
+
+| Invariant | Test |
+| --- | --- |
+| Un événement ⇒ **exactement une** entrée faisant foi | `test_one_event_yields_exactly_one_authoritative_entry` |
+| **Divergence engine/store impossible** (même journal) | `test_engine_and_store_cannot_diverge` |
+| Chaîne hash **vérifiable après persistance** | `test_hash_chain_verifiable_after_persistence` |
+| Rollback ⇒ **aucune preuve contradictoire** | `test_rollback_leaves_no_contradictory_proof` |
+| Audit **append-only** (aucune méthode destructive) | `test_audit_ledger_and_store_are_append_only` |
+| **Aucune décision automatique** | `test_no_automatic_decision_under_single_source_audit` |
+| Vertical Slice **F1–F10** reste verte | `tests/governance/test_vertical_slice_governance.py` (inchangés) |
+
+### Vérification Audit source unique (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 86 source files |
+| `pytest` | ✅ 336 passed (dont 118 `governance`) |
+| Couverture `src/aisos/audit/`, `CommittedAuditStore`, `coordinator._emit` | ✅ 100 % |
+
+La consolidation respecte l'inversion de dépendance (le moteur dépend du **port** `AuditStore`, jamais d'un adaptateur) et **ne modifie aucune gouvernance**. Décision documentée : [`ADR-0011`](docs/adr/ADR-0011-audit-source-unique.md) (statut `Proposé`, implémenté ; ratification **M0-003** recommandée). Refactor **ciblé** ; aucune régression (336 tests verts).

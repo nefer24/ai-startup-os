@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from aisos.audit.engine import (
     InMemoryAuditEngine,
+    InMemoryAuditLedger,
     build_record,
     is_critical_event,
     verify_records,
@@ -25,6 +26,7 @@ __all__ = [
     "AuditEngine",
     "ChainIntegrity",
     "InMemoryAuditEngine",
+    "InMemoryAuditLedger",
     "build_record",
     "canonical_body",
     "compute_hash",
