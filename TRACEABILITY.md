@@ -510,7 +510,7 @@ Décisions appliquées : **ADR-0009** (A1 : `AgentRuntime` = point d'application
 
 | Élément | Rôle | Spécification source |
 | --- | --- | --- |
-| `aisos/slice/llm.py` (`StubLLMProvider`, `LLMProvider`, `LLMMode`, `LLMRequest`, `LLMResponse`) | fournisseur LLM **entièrement simulé** et déterministe (mode stub), sorties nominales et dégénérées | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
+| `aisos/slice/llm.py` (`StubLLMProvider`, `LLMMode`) | fournisseur LLM **entièrement simulé** et déterministe (mode `STUB`), sorties nominales et dégénérées — consomme le port `aisos.llm` | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
 | `aisos/slice/runtime.py` (`AgentRuntime`, `RuntimeReport`, `RuntimeStatus`) | orchestrateur minimal d'un agent stub, **borné** (budget/récursion/timeout) — point d'application unique | [`docs/adr/ADR-0009-gouvernance-economique.md`](docs/adr/ADR-0009-gouvernance-economique.md) |
 | `aisos/slice/quality_gate.py` (`DeterministicQualityGate`, `QualityGate`) | Quality Gate **réel** (remplace le stub, dette D15) : rejette recommandation vide/faible | [`docs/policies/09-quality-gate-policy.md`](docs/policies/09-quality-gate-policy.md) |
 | `aisos/slice/deliberation.py` (`SliceDeliberation`) | étage de délibération : agent → quality gate → **verdict** (proceed/renvoi/escalade), jamais une décision | [`docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md`](docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md) |
@@ -550,7 +550,7 @@ Extension de la Slice **sans nouvelle couche horizontale ni refactor large** : l
 
 | Élément (ajout / extension) | Rôle | Spécification source |
 | --- | --- | --- |
-| `aisos/slice/replay.py` (`LLMInteractionRegistry`, `LLMInteractionRecord`, `RecordingLLMProvider`, `ReplayLLMProvider`, `prompt_hash`) | **record / replay** déterministe des interactions LLM (F9) : le rejeu ne rappelle **jamais** le modèle | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
+| `aisos/slice/replay.py` (`LLMInteractionRegistry`, `RecordingLLMProvider`, `ReplayLLMProvider`, `prompt_hash`) — **migré vers `aisos/llm/`** | **record / replay** déterministe des interactions LLM (F9) : le rejeu ne rappelle **jamais** le modèle | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
 | `aisos/slice/llm.py` (modes `TOOL_DENIED`, `DECIDES` ; champs `requested_tool`, `attempted_decision`) | stub émet un outil hors manifest (F7) et une « décision » d'agent (F8) | [`docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md`](docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md) |
 | `aisos/slice/runtime.py` (`RuntimeStatus.PERMISSION_DENIED`, capture `attempted_decision`) | refuse un outil hors manifest ; observe la « décision » tentée sans jamais la porter dans la recommandation | [`docs/components/02-agent-runtime.md`](docs/components/02-agent-runtime.md) |
 | `aisos/orchestrator/coordinator.py` (choix d'événement `agent.permission_denied`, audit de la décision ignorée) | F7 audité en `agent.permission_denied` ; F8 audite l'issue tentée comme ignorée | [`docs/runtime/09-audit-workflow.md`](docs/runtime/09-audit-workflow.md) |
@@ -611,3 +611,40 @@ Premier jalon de la **cinquième dimension d'évaluation** : mesurer non seuleme
 | Couverture `src/aisos/value/` | ✅ 100 % |
 
 Le cadre respecte la Baseline v1.0, les Phases 8 à 25 et la Vertical Slice. **Aucun LLM réel, aucune API, aucune base réelle, aucun dashboard, aucun framework externe, aucun changement de gouvernance** — uniquement du calcul déterministe de métriques, lu depuis les résultats de la Slice.
+
+## Cœur du port LLMProvider — record / replay déterministe (`src/aisos/llm/`)
+
+Stabilisation du **contrat d'accès aux modèles de langage** (ADR-0010) **avant** tout branchement réel : le port `LLMProvider`, ses objets, les trois modes et le mécanisme d'enregistrement/rejeu sont désormais un **module core**, indépendant de la Vertical Slice. **Aucun fournisseur réel (ni OpenAI, ni Anthropic), aucun réseau, aucune base réelle, aucune modification de gouvernance.** Migration propre : `src/aisos/slice/replay.py` et les objets `LLMRequest`/`LLMResponse`/`LLMProvider` sont **déplacés** dans `aisos.llm` ; la Slice **consomme** ce port sans changer de comportement.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/llm/contracts.py` (`LLMProvider`, `LLMRequest`, `LLMResponse`, `ProviderMode`) | port + objets + modes `STUB`/`RECORD`/`REPLAY` ; `LLMRequest` porte `model` + `parameters` (validés au rejeu) | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
+| `aisos/llm/replay.py` (`prompt_hash`, `LLMInteractionRecord`, `LLMInteractionRegistry`, `RecordingLLMProvider`, `ReplayLLMProvider`) | registre immuable + providers record/replay ; « replay never calls model » **structurel** | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
+| `aisos/llm/errors.py` (`ReplayError`, `ReplayMissError`, `ModelVersionMismatchError`, `ParametersMismatchError`) | refus explicites de rejeu (jamais silencieux) : absence, version de modèle, paramètres | [`docs/contracts/05-error-catalog.md`](docs/contracts/05-error-catalog.md) |
+| `tests/unit/test_llm_provider.py` | tests core du port et du rejeu déterministe | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+
+### Garanties prouvées par test
+
+| Garantie | Test |
+| --- | --- |
+| Hash de prompt **déterministe** (et indépendant du modèle/paramètres) | `test_prompt_hash_is_deterministic` · `test_prompt_hash_independent_of_model_and_params` |
+| Enregistrement **immuable** (append-only) | `test_registry_record_is_append_only` |
+| Rejeu **reproduit exactement** la réponse | `test_replay_reproduces_exact_response` |
+| Rejeu **ne rappelle jamais** le modèle | `test_replay_never_calls_the_model` |
+| Rejeu échoue si **hash absent** | `test_replay_fails_when_prompt_absent` |
+| Rejeu échoue si **version de modèle** incompatible | `test_replay_fails_on_model_version_mismatch` |
+| Rejeu échoue si **paramètres** incompatibles | `test_replay_fails_on_parameters_mismatch` |
+| Mode `STUB` **déterministe** | `test_stub_is_deterministic` |
+| **Aucun** fournisseur réel / réseau | `test_llm_core_uses_no_real_provider_or_network` |
+| **Aucune décision** produite par le port | `test_response_carries_no_decision_field` |
+
+### Vérification Cœur LLM (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 86 source files |
+| `pytest` | ✅ 330 passed (dont 112 `governance`) |
+| Couverture `src/aisos/llm/` | ✅ 100 % |
+
+Le module respecte l'inversion de dépendance (aucun import d'infrastructure) et **ne modifie aucune gouvernance**. La Vertical Slice (F1–F10) et les **320 tests** antérieurs restent verts après migration. Uniquement le contrat + le record/replay déterministe ; aucun fournisseur réel n'est appelé.

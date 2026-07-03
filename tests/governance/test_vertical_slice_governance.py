@@ -34,6 +34,12 @@ from aisos.domain.enums import (
 from aisos.domain.errors import GovernanceViolationError
 from aisos.events import EventEnvelope, EventType, InMemoryEventBus
 from aisos.infrastructure import InMemoryCheckpointStore, InMemoryDatabase, InMemoryUnitOfWork
+from aisos.llm import (
+    LLMInteractionRegistry,
+    LLMProvider,
+    RecordingLLMProvider,
+    ReplayLLMProvider,
+)
 from aisos.memory import InMemoryMemorySystem
 from aisos.orchestrator import (
     CEODecisionInput,
@@ -51,11 +57,7 @@ from aisos.slice import (
     AgentRuntime,
     ConsumptionLedger,
     DeterministicQualityGate,
-    LLMInteractionRegistry,
     LLMMode,
-    LLMProvider,
-    RecordingLLMProvider,
-    ReplayLLMProvider,
     SliceDeliberation,
     StubLLMProvider,
 )

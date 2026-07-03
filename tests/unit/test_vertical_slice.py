@@ -22,6 +22,12 @@ from aisos.domain.errors import (
     WorkflowTimeoutError,
 )
 from aisos.events import EventEnvelope, EventType, InMemoryEventBus
+from aisos.llm import (
+    LLMInteractionRegistry,
+    LLMRequest,
+    LLMResponse,
+    RecordingLLMProvider,
+)
 from aisos.orchestrator.deliberation import ConsumptionRecord, DeliberationKind
 from aisos.schemas.decision import Recommendation
 from aisos.schemas.entities import AgentManifest, Request
@@ -29,16 +35,11 @@ from aisos.slice import (
     AgentRuntime,
     ConsumptionLedger,
     DeterministicQualityGate,
-    LLMInteractionRegistry,
     LLMMode,
-    RecordingLLMProvider,
-    ReplayLLMProvider,
     RuntimeStatus,
     SliceDeliberation,
     StubLLMProvider,
-    prompt_hash,
 )
-from aisos.slice.llm import LLMRequest, LLMResponse
 
 pytestmark = pytest.mark.unit
 
@@ -371,53 +372,6 @@ class _TripwireLLM:
     def complete(self, request: LLMRequest) -> LLMResponse:
         self.calls += 1
         raise AssertionError("le modele ne doit jamais etre rappele en rejeu")
-
-
-def test_prompt_hash_is_deterministic_and_discriminant() -> None:
-    a = LLMRequest(request_id="r", prompt="p", step=0)
-    assert prompt_hash(a) == prompt_hash(LLMRequest(request_id="r", prompt="p", step=0))
-    assert prompt_hash(a) != prompt_hash(LLMRequest(request_id="r", prompt="p", step=1))
-    assert prompt_hash(a) != prompt_hash(LLMRequest(request_id="r2", prompt="p", step=0))
-
-
-def test_recording_provider_records_once_and_is_idempotent() -> None:
-    registry = LLMInteractionRegistry()
-    inner = StubLLMProvider(LLMMode.NOMINAL)
-    recorder = RecordingLLMProvider(inner, registry)
-    req = LLMRequest(request_id="r", prompt="p")
-    first = recorder.complete(req)
-    assert len(registry) == 1
-    # Deuxieme appel : la reponse enregistree est renvoyee (append-only, jamais ecrasee).
-    second = recorder.complete(req)
-    assert second == first
-    assert len(registry) == 1
-
-
-def test_registry_record_is_append_only() -> None:
-    # Enregistrer deux fois le meme prompt ne l'ecrase jamais (immuabilite du rejeu, ADR-0010).
-    registry = LLMInteractionRegistry()
-    req = LLMRequest(request_id="r", prompt="p")
-    first = registry.record(req, LLMResponse(content="v1", model="m"))
-    again = registry.record(req, LLMResponse(content="v2", model="m"))
-    assert again is first
-    assert len(registry) == 1
-    assert registry.records[0].response.content == "v1"
-
-
-def test_replay_returns_exact_recorded_output() -> None:
-    registry = LLMInteractionRegistry()
-    RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), registry).complete(
-        LLMRequest(request_id="r", prompt="p")
-    )
-    replayer = ReplayLLMProvider(registry)
-    replayed = replayer.complete(LLMRequest(request_id="r", prompt="p"))
-    assert replayed == registry.records[0].response
-
-
-def test_replay_refuses_unknown_prompt_no_blind_call() -> None:
-    replayer = ReplayLLMProvider(LLMInteractionRegistry())
-    with pytest.raises(LLMUnavailableError):
-        replayer.complete(LLMRequest(request_id="absent", prompt="p"))
 
 
 def test_resume_replays_without_recalling_the_model() -> None:
