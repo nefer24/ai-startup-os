@@ -87,8 +87,74 @@ async def test_council_calls_two_agents() -> None:
         AgentRuntime(risk_provider, perspective="risk/governance"),
     )
     await council.deliberate(_task())
-    assert value_provider.calls == 1
-    assert risk_provider.calls == 1
+    # Debat a deux tours : chaque agent est appele une fois par tour (tour 1 + tour 2).
+    assert value_provider.calls == 2
+    assert risk_provider.calls == 2
+
+
+# --- Debat a deux tours : chaque agent voit l'avis de l'autre au tour 2 -----------------------
+
+
+class _RecordingPromptProvider:
+    """Fournisseur deterministe capturant les prompts recus (pour observer les deux tours)."""
+
+    mode = StubLLMProvider().mode
+
+    def __init__(self, options: list[str]) -> None:
+        self.prompts: list[str] = []
+        self._options = options
+
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        self.prompts.append(request.prompt)
+        return LLMResponse(content="avis", options=self._options, arguments=["a1"])
+
+
+async def test_two_turns_each_agent_called_twice_and_sees_peer_at_turn_two() -> None:
+    value_provider = _RecordingPromptProvider(["option A", "option B"])
+    risk_provider = _RecordingPromptProvider(["option A"])
+    council = ExpertCouncil(
+        AgentRuntime(value_provider, perspective="value/product"),
+        AgentRuntime(risk_provider, perspective="risk/governance"),
+    )
+    await council.deliberate(_task())
+
+    # Tour 1 + tour 2 => deux appels par agent.
+    assert len(value_provider.prompts) == 2
+    assert len(risk_provider.prompts) == 2
+    # Tour 1 : aucun avis de pair. Tour 2 : l'avis de l'autre est present.
+    assert "Avis du pair" not in value_provider.prompts[0]
+    assert "Avis du pair" not in risk_provider.prompts[0]
+    assert "Avis du pair" in value_provider.prompts[1]
+    assert "Avis du pair" in risk_provider.prompts[1]
+    # L'agent value voit les options du risk (option A) et reciproquement (option B).
+    assert "option A" in value_provider.prompts[1]
+    assert "option B" in risk_provider.prompts[1]
+
+
+async def test_final_synthesis_is_built_from_revised_opinions() -> None:
+    # Fournisseur qui REVISE : options differentes au tour 2 (quand un avis de pair est present).
+    class _RevisingProvider:
+        mode = StubLLMProvider().mode
+
+        def __init__(self, initial: list[str], revised: list[str]) -> None:
+            self._initial = initial
+            self._revised = revised
+
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            options = self._revised if "Avis du pair" in request.prompt else self._initial
+            return LLMResponse(content="avis", options=options, arguments=["a1"])
+
+    value_prov = _RevisingProvider(["option X"], ["option A", "option B"])
+    council = ExpertCouncil(
+        AgentRuntime(value_prov, perspective="value"),
+        AgentRuntime(_RevisingProvider(["option Y"], ["option A"]), perspective="risk"),
+    )
+    outcome = await council.deliberate(_task())
+    # La synthese reflete les avis REVISES (tour 2), pas les avis initiaux (tour 1).
+    assert set(outcome.synthesis.recommendation.options_considered) == {"option A", "option B"}
+    assert "option X" not in outcome.synthesis.recommendation.options_considered
+    assert outcome.synthesis.agreements == ("option A",)
+    assert outcome.synthesis.disagreements == ("option B",)
 
 
 # --- Une synthese unique avec accord / desaccord et sources -----------------------------------
@@ -215,16 +281,13 @@ async def test_replay_never_calls_the_providers() -> None:
 
     value_stub = _CountingStub(["A", "B"])
     risk_stub = _CountingStub(["A"])
-    ExpertCouncil(
-        AgentRuntime(RecordingLLMProvider(inner=value_stub, store=store), perspective="value"),
-        AgentRuntime(RecordingLLMProvider(inner=risk_stub, store=store), perspective="risk"),
-    )
     await ExpertCouncil(
         AgentRuntime(RecordingLLMProvider(inner=value_stub, store=store), perspective="value"),
         AgentRuntime(RecordingLLMProvider(inner=risk_stub, store=store), perspective="risk"),
     ).deliberate(_task())
-    assert value_stub.calls == 1
-    assert risk_stub.calls == 1
+    # Deux tours : chaque fournisseur est appele deux fois a l'enregistrement (tour 1 + tour 2).
+    assert value_stub.calls == 2
+    assert risk_stub.calls == 2
 
     replay_council = ExpertCouncil(
         AgentRuntime(ReplayLLMProvider(store), perspective="value"),
@@ -232,8 +295,8 @@ async def test_replay_never_calls_the_providers() -> None:
     )
     for _ in range(3):
         await replay_council.deliberate(_task())
-    assert value_stub.calls == 1
-    assert risk_stub.calls == 1
+    assert value_stub.calls == 2  # le rejeu ne rappelle jamais les fournisseurs
+    assert risk_stub.calls == 2
 
 
 # --- Aucun reseau / SDK -----------------------------------------------------------------------

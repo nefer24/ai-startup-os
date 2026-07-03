@@ -81,9 +81,13 @@ class AgentRuntime:
         #: Angle de deliberation (ex. « value/product », « risk/governance »). Vide = generique.
         self._perspective = perspective
 
-    def deliberate(self, task: AgentTask) -> AgentRecommendation:
-        """Produit une recommandation argumentee pour `task`. Recommande, ne decide jamais."""
-        request = self._build_request(task)
+    def deliberate(self, task: AgentTask, *, peer_summary: str = "") -> AgentRecommendation:
+        """Produit une recommandation pour `task`. Recommande, ne decide jamais.
+
+        `peer_summary` (optionnel) porte l'avis structure d'un autre agent : fourni, il est integre
+        a la requete (tour 2 d'un debat) et l'agent peut alors maintenir ou reviser sa position.
+        """
+        request = self._build_request(task, peer_summary)
         try:
             response = self._provider.complete(request)
         except AISOSError as exc:
@@ -93,15 +97,17 @@ class AgentRuntime:
             ) from exc
         return self._to_recommendation(task, response)
 
-    def _build_request(self, task: AgentTask) -> LLMRequest:
-        """Construit une requete gouvernee a partir de l'objectif et du contexte (aucun secret)."""
+    def _build_request(self, task: AgentTask, peer_summary: str = "") -> LLMRequest:
+        """Construit une requete gouvernee (objectif, contexte, avis du pair). Aucun secret."""
         context_block = "\n".join(f"- {note}" for note in task.context) or "- (aucun contexte)"
         angle = f"Angle : {self._perspective}\n" if self._perspective else ""
+        peer_block = f"Avis du pair (autre expert) :\n{peer_summary}\n" if peer_summary else ""
         prompt = (
             "Tu es un agent qui RECOMMANDE, tu ne decides jamais.\n"
             f"{angle}"
             f"Objectif : {task.objective}\n"
             f"Contexte :\n{context_block}\n"
+            f"{peer_block}"
             "Reponds par des options, des arguments et le principal risque."
         )
         return LLMRequest(
