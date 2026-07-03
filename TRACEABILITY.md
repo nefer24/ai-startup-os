@@ -543,3 +543,24 @@ Décisions appliquées : **ADR-0009** (A1 : `AgentRuntime` = point d'application
 | Couverture `src/aisos/slice/` + `src/aisos/orchestrator/deliberation.py` | ✅ 100 % |
 
 La Vertical Slice respecte la Baseline v1.0 et les Phases 8 à 25, ainsi que les ADR-0009/0010 ratifiés/instruits. Elle est **opt-in** (l'`ExecutionContext` reçoit un port de délibération optionnel) : sans elle, le comportement des Phases 19–25 est inchangé — les 247 tests antérieurs restent verts. Aucun LLM réel, aucun réseau, aucune base réelle, aucun framework d'orchestration, aucune décision automatique.
+
+### Vertical Slice adverse — phase 2 (scénarios F7 à F10)
+
+Extension de la Slice **sans nouvelle couche horizontale ni refactor large** : les quatre derniers scénarios adverses du plan de consolidation. La sécurité (manifest least privilege), l'invariant « un agent ne décide jamais », le **déterminisme du rejeu LLM** (ADR-0010) et « seul le CEO reprend » sont désormais éprouvés sous conditions adverses.
+
+| Élément (ajout / extension) | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/slice/replay.py` (`LLMInteractionRegistry`, `LLMInteractionRecord`, `RecordingLLMProvider`, `ReplayLLMProvider`, `prompt_hash`) | **record / replay** déterministe des interactions LLM (F9) : le rejeu ne rappelle **jamais** le modèle | [`docs/adr/ADR-0010-determinisme-interactions-llm.md`](docs/adr/ADR-0010-determinisme-interactions-llm.md) |
+| `aisos/slice/llm.py` (modes `TOOL_DENIED`, `DECIDES` ; champs `requested_tool`, `attempted_decision`) | stub émet un outil hors manifest (F7) et une « décision » d'agent (F8) | [`docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md`](docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md) |
+| `aisos/slice/runtime.py` (`RuntimeStatus.PERMISSION_DENIED`, capture `attempted_decision`) | refuse un outil hors manifest ; observe la « décision » tentée sans jamais la porter dans la recommandation | [`docs/components/02-agent-runtime.md`](docs/components/02-agent-runtime.md) |
+| `aisos/orchestrator/coordinator.py` (choix d'événement `agent.permission_denied`, audit de la décision ignorée) | F7 audité en `agent.permission_denied` ; F8 audite l'issue tentée comme ignorée | [`docs/runtime/09-audit-workflow.md`](docs/runtime/09-audit-workflow.md) |
+
+| # | Comportement dégénéré injecté | Garde-fou attendu | Test |
+| --- | --- | --- | --- |
+| F7 | action (outil) hors manifest | refus + `agent.permission_denied` audité ; aucune exécution dangereuse | `test_f7_tool_outside_manifest_is_denied_and_audited` |
+| F8 | agent tente de décider | issue **ignorée** (aucun champ de décision dans la reco) ; seul le CEO décide | `test_f8_agent_decision_is_ignored_only_ceo_decides` |
+| F9 | crash après appel LLM + reprise | appel LLM enregistré ; reprise **ne rappelle pas** le modèle ; rejeu **exact** ; audit cohérent | `test_f9_crash_after_llm_then_replay_without_recall` |
+| F10 | non-CEO tente de reprendre | `GovernanceViolationError` ; workflow reste suspendu | `test_f10_non_ceo_cannot_resume_suspended_flow` |
+| — | couverture complète | les 10 scénarios F1–F10 disposent d'un test | `test_all_ten_adverse_scenarios_are_covered` |
+
+**Vérification phase 2 (exécutée, Python 3.12)** : `ruff check` + `ruff format --check` ✅ · `mypy` strict ✅ (80 fichiers) · `pytest` ✅ **301 passed** (dont **109** `governance`) · couverture **100 %** sur `src/aisos/slice/` et `src/aisos/orchestrator/deliberation.py`. Non-régression : les scénarios **F1–F6** et les **284 tests** antérieurs restent verts. Contraintes respectées : aucun LLM réel, aucun FastAPI, aucun LangGraph, aucun PostgreSQL/Redis/RabbitMQ, aucun nouveau framework, aucun refactor large.

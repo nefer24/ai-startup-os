@@ -59,6 +59,7 @@ class SliceDeliberation:
                 recommendation=annotated,
                 quality_gate=verdict,
                 reason="recommandation validee par le quality gate",
+                attempted_decision=report.attempted_decision,  # consignee puis ignoree (F8)
             )
 
         # Rejet du Quality Gate : renvoi en deliberation, aucune decision sur une reco non valable.

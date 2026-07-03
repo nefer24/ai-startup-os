@@ -25,6 +25,7 @@ from enum import StrEnum
 
 from aisos.domain.errors import (
     AgentBudgetExceededError,
+    AgentPermissionDeniedError,
     LLMUnavailableError,
     WorkflowRecursionLimitError,
     WorkflowTimeoutError,
@@ -45,6 +46,7 @@ class RuntimeStatus(StrEnum):
     BUDGET_EXCEEDED = "budget_exceeded"
     RECURSION_LIMIT = "recursion_limit"
     UNAVAILABLE = "llm_unavailable"
+    PERMISSION_DENIED = "permission_denied"
 
 
 #: Correspondance issue de garde-fou -> type d'erreur du domaine (DT-09 : enfin appliques).
@@ -53,6 +55,7 @@ _STATUS_ERROR: dict[RuntimeStatus, type[Exception]] = {
     RuntimeStatus.BUDGET_EXCEEDED: AgentBudgetExceededError,
     RuntimeStatus.RECURSION_LIMIT: WorkflowRecursionLimitError,
     RuntimeStatus.UNAVAILABLE: LLMUnavailableError,
+    RuntimeStatus.PERMISSION_DENIED: AgentPermissionDeniedError,
 }
 
 
@@ -67,6 +70,8 @@ class RuntimeReport(ImmutableModel):
     consumption: ConsumptionRecord
     recommendation: Recommendation | None = None
     detail: str = ""
+    #: "Decision" que l'agent a tente de produire (F8), observee puis IGNOREE. Jamais dans la reco.
+    attempted_decision: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -168,6 +173,17 @@ class AgentRuntime:
                     ),
                 )
 
+            # Manifest least privilege (F7) : un outil non declare est REFUSE, avant tout usage.
+            tool = response.requested_tool
+            if tool is not None and not self._enforcer.allows_tool(self._manifest, tool):
+                return RuntimeReport(
+                    status=RuntimeStatus.PERMISSION_DENIED,
+                    consumption=self._consumption(
+                        model, tokens_in, tokens_out, cost_eur, latency_ms, calls
+                    ),
+                    detail=f"outil hors manifest refuse : {tool}",
+                )
+
             last = response
             if not response.wants_more:
                 break
@@ -183,6 +199,8 @@ class AgentRuntime:
                     detail=f"recursion {depth} > borne {self._max_recursion_depth}",
                 )
 
+        # La recommandation ne porte JAMAIS de decision : `attempted_decision` reste hors du schema
+        # (un agent recommande, il ne decide pas). On l'expose seulement pour audit (F8).
         recommendation = Recommendation(
             id=f"rec-{request.id}",
             request_id=request.id,
@@ -197,6 +215,7 @@ class AgentRuntime:
             ),
             recommendation=recommendation,
             detail="execution dans les bornes",
+            attempted_decision=last.attempted_decision,
         )
 
     @staticmethod
