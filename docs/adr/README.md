@@ -27,7 +27,7 @@ outre fait émerger deux décisions nouvelles, **DT-09** et **DT-10**, rédigée
 | ADR | Titre | Origine | Statut |
 | --- | --- | --- | --- |
 | [ADR-0009](ADR-0009-gouvernance-economique.md) | Gouvernance économique (budgets, coûts, récursion, timeouts, quotas) | DT-09 (Revue n°2) | **Accepted** (ratifié M0-001, 2026-07-02) |
-| [ADR-0010](ADR-0010-determinisme-interactions-llm.md) | Déterminisme des interactions avec les LLM (hash, versionnement, replay, cache) | DT-10 (Revue n°2) | **Proposé** |
+| [ADR-0010](ADR-0010-determinisme-interactions-llm.md) | Déterminisme des interactions avec les LLM (hash, versionnement, replay, cache) | DT-10 (Revue n°2) | **Accepted** (ratifié M0-002, 2026-07-03) |
 | [ADR-BACKLOG](ADR-BACKLOG.md) | ADR proposés à instruire (ratification DT-01→08 + 5 décisions issues des revues) | Revues n°1 & n°2 | Backlog priorisé |
 
 ## Lien avec le dossier de consolidation
