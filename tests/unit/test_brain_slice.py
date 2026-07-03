@@ -203,8 +203,13 @@ def test_no_network_or_sdk_imports() -> None:
                 assert forbidden not in module, f"{path.name} importe {module}"
 
 
-def test_no_drift_toward_infrastructure_or_multi_agent() -> None:
+def test_agents_never_import_infrastructure() -> None:
     for path in Path(aisos.agents.__file__).resolve().parent.glob("*.py"):
         text = path.read_text(encoding="utf-8")
         assert "infrastructure" not in text, f"{path.name} reference l'infrastructure"
-        assert "Council" not in text, f"{path.name} introduit un Conseil (multi-agent)"
+
+
+def test_brain_slice_stays_single_agent() -> None:
+    # La BrainSlice elle-meme reste mono-agent : la deliberation multi-agents releve du Conseil.
+    text = (Path(aisos.agents.__file__).resolve().parent / "brain_slice.py").read_text("utf-8")
+    assert "Council" not in text, "brain_slice.py ne doit pas embarquer de Conseil (multi-agent)"

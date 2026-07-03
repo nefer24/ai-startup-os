@@ -17,15 +17,11 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Callable
 
+from aisos.agents.governed_pause import seal_ceo_pause, utc_now
 from aisos.agents.runtime import AgentRecommendation, AgentRuntime, AgentTask
 from aisos.audit.interfaces import AuditEngine
 from aisos.domain.enums import DecisionState
-from aisos.events import EventEnvelope, EventType
 from aisos.schemas.base import ImmutableModel
-
-
-def _utc_now() -> dt.datetime:
-    return dt.datetime.now(dt.UTC)
 
 
 class BrainDeliberationOutcome(ImmutableModel):
@@ -59,7 +55,7 @@ class BrainSlice:
         agent: AgentRuntime,
         *,
         audit_engine: AuditEngine | None = None,
-        clock: Callable[[], dt.datetime] = _utc_now,
+        clock: Callable[[], dt.datetime] = utc_now,
     ) -> None:
         self._agent = agent
         self._audit = audit_engine
@@ -68,29 +64,11 @@ class BrainSlice:
     async def deliberate(self, task: AgentTask) -> BrainDeliberationOutcome:
         """Delibere via l'`AgentRuntime` puis transmet la recommandation a une pause CEO tracee."""
         recommendation = self._agent.deliberate(task)
-        audit_id: str | None = None
-        event_type: str | None = None
-        if self._audit is not None:
-            record = await self._audit.append(self._pending_envelope(task, recommendation))
-            audit_id = record.id
-            event_type = str(EventType.DECISION_PENDING)
-        return BrainDeliberationOutcome(
-            task_id=task.id,
-            request_id=task.request_id,
-            recommendation=recommendation,
-            audit_id=audit_id,
-            audit_event_type=event_type,
-        )
-
-    def _pending_envelope(
-        self, task: AgentTask, recommendation: AgentRecommendation
-    ) -> EventEnvelope:
-        """Evenement `decision.pending` : trace exploitable de la pause CEO (aucune decision)."""
-        return EventEnvelope(
+        audit_id, event_type = await seal_ceo_pause(
+            self._audit,
             event_id=f"evt-decision-pending-{task.id}",
-            type=str(EventType.DECISION_PENDING),
-            occurred_at=self._clock(),
             request_id=task.request_id,
+            occurred_at=self._clock(),
             actor="svc:brain_slice",
             payload={
                 "recommendation_id": recommendation.recommendation.id,
@@ -99,4 +77,11 @@ class BrainSlice:
                 "options_count": len(recommendation.recommendation.options_considered),
                 "state": DecisionState.EN_ATTENTE.value,
             },
+        )
+        return BrainDeliberationOutcome(
+            task_id=task.id,
+            request_id=task.request_id,
+            recommendation=recommendation,
+            audit_id=audit_id,
+            audit_event_type=event_type,
         )

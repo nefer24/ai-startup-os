@@ -73,10 +73,13 @@ class AgentRuntime:
         *,
         model: str = "stub-llm-1",
         parameters: Mapping[str, object] | None = None,
+        perspective: str = "",
     ) -> None:
         self._provider = provider
         self._model = model
         self._parameters: dict[str, object] = dict(parameters or {})
+        #: Angle de deliberation (ex. « value/product », « risk/governance »). Vide = generique.
+        self._perspective = perspective
 
     def deliberate(self, task: AgentTask) -> AgentRecommendation:
         """Produit une recommandation argumentee pour `task`. Recommande, ne decide jamais."""
@@ -93,8 +96,10 @@ class AgentRuntime:
     def _build_request(self, task: AgentTask) -> LLMRequest:
         """Construit une requete gouvernee a partir de l'objectif et du contexte (aucun secret)."""
         context_block = "\n".join(f"- {note}" for note in task.context) or "- (aucun contexte)"
+        angle = f"Angle : {self._perspective}\n" if self._perspective else ""
         prompt = (
             "Tu es un agent qui RECOMMANDE, tu ne decides jamais.\n"
+            f"{angle}"
             f"Objectif : {task.objective}\n"
             f"Contexte :\n{context_block}\n"
             "Reponds par des options, des arguments et le principal risque."
@@ -108,8 +113,11 @@ class AgentRuntime:
 
     def _to_recommendation(self, task: AgentTask, response: LLMResponse) -> AgentRecommendation:
         """Transforme une reponse LLM en recommandation gouvernee (jamais une decision)."""
+        rec_id = f"rec-{task.id}"
+        if self._perspective:
+            rec_id = f"{rec_id}-{self._perspective.replace('/', '-').replace(' ', '-')}"
         recommendation = Recommendation(
-            id=f"rec-{task.id}",
+            id=rec_id,
             request_id=task.request_id,
             options_considered=list(response.options),
             arguments=list(response.arguments),
