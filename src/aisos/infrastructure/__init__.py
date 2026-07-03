@@ -11,6 +11,7 @@ from __future__ import annotations
 from aisos.infrastructure.checkpoint import InMemoryCheckpointStore
 from aisos.infrastructure.memory_backend import Changeset, InMemoryDatabase
 from aisos.infrastructure.repositories import (
+    CommittedAuditStore,
     InMemoryAuditStore,
     InMemoryMemoryStore,
     InMemoryPolicyRepository,
@@ -21,6 +22,7 @@ from aisos.infrastructure.unit_of_work import InMemoryUnitOfWork
 
 __all__ = [
     "Changeset",
+    "CommittedAuditStore",
     "InMemoryAuditStore",
     "InMemoryCheckpointStore",
     "InMemoryDatabase",

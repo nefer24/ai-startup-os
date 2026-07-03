@@ -28,7 +28,12 @@ from aisos.domain.enums import ActorType
 from aisos.domain.errors import GovernanceViolationError
 from aisos.events.envelope import EventEnvelope
 from aisos.events.types import CEO_ONLY_EVENTS, EventType
+from aisos.repositories.interfaces import AuditStore
 from aisos.schemas.audit import Actor, AuditRecord, AuditTarget
+
+#: Lecture du journal complet (en memoire) pour sceller/verifier la chaine. Un adaptateur reel
+#: scellerait via `max(seq)` plutot que de tout relire ; ici le journal est petit et deterministe.
+_ALL_RECORDS = 1_000_000_000
 
 
 def is_critical_event(event_type: str) -> bool:
@@ -121,26 +126,62 @@ def _actor_from_envelope(event: EventEnvelope) -> Actor:
     return Actor(type=ActorType.SERVICE, id=raw)
 
 
-class InMemoryAuditEngine:
-    """Implementation en memoire de l'Audit Engine (docs/components/08).
+class InMemoryAuditLedger:
+    """Journal d'audit en memoire (implemente le port `AuditStore`).
 
-    Append-only : seule `append` mute l'etat ; aucune methode de modification/suppression.
-    Coeur deterministe pour les tests et l'integration future ; la persistance reelle
-    (PostgreSQL, docs/database/07) sera un adaptateur ulterieur, non present ici.
+    C'est LA source unique de verite quand aucune persistance transactionnelle n'est cablee.
+    APPEND-ONLY strict : seule `append` mute l'etat ; aucune methode update/delete n'existe.
     """
 
     def __init__(self) -> None:
-        self._log: list[AuditRecord] = []
+        self._records: list[AuditRecord] = []
 
-    async def append(self, event: EventEnvelope) -> AuditRecord:
-        seq = len(self._log) + 1
-        prev = self._log[-1].hash if self._log else GENESIS_PREV_HASH
-        actor = _actor_from_envelope(event)
+    async def append(self, record: AuditRecord) -> AuditRecord:
+        self._records.append(record)
+        return record
+
+    async def get(self, audit_id: str) -> AuditRecord | None:
+        return next((r for r in self._records if r.id == audit_id), None)
+
+    async def list(self, *, limit: int = 50, offset: int = 0) -> Sequence[AuditRecord]:
+        return self._records[offset : offset + limit]
+
+    def snapshot(self) -> tuple[AuditRecord, ...]:
+        """Copie en lecture seule du journal (pour verification/inspection)."""
+        return tuple(self._records)
+
+
+class InMemoryAuditEngine:
+    """Audit Engine (docs/components/08) : cree, valide et SCELLE les enregistrements.
+
+    Le STOCKAGE est delegue a un unique `AuditStore` — la **source de verite**. Le moteur
+    n'ecrit jamais de seconde copie : `append` scelle puis ajoute au ledger vise (le store passe
+    par l'appelant, ou le store par defaut). Un evenement produit ainsi **exactement une** entree
+    d'audit faisant foi. Append-only : aucune methode de modification/suppression.
+
+    Par defaut (aucune persistance), le ledger est un `InMemoryAuditLedger`. En mode persistant,
+    le composant racine injecte un store adosse au ledger commite (source unique partagee avec
+    l'Unit of Work) : moteur et stockage lisent alors le meme journal — aucune divergence possible.
+    """
+
+    def __init__(self, store: AuditStore | None = None) -> None:
+        self._store: AuditStore = store if store is not None else InMemoryAuditLedger()
+
+    async def append(self, event: EventEnvelope, *, store: AuditStore | None = None) -> AuditRecord:
+        """Scelle un enregistrement (seq/prev/hash) puis l'ajoute a UN SEUL ledger.
+
+        `store` cible le journal transactionnel de l'orchestration courante quand il est fourni
+        (une seule ecriture, rejouable au rollback) ; sinon le ledger par defaut du moteur.
+        """
+        target = store if store is not None else self._store
+        chain = list(await target.list(limit=_ALL_RECORDS))
+        seq = len(chain) + 1
+        prev = chain[-1].hash if chain else GENESIS_PREV_HASH
         record = build_record(
             seq=seq,
             prev_hash=prev,
             event_type=event.type,
-            actor=actor,
+            actor=_actor_from_envelope(event),
             action=event.type,
             occurred_at=event.occurred_at,
             record_id=event.event_id,
@@ -149,26 +190,28 @@ class InMemoryAuditEngine:
             correlation_id=event.correlation_id,
             schema_version=event.schema_version,
         )
-        self._log.append(record)
+        await target.append(record)
         return record
 
     async def get(self, audit_id: str) -> AuditRecord | None:
-        return next((r for r in self._log if r.id == audit_id), None)
+        return await self._store.get(audit_id)
 
     async def read(
         self, *, request_id: str | None = None, limit: int = 50
     ) -> Sequence[AuditRecord]:
-        items = [r for r in self._log if request_id is None or r.request_id == request_id]
+        records = await self._store.list(limit=_ALL_RECORDS)
+        items = [r for r in records if request_id is None or r.request_id == request_id]
         return items[:limit]
 
     async def verify_chain(
         self, *, start_seq: int = 0, end_seq: int | None = None
     ) -> ChainIntegrity:
-        # L'integrite de la chaine est globale : on verifie l'ensemble du journal.
+        # L'integrite de la chaine est globale : on verifie l'ensemble du journal (source unique).
         # start_seq/end_seq restreignent uniquement la fenetre rapportee.
         _ = (start_seq, end_seq)
-        return verify_records(self._log)
+        return verify_records(list(await self._store.list(limit=_ALL_RECORDS)))
 
     def snapshot(self) -> tuple[AuditRecord, ...]:
-        """Copie en lecture seule du journal (pour verification/inspection)."""
-        return tuple(self._log)
+        """Copie en lecture seule du ledger par defaut (inspection ; mode sans store externe)."""
+        store = self._store
+        return store.snapshot() if isinstance(store, InMemoryAuditLedger) else ()

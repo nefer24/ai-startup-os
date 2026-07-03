@@ -312,9 +312,11 @@ class ComponentCoordinator:
             payload=payload or {},
         )
         await self._xc.event_bus.publish(envelope)
-        record = await self._xc.audit_engine.append(envelope)
-        if octx.uow is not None:
-            await octx.uow.audit.append(record)  # persistance transactionnelle de l'audit
+        # SOURCE UNIQUE DE VERITE (ADR-0011) : le moteur scelle ET ecrit dans UN SEUL ledger.
+        # Sous transaction, ce ledger est le journal transactionnel (rejouable au rollback) ;
+        # sinon, le ledger par defaut du moteur. Aucune seconde ecriture independante.
+        audit_store = octx.uow.audit if octx.uow is not None else None
+        record = await self._xc.audit_engine.append(envelope, store=audit_store)
         octx.published_events.append(str(event_type))
         octx.audit_ids.append(record.id)
 

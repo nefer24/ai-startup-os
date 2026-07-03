@@ -33,7 +33,12 @@ from aisos.domain.enums import (
 )
 from aisos.domain.errors import GovernanceViolationError
 from aisos.events import EventEnvelope, EventType, InMemoryEventBus
-from aisos.infrastructure import InMemoryCheckpointStore, InMemoryDatabase, InMemoryUnitOfWork
+from aisos.infrastructure import (
+    CommittedAuditStore,
+    InMemoryCheckpointStore,
+    InMemoryDatabase,
+    InMemoryUnitOfWork,
+)
 from aisos.llm import (
     LLMInteractionRegistry,
     LLMProvider,
@@ -103,12 +108,13 @@ def _harness(
     memory: InMemoryMemorySystem | None = None,
 ) -> _Harness:
     bus = InMemoryEventBus()
-    audit = InMemoryAuditEngine()
     memory = memory or InMemoryMemorySystem()
     policy = DefaultPolicyEngine()
     authorizer = DefaultAuthorizer()
     database = InMemoryDatabase()
     checkpoints = InMemoryCheckpointStore()
+    # Source unique de verite (ADR-0011) : le moteur d'audit est adosse au ledger commite.
+    audit = InMemoryAuditEngine(CommittedAuditStore(database))
 
     ledger = ConsumptionLedger()
     ledger.subscribe(bus)  # abonne reel du bus (dette D8) : agrege la consommation (ADR-0009)

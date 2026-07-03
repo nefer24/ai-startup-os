@@ -111,7 +111,12 @@ class InMemoryMemoryStore:
 
 
 class InMemoryAuditStore:
-    """Port `AuditStore` en memoire : APPEND-ONLY (aucune methode update/delete)."""
+    """Port `AuditStore` TRANSACTIONNEL : APPEND-ONLY (aucune methode update/delete).
+
+    Les ecritures sont MISES EN ATTENTE dans le changeset (committees atomiquement ou jetees au
+    rollback) ; les lectures voient le ledger commite `db.audit` PLUS les ecritures en attente —
+    de sorte que le scellement de la chaine dans une transaction reste continu.
+    """
 
     def __init__(self, db: InMemoryDatabase, changeset: Changeset) -> None:
         self._db = db
@@ -130,3 +135,25 @@ class InMemoryAuditStore:
     async def list(self, *, limit: int = 50, offset: int = 0) -> Sequence[AuditRecord]:
         items = [*self._db.audit, *self._cs.audit]
         return items[offset : offset + limit]
+
+
+class CommittedAuditStore:
+    """Vue `AuditStore` du ledger d'audit COMMITE (`db.audit`) — la SOURCE UNIQUE de verite.
+
+    En mode persistant, le moteur d'audit est adosse a ce store : ses lectures (read/verify) et
+    ses ecritures hors transaction (ex. reprise CEO) portent sur le MEME journal que celui ou
+    l'Unit of Work commite. Moteur et stockage ne peuvent donc pas diverger. Append-only.
+    """
+
+    def __init__(self, db: InMemoryDatabase) -> None:
+        self._db = db
+
+    async def append(self, record: AuditRecord) -> AuditRecord:
+        self._db.audit.append(record)
+        return record
+
+    async def get(self, audit_id: str) -> AuditRecord | None:
+        return next((r for r in self._db.audit if r.id == audit_id), None)
+
+    async def list(self, *, limit: int = 50, offset: int = 0) -> Sequence[AuditRecord]:
+        return self._db.audit[offset : offset + limit]
