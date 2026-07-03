@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from aisos.llm import LLMInteractionRecord
 from aisos.schemas.audit import AuditRecord
 from aisos.schemas.entities import PreapprovedPolicy, Request
 from aisos.schemas.memory import MemoryRecord
@@ -38,7 +39,13 @@ class Changeset:
 
 
 class InMemoryDatabase:
-    """Etat commite partage entre les Unit of Work (append-only pour audit et memoire)."""
+    """Etat commite partage entre les Unit of Work (append-only pour audit et memoire).
+
+    `llm_interactions` (ADR-0010) est un magasin APPEND-ONLY d'interactions LLM enregistrees,
+    indexe par `prompt_hash`. Il est ecrit DIRECTEMENT (hors transaction d'orchestration) : une
+    interaction enregistree au moment de l'appel LLM reel DOIT survivre a un rollback ulterieur,
+    sinon le rejeu apres crash echouerait. Il n'est donc pas porte par le `Changeset`.
+    """
 
     def __init__(self) -> None:
         self.requests: dict[str, Request] = {}
@@ -46,9 +53,14 @@ class InMemoryDatabase:
         self.policies: dict[str, PreapprovedPolicy] = {}
         self.audit: list[AuditRecord] = []
         self.memory: list[MemoryRecord] = []
+        self.llm_interactions: dict[str, LLMInteractionRecord] = {}
 
     def apply(self, changeset: Changeset) -> None:
-        """Applique atomiquement un changeset (dicts fusionnes, journaux etendus)."""
+        """Applique atomiquement un changeset (dicts fusionnes, journaux etendus).
+
+        Les interactions LLM ne figurent PAS dans le changeset : elles sont durables par
+        conception (elles ne participent pas au rollback d'orchestration).
+        """
         self.requests.update(changeset.requests)
         self.workflows.update(changeset.workflows)
         self.policies.update(changeset.policies)
