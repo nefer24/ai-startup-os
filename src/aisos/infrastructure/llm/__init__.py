@@ -14,6 +14,17 @@ from aisos.infrastructure.llm.activation import (
     RealLLMActivationRequest,
 )
 from aisos.infrastructure.llm.adapter import LLMProviderAdapter
+from aisos.infrastructure.llm.backend import (
+    DisabledProviderBackend,
+    InvalidProviderResponseError,
+    ProviderBackend,
+    ProviderBackendError,
+    ProviderBackendMissingError,
+    ProviderBackendRequest,
+    ProviderBackendResponse,
+    ProviderNotActivatedError,
+    validate_provider_response,
+)
 from aisos.infrastructure.llm.config import (
     ProviderName,
     RealLLMProviderConfig,
@@ -48,10 +59,12 @@ from aisos.infrastructure.llm.transport import (
 __all__ = [
     "DeterministicLLMHttpClient",
     "DisabledLLMHttpClient",
+    "DisabledProviderBackend",
     "EnvironmentSecretResolver",
     "HttpSimulation",
     "InvalidHttpRequestError",
     "InvalidHttpResponseError",
+    "InvalidProviderResponseError",
     "InvalidSecretNameError",
     "LLMHttpClient",
     "LLMHttpError",
@@ -59,7 +72,13 @@ __all__ = [
     "LLMHttpResponse",
     "LLMProviderAdapter",
     "NetworkDisabledError",
+    "ProviderBackend",
+    "ProviderBackendError",
+    "ProviderBackendMissingError",
+    "ProviderBackendRequest",
+    "ProviderBackendResponse",
     "ProviderName",
+    "ProviderNotActivatedError",
     "RealLLMActivationDecision",
     "RealLLMActivationGuard",
     "RealLLMActivationRequest",
@@ -74,4 +93,5 @@ __all__ = [
     "resolve_api_key",
     "validate_http_request",
     "validate_http_response",
+    "validate_provider_response",
 ]
