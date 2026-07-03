@@ -17,6 +17,7 @@ from aisos.agents.ceo_resume import (
     ResumeWithoutPauseError,
 )
 from aisos.agents.council import CouncilOutcome, CouncilSynthesis, ExpertCouncil
+from aisos.agents.orchestration import CouncilDeliberation
 from aisos.agents.runtime import (
     AgentDeliberationError,
     AgentRecommendation,
@@ -34,6 +35,7 @@ __all__ = [
     "CeoAction",
     "CeoResumeCycle",
     "CeoResumeOutcome",
+    "CouncilDeliberation",
     "CouncilOutcome",
     "CouncilSynthesis",
     "ExpertCouncil",

@@ -92,15 +92,22 @@ class ExpertCouncil:
         self._audit = audit_engine
         self._clock = clock
 
-    async def deliberate(self, task: AgentTask) -> CouncilOutcome:
-        """Debat a deux tours, synthetise les avis revises, puis s'arrete a la pause CEO."""
+    def synthesize(self, task: AgentTask) -> CouncilSynthesis:
+        """Debat a deux tours (sync, sans audit) et rend la synthese des avis revises.
+
+        Reutilisable comme etape de deliberation par l'orchestrateur (le coeur audite la pause).
+        """
         # Tour 1 : chaque agent produit sa recommandation initiale.
         value_r1 = self._value_agent.deliberate(task)
         risk_r1 = self._risk_agent.deliberate(task)
         # Tour 2 : chaque agent recoit l'avis structure de l'autre et peut maintenir ou reviser.
         value_rec = self._value_agent.deliberate(task, peer_summary=_peer_summary(risk_r1))
         risk_rec = self._risk_agent.deliberate(task, peer_summary=_peer_summary(value_r1))
-        synthesis = self._synthesize(task, value_rec, risk_rec)
+        return self._synthesize(task, value_rec, risk_rec)
+
+    async def deliberate(self, task: AgentTask) -> CouncilOutcome:
+        """Debat a deux tours, synthetise les avis revises, puis s'arrete a la pause CEO."""
+        synthesis = self.synthesize(task)
         audit_id, event_type = await seal_ceo_pause(
             self._audit,
             event_id=f"evt-decision-pending-{task.id}",
