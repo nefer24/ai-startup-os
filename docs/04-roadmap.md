@@ -18,17 +18,20 @@ barrière d'activation CEO-only. ADR ratifiées : **ADR-0009** (M0-001), **ADR-0
 
 ## Current Focus
 
-Clôture officielle de M0 (rapport de readiness). Aucun provider réel branché.
+M1 en **conception** : plan détaillé du premier branchement réel soumis à ratification.
+**Aucun** provider réel branché, aucune clé, aucun appel réseau à ce stade.
 
 ## Upcoming Milestones
 
-### M1 — Premier branchement réel gouverné (proposé, non ratifié)
+### M1 — Premier branchement réel gouverné (plan soumis, non ratifié)
 
 Implémentation d'un backend derrière le port `LLMProvider`, chargement sécurisé du secret depuis
 la variable d'environnement référencée, consommation de `activated_config` par un composant
 racine **passant par la barrière d'activation CEO-only**, première campagne record/replay contre
-un modèle réel — le tout sous décision CEO explicite. Voir les risques restants RR1–RR7 du
-rapport M0.
+un modèle réel — le tout sous décision CEO explicite. Plan détaillé (15 sections) :
+[`docs/reports/M1_GOVERNED_REAL_LLM_PLAN.md`](reports/M1_GOVERNED_REAL_LLM_PLAN.md). Voir les
+risques restants RR1–RR7 du rapport M0. **Aucune activation ni code avant ratification CEO du
+plan.**
 
 ## Future Exploration
 
