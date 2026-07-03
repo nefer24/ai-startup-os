@@ -564,3 +564,48 @@ Extension de la Slice **sans nouvelle couche horizontale ni refactor large** : l
 | — | couverture complète | les 10 scénarios F1–F10 disposent d'un test | `test_all_ten_adverse_scenarios_are_covered` |
 
 **Vérification phase 2 (exécutée, Python 3.12)** : `ruff check` + `ruff format --check` ✅ · `mypy` strict ✅ (80 fichiers) · `pytest` ✅ **301 passed** (dont **109** `governance`) · couverture **100 %** sur `src/aisos/slice/` et `src/aisos/orchestrator/deliberation.py`. Non-régression : les scénarios **F1–F6** et les **284 tests** antérieurs restent verts. Contraintes respectées : aucun LLM réel, aucun FastAPI, aucun LangGraph, aucun PostgreSQL/Redis/RabbitMQ, aucun nouveau framework, aucun refactor large.
+
+## Cadre de mesure de la valeur métier (`src/aisos/value/`)
+
+Premier jalon de la **cinquième dimension d'évaluation** : mesurer non seulement si la gouvernance *fonctionne*, mais si les recommandations sont **utiles** — et à quel coût. **Principe fondateur** : la valeur se mesure **de l'extérieur**, contre un **banc gold** dont les attentes sont connues et **indépendantes** du système. Le système ne se note jamais lui-même ; **aucun LLM** n'est utilisé pour évaluer, le benchmark est **externe au raisonnement de l'agent**. Le cadre **lit** les résultats de la Vertical Slice ; il ne modifie **aucune** gouvernance et ne produit **aucune** décision. Déterministe et reproductible.
+
+| Élément | Rôle | Spécification source |
+| --- | --- | --- |
+| `aisos/value/models.py` (`ValueMetric`, `GoldBenchmarkCase`, `SliceOutcome`, `RecommendationEvaluation`, `ValueMetricResult`, `ValueScorecard`) | modèles immuables : cas gold, observation lue de la Slice, évaluation externe, métriques, tableau de bord | [`docs/consolidation/05-VALUE-METRICS-FRAMEWORK.md`](docs/consolidation/05-VALUE-METRICS-FRAMEWORK.md) |
+| `aisos/value/benchmark.py` (`ExternalQualityEvaluator`, `GoldBenchmarkRunner`) | évaluateur de qualité **externe** (jamais l'auto-note de l'agent) + runner déterministe agrégeant les 7 métriques | [`docs/consolidation/05-VALUE-METRICS-FRAMEWORK.md`](docs/consolidation/05-VALUE-METRICS-FRAMEWORK.md) |
+| `tests/unit/test_value_metrics.py` | tests unitaires (score déterministe/externe, 7 métriques, reproductibilité, aucun import LLM) | [`docs/quality/02-unit-testing.md`](docs/quality/02-unit-testing.md) |
+| `tests/governance/test_value_metrics_governance.py` | lecture des résultats réels de la Slice → métriques, sans changer la gouvernance | [`docs/quality/05-governance-validation.md`](docs/quality/05-governance-validation.md) |
+
+### Les sept métriques (déterministes)
+
+| Métrique | Définition | Test |
+| --- | --- | --- |
+| Qualité | qualité moyenne des recommandations (grille externe, cas non adverses) | `test_quality_score_is_deterministic` · `test_quality_is_external_and_ignores_agent_self_score` |
+| Utilité métier | part des recommandations jugées utiles (banc gold) | `test_utility_rate_over_non_adverse_cases` |
+| Taux d'acceptation | part d'`APPROUVE` sans ajustement (ni 0 % ni 100 %) | `test_acceptance_rate_over_ceo_decided_cases` |
+| Ampleur des ajustements CEO | nombre moyen d'ajustements sur les issues `AJUSTE` | `test_adjustment_magnitude_over_ajuste_cases` |
+| Coût par recommandation utile | coût LLM total ÷ nombre de recommandations utiles (indicateur nord) | `test_cost_per_useful_recommendation` |
+| Taux de rattrapage adverse | part des cas adverses rattrapés (cible : 100 %) | `test_adverse_recovery_rate_is_full_when_all_caught` |
+| Taux d'escalade justifiée | part des escalades qui étaient justifiées | `test_justified_escalation_rate` |
+
+### Invariants prouvés par test
+
+| Invariant | Test |
+| --- | --- |
+| Score de qualité déterministe et reproductible | `test_quality_score_is_deterministic` · `test_metrics_are_reproducible` |
+| Évaluation **externe** (ignore l'auto-note de l'agent) | `test_quality_is_external_and_ignores_agent_self_score` |
+| **Aucun LLM** utilisé pour évaluer (aucun import LLM/Slice) | `test_value_module_imports_no_llm_no_slice` |
+| **Aucune décision automatique** produite par le cadre | `test_no_automatic_decision_is_produced` |
+| Lecture seule : la gouvernance n'est pas modifiée | `test_reading_metrics_does_not_change_governance` |
+| Benchmark externe au raisonnement de l'agent | `test_benchmark_is_external_to_agent_reasoning` |
+
+### Vérification Cadre de valeur (exécutée, Python 3.12)
+
+| Contrôle | Résultat |
+| --- | --- |
+| `ruff check .` + `ruff format --check .` | ✅ All checks passed |
+| `mypy` (strict) | ✅ no issues found in 83 source files |
+| `pytest` | ✅ 320 passed (dont 112 `governance`) |
+| Couverture `src/aisos/value/` | ✅ 100 % |
+
+Le cadre respecte la Baseline v1.0, les Phases 8 à 25 et la Vertical Slice. **Aucun LLM réel, aucune API, aucune base réelle, aucun dashboard, aucun framework externe, aucun changement de gouvernance** — uniquement du calcul déterministe de métriques, lu depuis les résultats de la Slice.
