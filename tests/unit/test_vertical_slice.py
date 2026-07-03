@@ -23,7 +23,7 @@ from aisos.domain.errors import (
 )
 from aisos.events import EventEnvelope, EventType, InMemoryEventBus
 from aisos.llm import (
-    LLMInteractionRegistry,
+    InMemoryLLMInteractionStore,
     LLMRequest,
     LLMResponse,
     RecordingLLMProvider,
@@ -376,19 +376,19 @@ class _TripwireLLM:
 
 def test_resume_replays_without_recalling_the_model() -> None:
     # F9 (cle) : une interaction enregistree se rejoue sans jamais rappeler le modele.
-    registry = LLMInteractionRegistry()
+    store = InMemoryLLMInteractionStore()
     manifest = AgentManifest(token_budget=10_000)
 
     # Enregistrement (avant crash).
     record_runtime = AgentRuntime(
-        RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), registry), manifest
+        RecordingLLMProvider(StubLLMProvider(LLMMode.NOMINAL), store), manifest
     )
     recorded = record_runtime.run(_request("r9"))
     assert recorded.status is RuntimeStatus.OK
 
-    # Reprise : meme registre, modele remplace par un tripwire — il ne doit PAS etre appele.
+    # Reprise : meme store, modele remplace par un tripwire — il ne doit PAS etre appele.
     tripwire = _TripwireLLM()
-    replay_runtime = AgentRuntime(RecordingLLMProvider(tripwire, registry), manifest)
+    replay_runtime = AgentRuntime(RecordingLLMProvider(tripwire, store), manifest)
     replayed = replay_runtime.run(_request("r9"))
     assert tripwire.calls == 0
     assert replayed.status is RuntimeStatus.OK

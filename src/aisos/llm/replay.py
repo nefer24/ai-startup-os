@@ -3,23 +3,27 @@
 Tracabilite : docs/adr/ADR-0010-determinisme-interactions-llm.md,
 docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md (F9 : reprise deterministe).
 
+Le stockage des interactions enregistrees est un **port du coeur** (`LLMInteractionStore`) :
+record/replay ne depend plus d'un registre concret, mais d'une abstraction append-only indexee
+par `prompt_hash`. Un adaptateur durable (futur, hors coeur) implementera ce meme port sans que
+le coeur ne depende de l'infrastructure.
+
 Deux fournisseurs enveloppent le port `LLMProvider` :
-- `RecordingLLMProvider` (mode `RECORD`) : appelle le fournisseur sous-jacent et ENREGISTRE
-  l'interaction (prompt hache -> reponse + version de modele + parametres) dans un registre
-  immuable. Idempotent : une interaction deja enregistree n'est jamais ecrasee.
-- `ReplayLLMProvider` (mode `REPLAY`) : REJOUE l'interaction enregistree, sans jamais rappeler
-  le modele. Il REFUSE (jamais silencieusement) si l'enregistrement est absent, si la version de
-  modele demandee differe, ou si les parametres different — le rejeu doit etre reproductible.
+- `RecordingLLMProvider` (mode `RECORD`) : appelle le fournisseur sous-jacent, construit une
+  entree immuable (prompt hache -> reponse + version de modele + parametres) et l'AJOUTE au store.
+  Idempotent : une interaction deja enregistree n'est ni rappelee ni ecrasee.
+- `ReplayLLMProvider` (mode `REPLAY`) : REJOUE l'entree enregistree, sans jamais rappeler le
+  modele. Il VALIDE la version de modele et les parametres, et REFUSE (jamais silencieusement) si
+  l'entree est absente, ou si version/parametres different — le rejeu doit etre reproductible.
 
 Garantie structurelle « replay never calls model » : `ReplayLLMProvider` ne detient AUCUN
-fournisseur sous-jacent ; il ne peut donc pas appeler de modele.
-
-En memoire, deterministe, sans reseau, sans fournisseur reel, sans decision automatique.
+fournisseur sous-jacent. En memoire, deterministe, sans reseau, sans fournisseur reel.
 """
 
 from __future__ import annotations
 
 import hashlib
+from typing import Protocol, runtime_checkable
 
 from pydantic import Field
 
@@ -55,36 +59,43 @@ class LLMInteractionRecord(ImmutableModel):
     parameters: dict[str, object] = Field(default_factory=dict)
 
 
-class LLMInteractionRegistry:
-    """Registre en memoire des interactions LLM. Append-only par cle (un prompt, une reponse).
+@runtime_checkable
+class LLMInteractionStore(Protocol):
+    """Port de stockage APPEND-ONLY des interactions LLM, indexe par `prompt_hash`.
 
-    Une interaction, une fois enregistree, n'est jamais ecrasee : le rejeu doit reproduire
-    exactement la sortie d'origine. Le registre modelise un magasin durable, distinct de toute
-    unite de travail d'orchestration (il survit a un rollback).
+    Port du coeur : le record/replay en depend, jamais d'un adaptateur concret. `append` est
+    append-only (une interaction, une fois enregistree, n'est jamais ecrasee) ; `get` fait un
+    lookup exact par hache de prompt. Aucune methode de modification/suppression n'existe.
+    """
+
+    def append(self, record: LLMInteractionRecord) -> LLMInteractionRecord:
+        """Enregistre une interaction si absente ; retourne l'entree (existante ou neuve)."""
+        ...
+
+    def get(self, prompt_hash_value: str) -> LLMInteractionRecord | None:
+        """Lookup exact d'une interaction par hache de prompt (ou None si absente)."""
+        ...
+
+
+class InMemoryLLMInteractionStore:
+    """Store d'interactions LLM en memoire (implemente `LLMInteractionStore`).
+
+    APPEND-ONLY : `append` n'ecrase jamais une entree existante (immuabilite du rejeu). Modelise
+    un magasin durable, distinct de toute unite de travail d'orchestration.
     """
 
     def __init__(self) -> None:
         self._records: dict[str, LLMInteractionRecord] = {}
 
-    def record(self, request: LLMRequest, response: LLMResponse) -> LLMInteractionRecord:
-        """Enregistre une interaction si absente ; retourne l'enregistrement (existant ou neuf)."""
-        key = prompt_hash(request)
-        existing = self._records.get(key)
+    def append(self, record: LLMInteractionRecord) -> LLMInteractionRecord:
+        existing = self._records.get(record.prompt_hash)
         if existing is not None:
             return existing
-        entry = LLMInteractionRecord(
-            prompt_hash=key,
-            request=request,
-            response=response,
-            model_version=request.model,
-            parameters=dict(request.parameters),
-        )
-        self._records[key] = entry
-        return entry
+        self._records[record.prompt_hash] = record
+        return record
 
-    def get(self, request: LLMRequest) -> LLMInteractionRecord | None:
-        """Retourne l'enregistrement d'une requete (par hache de prompt), ou None."""
-        return self._records.get(prompt_hash(request))
+    def get(self, prompt_hash_value: str) -> LLMInteractionRecord | None:
+        return self._records.get(prompt_hash_value)
 
     def __len__(self) -> int:
         return len(self._records)
@@ -96,40 +107,50 @@ class LLMInteractionRegistry:
 
 
 class RecordingLLMProvider:
-    """Mode `RECORD` : appelle le fournisseur reel et enregistre l'interaction (port `LLMProvider`).
+    """Mode `RECORD` : appelle le fournisseur reel et enregistre l'interaction dans le store.
 
-    Idempotent : une interaction deja enregistree n'est jamais rappelee ni ecrasee.
+    Idempotent : une interaction deja enregistree est renvoyee sans rappeler le fournisseur.
     """
 
     mode: ProviderMode = ProviderMode.RECORD
 
-    def __init__(self, inner: LLMProvider, registry: LLMInteractionRegistry) -> None:
+    def __init__(self, inner: LLMProvider, store: LLMInteractionStore) -> None:
         self._inner = inner
-        self._registry = registry
+        self._store = store
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        existing = self._registry.get(request)
+        key = prompt_hash(request)
+        existing = self._store.get(key)
         if existing is not None:
             return existing.response
         response = self._inner.complete(request)
-        self._registry.record(request, response)
+        self._store.append(
+            LLMInteractionRecord(
+                prompt_hash=key,
+                request=request,
+                response=response,
+                model_version=request.model,
+                parameters=dict(request.parameters),
+            )
+        )
         return response
 
 
 class ReplayLLMProvider:
-    """Mode `REPLAY` : rejoue l'enregistrement, sans jamais rappeler le modele. Implemente le port.
+    """Mode `REPLAY` : rejoue l'entree enregistree, sans jamais rappeler le modele (ADR-0010).
 
     Ne detient AUCUN fournisseur sous-jacent : la garantie « replay never calls model » est
-    structurelle. Refuse explicitement toute interaction non reproductible.
+    structurelle. Refuse explicitement toute interaction non reproductible (absence, version de
+    modele ou parametres incompatibles).
     """
 
     mode: ProviderMode = ProviderMode.REPLAY
 
-    def __init__(self, registry: LLMInteractionRegistry) -> None:
-        self._registry = registry
+    def __init__(self, store: LLMInteractionStore) -> None:
+        self._store = store
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        record = self._registry.get(request)
+        record = self._store.get(prompt_hash(request))
         if record is None:
             raise ReplayMissError(
                 "rejeu : aucune interaction enregistree pour ce prompt (aucun appel aveugle)"
