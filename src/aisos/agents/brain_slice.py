@@ -1,29 +1,40 @@
-"""Brain Slice deterministe : premier consommateur reel de l'`AgentRuntime` (cerveau d'AI-SOS).
+"""Brain Slice : consommateur reel de l'`AgentRuntime`, jusqu'a une pause CEO **gouvernee**.
 
-Tracabilite : docs/components/01-orchestrator.md (pause CEO), docs/behavior/05-decision-protocol.md,
-docs/reports/M1_STRATEGIC_REVIEW_AFTER_PR52.md (« donner un consommateur reel a l'agent »).
+Tracabilite : docs/components/01-orchestrator.md (pause CEO), docs/components/08-audit-engine.md,
+docs/contracts/02-event-catalog.md (`decision.pending`), docs/behavior/05-decision-protocol.md.
 
-Point d'entree minimal du coeur qui **consomme reellement** l'`AgentRuntime` : il recoit une tache,
-appelle `AgentRuntime.deliberate`, recupere une `AgentRecommendation`, puis la transmet **jusqu'a la
-pause de validation CEO** — sans jamais decider. La pause est exprimee avec le vocabulaire de
-gouvernance EXISTANT (`DecisionState.EN_ATTENTE`) : aucune decision n'est produite, la
-recommandation attend le CEO. Aucun Conseil d'Experts, aucune nouvelle couche d'abstraction, aucun
-provider/backend/SDK/reseau : uniquement l'`AgentRuntime` et les providers deterministes existants.
+Point d'entree minimal du coeur : recoit une tache, appelle `AgentRuntime.deliberate`, recupere une
+`AgentRecommendation`, puis la transmet **jusqu'a la pause de validation CEO** avec des primitives
+de gouvernance EXISTANTES — `DecisionState.EN_ATTENTE` et, si un moteur d'audit est fourni, l'event
+existant `decision.pending` scelle dans l'audit append-only (trace exploitable). Aucune decision
+n'est prise, aucune action n'est executee. Aucun Conseil d'Experts, aucun multi-agent, aucun
+provider/backend/SDK/reseau, **aucune nouvelle couche d'abstraction** : uniquement l'`AgentRuntime`,
+les providers deterministes existants et le port d'audit existant.
 """
 
 from __future__ import annotations
 
+import datetime as dt
+from collections.abc import Callable
+
 from aisos.agents.runtime import AgentRecommendation, AgentRuntime, AgentTask
+from aisos.audit.interfaces import AuditEngine
 from aisos.domain.enums import DecisionState
+from aisos.events import EventEnvelope, EventType
 from aisos.schemas.base import ImmutableModel
+
+
+def _utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
 
 
 class BrainDeliberationOutcome(ImmutableModel):
     """Resultat d'une deliberation de la Brain Slice, arrete a la **pause de validation CEO**.
 
-    Ne porte AUCUN champ decisionnel : la recommandation de l'agent attend le CEO
-    (`state = EN_ATTENTE`, `awaiting_ceo_validation = True`). L'agent recommande, ne decide jamais ;
-    la Brain Slice non plus.
+    Ne porte AUCUN champ decisionnel : la recommandation attend le CEO (`state = EN_ATTENTE`,
+    `awaiting_ceo_validation = True`). Si un moteur d'audit a ete fourni, `audit_id`/
+    `audit_event_type` referencent l'evenement `decision.pending` scelle (trace exploitable).
+    L'agent recommande, la Brain Slice trace et met en pause : ni l'un ni l'autre ne decide.
     """
 
     task_id: str
@@ -31,23 +42,61 @@ class BrainDeliberationOutcome(ImmutableModel):
     recommendation: AgentRecommendation
     state: DecisionState = DecisionState.EN_ATTENTE
     awaiting_ceo_validation: bool = True
+    audit_id: str | None = None
+    audit_event_type: str | None = None
 
 
 class BrainSlice:
-    """Premier consommateur reel de l'`AgentRuntime`. Delibere puis s'arrete a la pause CEO.
+    """Consommateur reel de l'`AgentRuntime` : delibere puis s'arrete a une pause CEO gouvernee.
 
-    Deterministe (delegue au fournisseur deterministe de l'agent) ; compatible record/replay ;
-    n'effectue aucun appel reseau ; ne prend jamais de decision.
+    Deterministe ; compatible record/replay ; n'effectue aucun appel reseau ; ne prend jamais de
+    decision et n'execute jamais d'action. Si un `AuditEngine` est fourni, la pause est **tracee**
+    par l'evenement existant `decision.pending` (append-only, chaine verifiable).
     """
 
-    def __init__(self, agent: AgentRuntime) -> None:
+    def __init__(
+        self,
+        agent: AgentRuntime,
+        *,
+        audit_engine: AuditEngine | None = None,
+        clock: Callable[[], dt.datetime] = _utc_now,
+    ) -> None:
         self._agent = agent
+        self._audit = audit_engine
+        self._clock = clock
 
-    def deliberate(self, task: AgentTask) -> BrainDeliberationOutcome:
-        """Delibere via l'`AgentRuntime` et transmet la recommandation jusqu'a la pause CEO."""
-        recommendation: AgentRecommendation = self._agent.deliberate(task)
+    async def deliberate(self, task: AgentTask) -> BrainDeliberationOutcome:
+        """Delibere via l'`AgentRuntime` puis transmet la recommandation a une pause CEO tracee."""
+        recommendation = self._agent.deliberate(task)
+        audit_id: str | None = None
+        event_type: str | None = None
+        if self._audit is not None:
+            record = await self._audit.append(self._pending_envelope(task, recommendation))
+            audit_id = record.id
+            event_type = str(EventType.DECISION_PENDING)
         return BrainDeliberationOutcome(
             task_id=task.id,
             request_id=task.request_id,
             recommendation=recommendation,
+            audit_id=audit_id,
+            audit_event_type=event_type,
+        )
+
+    def _pending_envelope(
+        self, task: AgentTask, recommendation: AgentRecommendation
+    ) -> EventEnvelope:
+        """Evenement `decision.pending` : trace exploitable de la pause CEO (aucune decision)."""
+        return EventEnvelope(
+            event_id=f"evt-decision-pending-{task.id}",
+            type=str(EventType.DECISION_PENDING),
+            occurred_at=self._clock(),
+            request_id=task.request_id,
+            actor="svc:brain_slice",
+            payload={
+                "recommendation_id": recommendation.recommendation.id,
+                "task_id": task.id,
+                "uncertainty": recommendation.uncertainty,
+                "options_count": len(recommendation.recommendation.options_considered),
+                "state": DecisionState.EN_ATTENTE.value,
+            },
         )
