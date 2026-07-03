@@ -38,6 +38,11 @@ class Request(AISOSModel):
     thread_id: str | None = None
     created_at: dt.datetime
     updated_at: dt.datetime | None = None
+    #: Contexte minimal PREPARE PAR L'ORCHESTRATEUR/COORDINATION (ex. memoire des decisions CEO
+    #: passees) et transmis a la deliberation. Jamais rempli par le demandeur externe (defaut
+    #: vide) : la coordination le resout et l'injecte avant d'appeler le cerveau, lequel ignore
+    #: d'ou provient ce contexte (il ne lit aucune memoire).
+    context: tuple[str, ...] = ()
 
 
 class AgentManifest(AISOSModel):

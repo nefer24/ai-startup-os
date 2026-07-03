@@ -18,6 +18,7 @@ import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
 from pydantic import Field
 
@@ -36,6 +37,20 @@ from aisos.workflow.states import WorkflowState
 
 #: Fabrique d'unite de travail (port) : produit une transaction par orchestration.
 UnitOfWorkFactory = Callable[[], OrchestrationUnitOfWork]
+
+
+@runtime_checkable
+class DeliberationContextResolver(Protocol):
+    """Resout un contexte de deliberation minimal (ex. memoire des decisions CEO passees).
+
+    Vit COTE ORCHESTRATION : la coordination l'appelle pour preparer le contexte AVANT d'appeler
+    le cerveau. Le cerveau ne lit jamais la memoire ; il recoit ce contexte deja resolu, en ignorant
+    sa provenance. Deterministe, hors reseau (aucun embedding, aucune base vectorielle).
+    """
+
+    async def resolve(self, request: Request) -> tuple[str, ...]:
+        """Retourne des notes de contexte deterministes (tuple, eventuellement vide)."""
+        ...
 
 
 def _utc_now() -> dt.datetime:
@@ -146,3 +161,8 @@ class ExecutionContext:
     #: comportement des Phases 19-25 inchange (aucune deliberation d'agent). Present => l'agent
     #: produit une recommandation sous bornes avant le routage du Policy Engine.
     deliberation: DeliberationPort | None = None
+    #: Resolveur de contexte de deliberation OPTIONNEL (memoire deterministe). Absent => aucun
+    #: contexte injecte (comportement inchange). Present => la coordination resout un contexte
+    #: (ex. decisions CEO passees, lues dans l'audit) et l'injecte dans la demande AVANT la
+    #: deliberation. Le cerveau recoit ce contexte sans jamais lire la memoire lui-meme.
+    deliberation_context: DeliberationContextResolver | None = None
