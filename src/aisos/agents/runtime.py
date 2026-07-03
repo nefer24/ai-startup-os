@@ -45,15 +45,17 @@ class AgentRecommendation(ImmutableModel):
     """Sortie structuree d'un agent : une `Recommendation` gouvernee + raisonnement explicite.
 
     Enrichit la `Recommendation` (schema de gouvernance, jamais modifie) des elements que le cerveau
-    doit exposer : `justification` (pourquoi), `uncertainty` (0..1), `limits` (ce que l'agent n'a
-    pu couvrir). `attempted_decision_ignored` consigne une eventuelle tentative de decision du
-    fournisseur — **ignoree** : l'agent ne decide jamais.
+    doit exposer : `justification` (pourquoi), `assumptions` (les hypotheses tenues pour vraies),
+    `limits` (ce que l'agent n'a pu couvrir), `uncertainty` (0..1). `attempted_decision_ignored`
+    consigne une eventuelle tentative de decision du fournisseur — **ignoree** : l'agent ne decide
+    jamais.
     """
 
     recommendation: Recommendation
     justification: str
-    uncertainty: float
+    assumptions: tuple[str, ...]
     limits: tuple[str, ...]
+    uncertainty: float
     model: str
     attempted_decision_ignored: str | None = None
 
@@ -116,11 +118,24 @@ class AgentRuntime:
         return AgentRecommendation(
             recommendation=recommendation,
             justification=self._justification(response),
-            uncertainty=self._uncertainty(response),
+            assumptions=self._assumptions(task, response),
             limits=self._limits(response),
+            uncertainty=self._uncertainty(response),
             model=response.model,
             attempted_decision_ignored=response.attempted_decision,
         )
+
+    @staticmethod
+    def _assumptions(task: AgentTask, response: LLMResponse) -> tuple[str, ...]:
+        """Hypotheses honnetes et deterministes tenues pour vraies (toujours non vide)."""
+        assumptions: list[str] = ["le contexte fourni est complet et pertinent"]
+        if not task.context:
+            assumptions.append("aucun contexte fourni : raisonnement fonde sur le seul objectif")
+        if response.options:
+            assumptions.append("les options rapportees couvrent l'espace de decision")
+        if response.devils_advocate:
+            assumptions.append("le risque principal identifie est le plus saillant")
+        return tuple(assumptions)
 
     @staticmethod
     def _justification(response: LLMResponse) -> str:
