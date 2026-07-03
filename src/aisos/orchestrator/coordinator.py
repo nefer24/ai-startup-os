@@ -218,6 +218,16 @@ class ComponentCoordinator:
         assert self._xc.deliberation is not None
         request = octx.request_context.request
         self._lc.advance(octx, LifecycleState.DELIBERATION)
+
+        # CONTEXTE (memoire) : la coordination resout un contexte deterministe (ex. decisions CEO
+        # passees, lues dans l'audit) et l'INJECTE dans la demande AVANT d'appeler le cerveau. Le
+        # cerveau ne lit jamais la memoire : il recoit ce contexte deja resolu, sans en connaitre la
+        # provenance. Enrichissement LOCAL uniquement (octx/persistance inchanges).
+        if self._xc.deliberation_context is not None:
+            notes = await self._xc.deliberation_context.resolve(request)
+            if notes:
+                request = request.model_copy(update={"context": notes})
+
         verdict = self._xc.deliberation.deliberate(request)
 
         # Chaque appel LLM est comptabilise ET audite (ADR-0009 : economie comptabilisee). Toute

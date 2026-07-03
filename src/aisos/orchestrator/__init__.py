@@ -8,6 +8,7 @@ et ne prend aucune decision automatique. Sans framework, sans broker, sans API, 
 from __future__ import annotations
 
 from aisos.orchestrator.context import (
+    DeliberationContextResolver,
     ExecutionContext,
     OrchestrationContext,
     OrchestrationResult,
@@ -24,13 +25,17 @@ from aisos.orchestrator.deliberation import (
 from aisos.orchestrator.dispatcher import RequestDispatcher
 from aisos.orchestrator.interfaces import Orchestrator, StrategicCouncilProposal
 from aisos.orchestrator.lifecycle import LifecycleManager
+from aisos.orchestrator.memory_context import CeoDecisionMemory, ContextualCouncilDeliberation
 from aisos.orchestrator.resume import CEODecisionInput, CEODecisionResumer
 
 __all__ = [
     "CEODecisionInput",
     "CEODecisionResumer",
+    "CeoDecisionMemory",
     "ComponentCoordinator",
     "ConsumptionRecord",
+    "ContextualCouncilDeliberation",
+    "DeliberationContextResolver",
     "DeliberationKind",
     "DeliberationPort",
     "DeliberationVerdict",
