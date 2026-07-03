@@ -16,6 +16,7 @@ masque et n'apparait donc ni dans la requete serialisee, ni dans un log, ni dans
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
@@ -52,6 +53,13 @@ class InvalidHttpResponseError(LLMHttpError):
 
     code = "llm.http_response_invalid"
     http_status = 502
+
+
+class InvalidHttpRequestError(LLMHttpError):
+    """Requete HTTP invalide (url ou corps manquant) : refusee explicitement, sans secret."""
+
+    code = "llm.http_request_invalid"
+    http_status = 422
 
 
 class LLMHttpRequest(ImmutableModel):
@@ -137,3 +145,38 @@ def validate_http_response(response: LLMHttpResponse) -> LLMHttpResponse:
     if not response.body:
         raise InvalidHttpResponseError("reponse HTTP invalide : corps vide")
     return response
+
+
+def validate_http_request(request: LLMHttpRequest) -> LLMHttpRequest:
+    """Valide une requete HTTP : url et corps non vides. Ne consigne aucun secret."""
+    if not request.url:
+        raise InvalidHttpRequestError("requete HTTP invalide : url manquante")
+    if not request.body:
+        raise InvalidHttpRequestError("requete HTTP invalide : corps vide")
+    return request
+
+
+class DeterministicLLMHttpClient:
+    """Client HTTP **deterministe en memoire** (aucun reseau, aucun SDK, aucun secret stocke).
+
+    Renvoie des reponses preconfigurees, dans l'ordre (la derniere est reutilisee une fois la
+    liste epuisee). Valide chaque requete (`validate_http_request`). Compte les appels (`calls`)
+    afin de prouver qu'un rejeu ne le sollicite jamais. Un eventuel `secret` est **ignore** et
+    n'est ni stocke ni journalise. Il ne remplace pas `DisabledLLMHttpClient` (defaut) : il sert a
+    exercer le pipeline complet adapter -> reponse -> record/replay **sans reseau reel**.
+    """
+
+    def __init__(self, responses: Sequence[LLMHttpResponse] | None = None) -> None:
+        self._responses: tuple[LLMHttpResponse, ...] = (
+            tuple(responses) if responses else (LLMHttpResponse(status_code=200, body="{}"),)
+        )
+        self._index = 0
+        self.calls = 0
+
+    def send(self, request: LLMHttpRequest, *, secret: Secret | None = None) -> LLMHttpResponse:
+        """Valide la requete puis renvoie la reponse preconfiguree suivante. Aucun reseau."""
+        validate_http_request(request)
+        self.calls += 1
+        response = self._responses[min(self._index, len(self._responses) - 1)]
+        self._index += 1
+        return response

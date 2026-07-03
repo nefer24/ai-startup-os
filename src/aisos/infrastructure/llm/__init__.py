@@ -30,8 +30,10 @@ from aisos.infrastructure.llm.secrets import (
     resolve_api_key,
 )
 from aisos.infrastructure.llm.transport import (
+    DeterministicLLMHttpClient,
     DisabledLLMHttpClient,
     HttpSimulation,
+    InvalidHttpRequestError,
     InvalidHttpResponseError,
     LLMHttpClient,
     LLMHttpError,
@@ -39,13 +41,16 @@ from aisos.infrastructure.llm.transport import (
     LLMHttpResponse,
     NetworkDisabledError,
     SimulatedTimeoutError,
+    validate_http_request,
     validate_http_response,
 )
 
 __all__ = [
+    "DeterministicLLMHttpClient",
     "DisabledLLMHttpClient",
     "EnvironmentSecretResolver",
     "HttpSimulation",
+    "InvalidHttpRequestError",
     "InvalidHttpResponseError",
     "InvalidSecretNameError",
     "LLMHttpClient",
@@ -67,5 +72,6 @@ __all__ = [
     "SecretResolver",
     "SimulatedTimeoutError",
     "resolve_api_key",
+    "validate_http_request",
     "validate_http_response",
 ]
