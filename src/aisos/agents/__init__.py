@@ -8,6 +8,7 @@ aucune couche d'abstraction et ne modifient aucune gouvernance.
 
 from __future__ import annotations
 
+from aisos.agents.brain_slice import BrainDeliberationOutcome, BrainSlice
 from aisos.agents.runtime import (
     AgentDeliberationError,
     AgentRecommendation,
@@ -20,4 +21,6 @@ __all__ = [
     "AgentRecommendation",
     "AgentRuntime",
     "AgentTask",
+    "BrainDeliberationOutcome",
+    "BrainSlice",
 ]
