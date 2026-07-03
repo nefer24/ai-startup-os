@@ -1,13 +1,33 @@
 # Plan M1 — Premier branchement réel gouverné d'un fournisseur LLM
 
-> **Statut du document** : plan détaillé, soumis à la revue du Chief AI Architect et à la
-> validation du CEO.
+> **Statut du document** : **Accepted / Ratifié par le CEO** (porte **M1-001**, 2026-07-03).
 > **Date** : 2026-07-03.
 > **Nature** : **planification uniquement**. Ce document n'écrit aucun code, n'active aucun
 > fournisseur, ne déclare aucune clé, n'effectue aucun appel réseau et **ne modifie aucune
 > gouvernance**. Il décrit *ce qui devra être fait* pour brancher un LLM réel de façon
 > gouvernée — pas *le faire*.
 > **Prérequis** : jalon M0 clôturé (cf. [`M0_LLM_READINESS_REPORT.md`](M0_LLM_READINESS_REPORT.md)).
+
+---
+
+## Ratification CEO — M1-001
+
+- **Décision** : **APPROVED** (ouverture du jalon **M1**, item **M1-001**), 2026-07-03.
+- **Référence** : M1-001.
+- **Justification** : M1 peut commencer parce que le jalon **M0 est clôturé** et que les garanties
+  fondatrices sont **établies et prouvées par test** — *record/replay déterministe* (« replay
+  never calls model »), *audit source unique* (append-only, hash-chaîné), *activation CEO-only*
+  (refus par défaut, impossible sans `RealLLMActivationDecision.granted`) et *no automatic
+  decision* (l'agent recommande, le CEO décide). Le présent plan préserve ces invariants et borne
+  le risque du premier appel réel (fournisseur unique, budget/timeout stricts, appel réel opt-in
+  hors CI, critères de refus explicites).
+- **Portée de la décision** : cette ratification **ouvre la conception et le branchement
+  contrôlé** de M1. Elle **n'active aucun fournisseur**, n'introduit aucune clé et n'autorise
+  aucun appel réseau. La première ligne de code réel reste conditionnée à cette ratification (à
+  présent acquise) ; la première **activation** réelle restera conditionnée à une
+  `RealLLMActivationDecision.granted` émise par le CEO au moment voulu.
+- **Décision différée** : le choix du fournisseur cible (OpenAI vs Anthropic) reste une décision
+  CEO ultérieure — non tranchée par la présente ratification (cf. §3).
 
 ---
 
