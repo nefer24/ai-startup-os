@@ -21,40 +21,19 @@ from __future__ import annotations
 
 from aisos.slice.deliberation import SliceDeliberation
 from aisos.slice.ledger import ConsumptionLedger, LedgerEntry
-from aisos.slice.llm import (
-    LLMMode,
-    LLMProvider,
-    LLMRequest,
-    LLMResponse,
-    StubLLMProvider,
-)
+from aisos.slice.llm import LLMMode, StubLLMProvider
 from aisos.slice.quality_gate import DeterministicQualityGate, QualityGate
-from aisos.slice.replay import (
-    LLMInteractionRecord,
-    LLMInteractionRegistry,
-    RecordingLLMProvider,
-    ReplayLLMProvider,
-    prompt_hash,
-)
 from aisos.slice.runtime import AgentRuntime, RuntimeReport, RuntimeStatus
 
 __all__ = [
     "AgentRuntime",
     "ConsumptionLedger",
     "DeterministicQualityGate",
-    "LLMInteractionRecord",
-    "LLMInteractionRegistry",
     "LLMMode",
-    "LLMProvider",
-    "LLMRequest",
-    "LLMResponse",
     "LedgerEntry",
     "QualityGate",
-    "RecordingLLMProvider",
-    "ReplayLLMProvider",
     "RuntimeReport",
     "RuntimeStatus",
     "SliceDeliberation",
     "StubLLMProvider",
-    "prompt_hash",
 ]

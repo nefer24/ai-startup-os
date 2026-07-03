@@ -1,7 +1,10 @@
-"""Fournisseur LLM ENTIEREMENT SIMULE et deterministe (Vertical Slice adverse, phase 1).
+"""Fournisseur LLM ENTIEREMENT SIMULE et deterministe (mode STUB, Vertical Slice adverse).
 
 Tracabilite : docs/adr/ADR-0010-determinisme-interactions-llm.md (mode `stub` deterministe),
 docs/consolidation/04-VERTICAL-SLICE-01-PLAN.md (sorties nominales ET degenerees).
+
+Le port `LLMProvider` et ses objets (`LLMRequest`, `LLMResponse`) sont desormais definis dans le
+coeur `aisos.llm` ; ce module ne conserve que le STUB adverse propre a la Slice.
 
 AUCUN appel reel : aucune requete reseau, aucun modele, aucune cle. Le stub emet des reponses
 FIXES par mode, de facon deterministe (aucun hasard), afin d'exercer la gouvernance sur le
@@ -16,20 +19,14 @@ chemin nominal ET sur des comportements degeneres :
 - `UNAVAILABLE` : indisponibilite du fournisseur — leve `LLMUnavailableError`.
 - `TOOL_DENIED` : l'agent reclame un outil hors manifest (F7) — le manifest doit refuser.
 - `DECIDES`     : l'agent tente de produire une "decision" (F8) — l'issue doit etre ignoree.
-
-La reponse porte sa propre comptabilite (tokens/cout/latence, modele) : elle est la SOURCE
-UNIQUE de la consommation (ADR-0010) que le registre economique agregera (ADR-0009).
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
-
-from pydantic import Field
 
 from aisos.domain.errors import LLMUnavailableError
-from aisos.schemas.base import ImmutableModel
+from aisos.llm import LLMRequest, LLMResponse, ProviderMode
 
 
 class LLMMode(StrEnum):
@@ -46,52 +43,14 @@ class LLMMode(StrEnum):
     DECIDES = "decides"
 
 
-class LLMRequest(ImmutableModel):
-    """Requete adressee au fournisseur LLM (simulee)."""
-
-    request_id: str
-    prompt: str
-    step: int = 0
-
-
-class LLMResponse(ImmutableModel):
-    """Reponse du fournisseur LLM (simulee), portant sa propre comptabilite.
-
-    `wants_more` signale une intention de poursuivre (auto-invocation) : l'AgentRuntime la borne
-    par la limite de recursion (aucun tour supplementaire en aveugle, ADR-0009).
-    """
-
-    content: str
-    options: list[str] = Field(default_factory=list)
-    arguments: list[str] = Field(default_factory=list)
-    devils_advocate: str | None = None
-    tokens_in: int = 0
-    tokens_out: int = 0
-    cost_eur: float = 0.0
-    latency_ms: int = 0
-    model: str = "stub-llm-1"
-    wants_more: bool = False
-    #: Outil reclame par l'agent (F7). L'AgentRuntime le confronte au manifest (least privilege).
-    requested_tool: str | None = None
-    #: "Decision" que l'agent tente de produire (F8). Elle est IGNOREE : un agent ne decide jamais.
-    attempted_decision: str | None = None
-
-
-@runtime_checkable
-class LLMProvider(Protocol):
-    """Port du fournisseur LLM. Deterministe et sans I/O reel dans la Slice."""
-
-    def complete(self, request: LLMRequest) -> LLMResponse:
-        """Retourne une reponse simulee (ou leve `LLMUnavailableError` si indisponible)."""
-        ...
-
-
 class StubLLMProvider:
-    """Fournisseur LLM simule et deterministe. Implemente le port `LLMProvider`.
+    """Fournisseur LLM simule et deterministe (mode `STUB`). Implemente le port `LLMProvider`.
 
     Chaque mode produit une reponse FIXE. `latency_ms`/tokens sont parametrables pour calibrer
     les scenarios (F1 timeout, F3 budget) sans dependre d'un modele reel.
     """
+
+    mode: ProviderMode = ProviderMode.STUB
 
     def __init__(
         self,

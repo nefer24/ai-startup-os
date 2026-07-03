@@ -30,12 +30,12 @@ from aisos.domain.errors import (
     WorkflowRecursionLimitError,
     WorkflowTimeoutError,
 )
+from aisos.llm import LLMProvider, LLMRequest, LLMResponse
 from aisos.orchestrator.deliberation import ConsumptionRecord
 from aisos.schemas.base import ImmutableModel
 from aisos.schemas.decision import Recommendation
 from aisos.schemas.entities import AgentManifest, Request
 from aisos.security import DefaultManifestEnforcer
-from aisos.slice.llm import LLMProvider, LLMRequest, LLMResponse
 
 
 class RuntimeStatus(StrEnum):
