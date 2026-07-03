@@ -29,11 +29,31 @@ from aisos.infrastructure.llm.secrets import (
     SecretResolver,
     resolve_api_key,
 )
+from aisos.infrastructure.llm.transport import (
+    DisabledLLMHttpClient,
+    HttpSimulation,
+    InvalidHttpResponseError,
+    LLMHttpClient,
+    LLMHttpError,
+    LLMHttpRequest,
+    LLMHttpResponse,
+    NetworkDisabledError,
+    SimulatedTimeoutError,
+    validate_http_response,
+)
 
 __all__ = [
+    "DisabledLLMHttpClient",
     "EnvironmentSecretResolver",
+    "HttpSimulation",
+    "InvalidHttpResponseError",
     "InvalidSecretNameError",
+    "LLMHttpClient",
+    "LLMHttpError",
+    "LLMHttpRequest",
+    "LLMHttpResponse",
     "LLMProviderAdapter",
+    "NetworkDisabledError",
     "ProviderName",
     "RealLLMActivationDecision",
     "RealLLMActivationGuard",
@@ -45,5 +65,7 @@ __all__ = [
     "SecretNotFoundError",
     "SecretResolutionError",
     "SecretResolver",
+    "SimulatedTimeoutError",
     "resolve_api_key",
+    "validate_http_response",
 ]
