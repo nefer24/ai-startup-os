@@ -22,7 +22,14 @@ from aisos.agents import (
     AgentRuntime,
     AgentTask,
 )
-from aisos.llm import LLMProvider, LLMRequest, LLMResponse
+from aisos.llm import (
+    InMemoryLLMInteractionStore,
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    RecordingLLMProvider,
+    ReplayLLMProvider,
+)
 from aisos.schemas.decision import HumanDecision, Recommendation
 from aisos.slice import LLMMode, StubLLMProvider
 
@@ -126,6 +133,20 @@ def test_uncertainty_is_present_and_bounded() -> None:
     assert empty.uncertainty > result.uncertainty
 
 
+def test_assumptions_are_present() -> None:
+    result = _agent().deliberate(_task())
+    assert len(result.assumptions) >= 1
+    assert any("contexte" in a for a in result.assumptions)
+    # Le risque principal (devils_advocate nominal) ajoute une hypothese explicite.
+    assert any("risque principal" in a for a in result.assumptions)
+
+
+def test_assumptions_note_absent_context() -> None:
+    task = AgentTask(id="t2", request_id="req-2", objective="objectif sans contexte", context=())
+    result = _agent().deliberate(task)
+    assert any("aucun contexte" in a for a in result.assumptions)
+
+
 def test_limits_are_present() -> None:
     result = _agent().deliberate(_task())
     assert len(result.limits) >= 1
@@ -156,6 +177,47 @@ def test_single_option_with_arguments_raises_uncertainty() -> None:
 
     result = AgentRuntime(_SingleOptionProvider()).deliberate(_task())
     assert result.uncertainty == 0.6
+
+
+# --- Record / Replay : la deliberation reste deterministe -------------------------------------
+
+
+def test_deliberation_is_deterministic_under_record_then_replay() -> None:
+    store = InMemoryLLMInteractionStore()
+    # RECORD : l'agent delibere via un provider enregistreur adosse au stub deterministe.
+    recording_agent = AgentRuntime(
+        RecordingLLMProvider(inner=StubLLMProvider(mode=LLMMode.NOMINAL), store=store)
+    )
+    recorded = recording_agent.deliberate(_task())
+
+    # REPLAY : un agent adosse au store rejoue SANS jamais rappeler le modele.
+    replay_agent = AgentRuntime(ReplayLLMProvider(store))
+    replayed = replay_agent.deliberate(_task())
+
+    assert replayed == recorded  # meme recommandation, hypotheses, limites, incertitude
+
+
+def test_replay_never_calls_the_underlying_stub() -> None:
+    store = InMemoryLLMInteractionStore()
+
+    class _CountingStub:
+        mode = StubLLMProvider().mode
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, request: LLMRequest) -> LLMResponse:
+            self.calls += 1
+            return LLMResponse(content="avis", options=["A", "B"], arguments=["a1", "a2"])
+
+    stub = _CountingStub()
+    AgentRuntime(RecordingLLMProvider(inner=stub, store=store)).deliberate(_task())
+    assert stub.calls == 1
+
+    replay_agent = AgentRuntime(ReplayLLMProvider(store))
+    for _ in range(3):
+        replay_agent.deliberate(_task())
+    assert stub.calls == 1  # le rejeu ne rappelle jamais le fournisseur sous-jacent
 
 
 # --- Erreur explicite si le fournisseur echoue ------------------------------------------------
