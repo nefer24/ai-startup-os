@@ -1,10 +1,22 @@
 # ADR-0011 — Audit : source unique de vérité
 
-- **Statut** : Proposé (implémenté dans cette PR — ratification M0-003 recommandée)
-- **Date** : 2026-07-03
+- **Statut** : Accepted (ratifié par le CEO — porte M0-003, 2026-07-03)
+- **Date** : 2026-07-03 · **Ratifié** : 2026-07-03
 - **Origine** : Revue stratégique n°2 · dette technique **D1** (« double écriture d'audit »)
 - **Décideur** : CEO (ratification requise) · **Instructeur** : Chief Software Architect
 - **Portée** : `Audit Engine`, `Audit Store` (port), `Unit of Work`, `Orchestrator`, persistance
+
+## Ratification CEO — M0-003
+
+- **Décision** : **APPROVED** (Porte M0, item **M0-003**), 2026-07-03.
+- **Référence** : M0-003.
+- **Justification** : la **PR #38** implémente une **source unique de vérité** d'audit : elle
+  **supprime le double-write** (`coordinator._emit` n'écrit plus qu'une seule entrée), le moteur
+  délègue le stockage à un unique `AuditStore`, et **préserve l'append-only et la hash-chain**
+  (scellement `seq`/`prev`/`hash` et `verify_chain` inchangés). La décision n'est plus seulement
+  instruite : elle est **construite et prouvée par test** (entrée unique faisant foi, rollback
+  sans preuve contradictoire, divergence engine/store impossible, chaîne vérifiable après
+  persistance). Voir « État d'implémentation » ci-dessous.
 
 ## Contexte — analyse du chemin d'audit (avant consolidation)
 
@@ -105,7 +117,7 @@ commite : **moteur et store ne peuvent pas diverger** — il n'existe qu'un jour
 - **Rendre l'audit non append-only pour « corriger » après rollback.** Rejeté : viole l'invariant
   WORM ; une correction destructive détruit la valeur forensique.
 
-## État d'implémentation (cette PR)
+## État d'implémentation (PR #38)
 
 | Élément | Emplacement |
 | --- | --- |

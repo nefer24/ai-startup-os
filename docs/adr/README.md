@@ -28,7 +28,7 @@ outre fait émerger deux décisions nouvelles, **DT-09** et **DT-10**, rédigée
 | --- | --- | --- | --- |
 | [ADR-0009](ADR-0009-gouvernance-economique.md) | Gouvernance économique (budgets, coûts, récursion, timeouts, quotas) | DT-09 (Revue n°2) | **Accepted** (ratifié M0-001, 2026-07-02) |
 | [ADR-0010](ADR-0010-determinisme-interactions-llm.md) | Déterminisme des interactions avec les LLM (hash, versionnement, replay, cache) | DT-10 (Revue n°2) | **Accepted** (ratifié M0-002, 2026-07-03) |
-| [ADR-0011](ADR-0011-audit-source-unique.md) | Audit : source unique de vérité (fin du double-write, dette D1) | Revue n°2 (D1) | **Proposé** (implémenté ; M0-003 recommandée) |
+| [ADR-0011](ADR-0011-audit-source-unique.md) | Audit : source unique de vérité (fin du double-write, dette D1) | Revue n°2 (D1) | **Accepted** (ratifié M0-003, 2026-07-03) |
 | [ADR-BACKLOG](ADR-BACKLOG.md) | ADR proposés à instruire (ratification DT-01→08 + 5 décisions issues des revues) | Revues n°1 & n°2 | Backlog priorisé |
 
 ## Lien avec le dossier de consolidation
