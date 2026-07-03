@@ -648,3 +648,5 @@ Stabilisation du **contrat d'accès aux modèles de langage** (ADR-0010) **avant
 | Couverture `src/aisos/llm/` | ✅ 100 % |
 
 Le module respecte l'inversion de dépendance (aucun import d'infrastructure) et **ne modifie aucune gouvernance**. La Vertical Slice (F1–F10) et les **320 tests** antérieurs restent verts après migration. Uniquement le contrat + le record/replay déterministe ; aucun fournisseur réel n'est appelé.
+
+**Ratification** : [`ADR-0010`](docs/adr/ADR-0010-determinisme-interactions-llm.md) est **ratifié** (statut `Accepted`, **porte M0-002**, 2026-07-03) et **aligné** sur ce module core — port `LLMProvider`, `LLMRequest`/`LLMResponse`, `ProviderMode` (STUB/RECORD/REPLAY), registre append-only, refus explicites (replay miss / model mismatch / parameter mismatch), garantie « replay never calls model ».
