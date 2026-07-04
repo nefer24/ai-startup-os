@@ -32,6 +32,7 @@ from aisos.orchestrator.dispatcher import RequestDispatcher
 from aisos.orchestrator.interfaces import Orchestrator, StrategicCouncilProposal
 from aisos.orchestrator.lifecycle import LifecycleManager
 from aisos.orchestrator.memory_context import CeoDecisionMemory, ContextualCouncilDeliberation
+from aisos.orchestrator.registry import CapabilityRegistry, default_capability_registry
 from aisos.orchestrator.resume import CEODecisionInput, CEODecisionResumer
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "CEODecisionResumer",
     "Capability",
     "CapabilityDescriptor",
+    "CapabilityRegistry",
     "CeoDecisionMemory",
     "ComponentCoordinator",
     "ConsumptionRecord",
@@ -58,4 +60,5 @@ __all__ = [
     "RequestContext",
     "RequestDispatcher",
     "StrategicCouncilProposal",
+    "default_capability_registry",
 ]
