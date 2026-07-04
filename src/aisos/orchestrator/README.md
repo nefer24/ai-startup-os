@@ -73,6 +73,33 @@ les gestes gouvernés). Le catalogue n'évolue que par ce canal gouverné, sous 
 réalisée que par une décision explicite du CEO.** Voir
 [`../../../docs/reports/E3-CAPABILITY-EVOLUTION-CLOSURE.md`](../../../docs/reports/E3-CAPABILITY-EVOLUTION-CLOSURE.md).
 
+## Périmètre gelé — contrats de référence (E4 clôturé)
+
+L'étape **E4 (mémoire durable de l'organisation)** est officiellement close. Les contrats produits
+par E4 sont **gelés** et constituent la **fondation mémorielle** d'AI-SOS — des références stables
+sur lesquelles E5 (vrai LLM) s'appuiera sans les rouvrir :
+
+- **Mémoire durable** (`governed_memory.py`) : `GovernedMemory` mémorise les faits gouvernés, chaque
+  souvenir **dérivant d'un fait déjà audité** ; **append-only** (revalidation par nouvelle revision,
+  jamais d'effacement) ; **ne remplace jamais l'audit** (`tests/unit/test_governed_memory.py`).
+- **Consultation** (`memory_query.py`) : `MemoryConsultation` consulte la mémoire en **lecture
+  seule** stricte et déterministe (copies défensives) ; aucune écriture, aucune mutation
+  (`tests/unit/test_governed_memory_query.py`).
+- **Organisation** (`memory_organization.py`) : `MemoryOrganization` regroupe la mémoire en
+  **collections logiques** déterministes (domaine / cycle de vie / origine), sans inférence ;
+  append-only préservé (`tests/unit/test_governed_memory_organization.py`).
+- **Contextualisation** (`memory_contextualization.py`) : `MemoryContextBuilder` prépare un
+  `MemoryContext` **immuable** et déterministe à partir de la mémoire organisée, prêt à être consommé
+  par E5 — jamais consommé ici (`tests/unit/test_governed_memory_context.py`).
+
+**Frontière informer / décision figée** : la mémoire **se souvient et informe** ; le **CEO décide**.
+L'**audit demeure la source unique de vérité** ; la mémoire en dérive. La mémoire est **passive** :
+elle n'a aucun pouvoir de décision, de recommandation ni d'action.
+
+**Toute évolution future de ces contrats doit respecter cette fondation de référence et ne peut être
+réalisée que par une décision explicite du CEO.** Voir
+[`../../../docs/reports/E4-MEMORY-CLOSURE.md`](../../../docs/reports/E4-MEMORY-CLOSURE.md).
+
 ## Invariant de gouvernance
 
 L'Orchestrateur recommande, il ne décide pas : l'activation du Conseil
