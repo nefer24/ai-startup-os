@@ -27,6 +27,7 @@ from aisos.orchestrator.context import (
     RequestContext,
 )
 from aisos.orchestrator.coordinator import ComponentCoordinator
+from aisos.orchestrator.creation import CapabilityCreation, GovernedCapabilityCreator
 from aisos.orchestrator.deliberation import (
     ConsumptionRecord,
     DeliberationKind,
@@ -49,6 +50,7 @@ __all__ = [
     "CEODecisionInput",
     "CEODecisionResumer",
     "Capability",
+    "CapabilityCreation",
     "CapabilityDescriptor",
     "CapabilityRegistry",
     "CeoDecisionMemory",
@@ -62,6 +64,7 @@ __all__ = [
     "DeliberationPort",
     "DeliberationVerdict",
     "ExecutionContext",
+    "GovernedCapabilityCreator",
     "InstantiatedOrganization",
     "LifecycleManager",
     "OrchestrationContext",
