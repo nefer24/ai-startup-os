@@ -15,6 +15,25 @@ Squelette uniquement :
   appartiennent à l'orchestrateur, qui appelle le cerveau via le port de
   délibération et lui injecte le contexte nécessaire.
 
+## Périmètre gelé — contrat de référence (E1 clôturé)
+
+L'étape **E1 (clôture du rez-de-chaussée : cerveau pur gouverné)** est officiellement close.
+Le périmètre du cerveau est **gelé** et constitue désormais un **contrat de référence stable** :
+
+- **Pur** : aucun import audit/événements/mémoire dans `agents/*.py` ; aucun symbole de gouvernance
+  dans le code (prouvé par `tests/unit/test_brain_purity.py`).
+- **Déterministe** et compatible **record/replay** (le rejeu ne rappelle jamais le fournisseur).
+- **Gouverné de l'extérieur** : invoqué via `DeliberationPort` ; ne crée aucune pause CEO, n'écrit
+  aucun audit, n'émet aucun événement, ne reprend aucune décision.
+- **Nourri par contexte** : reçoit `AgentTask.context` préparé par l'orchestration ; ne lit aucune
+  mémoire.
+- **Ne produit qu'une** `Recommendation` / `CouncilSynthesis` (jamais une décision).
+- **Périmètre figé** : deux agents, débat à deux tours — pas de 3ᵉ tour, pas de 3ᵉ agent, pas de
+  synthèse enrichie.
+
+**Toute évolution future du cerveau doit respecter ce contrat de référence et ne peut être réalisée
+que par une décision explicite du CEO.** Voir [`../../../docs/reports/E1-BRAIN-CLOSURE.md`](../../../docs/reports/E1-BRAIN-CLOSURE.md).
+
 ## Traçabilité
 
 Chaque élément est traçable vers une spécification existante :
