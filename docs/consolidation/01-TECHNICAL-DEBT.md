@@ -88,3 +88,42 @@ La qualité intrinsèque du construit reste élevée (couverture 99 %, mypy stri
 appliquées). La dette listée est **de conception et de cohérence**, pas de correction : aucun item
 ne remet en cause le fonctionnement des invariants déjà prouvés. La priorité P1 tient à un seul
 principe : **traiter maintenant ce qui deviendra cher à l'arrivée du LLM et des clients réels.**
+
+---
+
+## Affectation des dettes aux étapes de construction (Debt Ownership)
+
+> Ajout à la clôture des Fondations (E0), 2026-07-04. Application du **Debt Ownership Principle** :
+> chaque dette a pour propriétaire une étape précise du Cahier des charges de construction et ne
+> se traite que lorsque **cette** étape est ouverte — jamais avant. Une dette d'un étage futur
+> reste dans son étage futur. Voir [`docs/reports/E0-FOUNDATIONS-CLOSURE.md`](../reports/E0-FOUNDATIONS-CLOSURE.md).
+
+**Dettes résolues pendant les Fondations (E0)** — closes, conservées pour mémoire :
+
+| Dette | Résolution |
+| --- | --- |
+| D1 — Double écriture d'audit | ✅ ADR-0011 / PR #38 — source unique, WORM, chaîne vérifiable |
+| D2 — Bornes économiques non appliquées | ✅ ADR-0009 — bornes appliquées + escalade auditée (Slice adverse) |
+| D3 — Rejeu déterministe LLM absent | ✅ ADR-0010 / PR #36 — port `LLMProvider` + record/replay |
+| D15 — Quality Gate en stub | ✅ rendu réel dans la Vertical Slice adverse |
+
+**Dettes ouvertes, affectées à leur étage propriétaire** — à ne pas anticiper :
+
+| Dette | Étage propriétaire | Justification de l'affectation |
+| --- | --- | --- |
+| D7 — Reprise (resume) non transactionnelle | **E5** (persistance / monde réel) | Auditée et chaînée aujourd'hui ; à sceller avant l'exploitation durable, sans effet sur E1–E4 (déterministes en mémoire). |
+| Adaptateur d'audit durable (PostgreSQL) | **E5** | Invariant d'audit prouvé en mémoire ; durabilité = propriété d'exploitation. |
+| Fusion transport + backend LLM | **E5** | Abstraction gelée (revue #53) ; résolue au branchement d'un vrai LLM. |
+| Chaînage enregistrement LLM → audit | **E5** | Pertinent quand la consommation LLM réelle entre dans le système. |
+| D11 — `verify_chain` en O(n) global | **E5 / E6** | Optimisation liée à l'audit durable et au passage à l'échelle. |
+| D13 — Monoculture de test | **E5** | Tests d'intégration/propriétés/concurrence à démarrer avec le premier adaptateur/LLM réel. |
+| D4 / D5 — Redondance d'état et de pause (ADR-0012) | **E2** (à confirmer par ADR-0012) | À trancher quand la composition sollicitera l'orchestrateur ; non bloquant pour E1. |
+| D8 — Event Bus sans abonné | **E2+** | Abonnés réels apparaîtront avec la composition / les consommateurs de production. |
+| D9 — Modules squelettes (`agents`, `councils`, `runtime`, `services`, `api`) | **E2 – E7** | Activés à leur étage, jamais avant (composition, capacités, échelle). |
+| D6 — Duplication `coordinator._emit` / `resume._emit` | **Opportuniste** | Nettoyage mineur, à faire seulement si un étage touche ce code ; non affecté à un étage propre. |
+| D12 — Dette catalogue d'événements | **Opportuniste** | À réconcilier lors d'un futur travail sur le catalogue. |
+| D10 — Couche Application prématurée | **Surveillance** | Churn possible ; refonte faible ; surveiller sans agir. |
+| D14 — Dérive documentaire | **Transverse (chaque étage)** | Estampiller CONSTRUIT/PARTIEL/PLANIFIÉ au fil de chaque étage. |
+
+**Règle** : aucune de ces dettes ouvertes ne doit être traitée pendant E1. Toute proposition les
+concernant sera signalée comme appartenant à son étage propriétaire et **reportée**.
