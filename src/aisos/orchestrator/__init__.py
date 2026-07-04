@@ -34,6 +34,10 @@ from aisos.orchestrator.deliberation import (
     DeliberationPort,
     DeliberationVerdict,
 )
+from aisos.orchestrator.deprecation import (
+    CapabilityDeprecation,
+    GovernedCapabilityDeprecator,
+)
 from aisos.orchestrator.dispatcher import RequestDispatcher
 from aisos.orchestrator.instantiation import (
     InstantiatedOrganization,
@@ -51,6 +55,7 @@ __all__ = [
     "CEODecisionResumer",
     "Capability",
     "CapabilityCreation",
+    "CapabilityDeprecation",
     "CapabilityDescriptor",
     "CapabilityRegistry",
     "CeoDecisionMemory",
@@ -65,6 +70,7 @@ __all__ = [
     "DeliberationVerdict",
     "ExecutionContext",
     "GovernedCapabilityCreator",
+    "GovernedCapabilityDeprecator",
     "InstantiatedOrganization",
     "LifecycleManager",
     "OrchestrationContext",
