@@ -8,11 +8,14 @@ informe ; le LLM raisonne. Aucune decision, aucune ecriture, aucune gouvernance 
 
 from __future__ import annotations
 
+from aisos.reasoning.budget import BudgetBoundedReasoningEngine, ReasoningBudget
 from aisos.reasoning.engine import GovernedReasoningEngine
 from aisos.reasoning.grounding import MemoryGroundedReasoningEngine, render_memory_context
 
 __all__ = [
+    "BudgetBoundedReasoningEngine",
     "GovernedReasoningEngine",
     "MemoryGroundedReasoningEngine",
+    "ReasoningBudget",
     "render_memory_context",
 ]
