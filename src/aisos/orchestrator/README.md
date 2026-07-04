@@ -45,6 +45,34 @@ sur lesquelles E3 (évolution gouvernée des capacités) s'appuiera sans les rou
 réalisée que par une décision explicite du CEO.** Voir
 [`../../../docs/reports/E2-COMPOSITION-CLOSURE.md`](../../../docs/reports/E2-COMPOSITION-CLOSURE.md).
 
+## Périmètre gelé — contrats de référence (E3 clôturé)
+
+L'étape **E3 (évolution gouvernée des capacités)** est officiellement close. Les contrats produits
+par E3 sont **gelés** et constituent la **fondation d'évolution** d'AI-SOS — des références stables
+sur lesquelles E4 (mémoire) s'appuiera sans les rouvrir :
+
+- **Création gouvernée** (`creation.py`) : le **CEO seul** inscrit une nouvelle capacité conforme au
+  contrat E2.1, **sous audit** ; refus déterministe hors canal CEO ; le registre n'est jamais muté
+  en place (`tests/unit/test_governed_capability_creation.py`).
+- **Dépréciation gouvernée** (`deprecation.py`) : le CEO retire une capacité de la disponibilité
+  opérationnelle, **sans la détruire** ; l'existence historique est préservée ; audité
+  (`tests/unit/test_governed_capability_deprecation.py`).
+- **Catalogue vivant** (`catalog.py`) : `CatalogState` distingue **historique** (append-only),
+  **actif** (opérationnel) et **transitions** (journal auditable) ; `GovernedCatalog` réutilise la
+  création et la dépréciation ; déterministe, jamais muté en place, surface de lecture E2 stable
+  (`tests/unit/test_governed_catalog_evolution.py`).
+- **Conseil Stratégique consultatif** (`strategic_council.py`) : organe **exclusivement composé
+  d'agents IA** (cerveau gelé, consulté via port injecté) qui **recommande** (créer / déprécier / ne
+  rien changer) ; **ne décide, n'écrit, ne gouverne, ne s'auto-active jamais**
+  (`tests/unit/test_strategic_council.py`).
+
+**Frontière recommandation / décision figée** : le Conseil **recommande** ; le **CEO décide** (via
+les gestes gouvernés). Le catalogue n'évolue que par ce canal gouverné, sous acte CEO audité.
+
+**Toute évolution future de ces contrats doit respecter cette fondation de référence et ne peut être
+réalisée que par une décision explicite du CEO.** Voir
+[`../../../docs/reports/E3-CAPABILITY-EVOLUTION-CLOSURE.md`](../../../docs/reports/E3-CAPABILITY-EVOLUTION-CLOSURE.md).
+
 ## Invariant de gouvernance
 
 L'Orchestrateur recommande, il ne décide pas : l'activation du Conseil
