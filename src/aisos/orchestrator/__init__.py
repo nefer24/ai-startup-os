@@ -13,6 +13,11 @@ from aisos.orchestrator.capability import (
     CapabilityDescriptor,
     DeliberationCapability,
 )
+from aisos.orchestrator.composition import (
+    ComposedOrganization,
+    compose_organization,
+    resolve_capabilities,
+)
 from aisos.orchestrator.context import (
     DeliberationContextResolver,
     ExecutionContext,
@@ -44,6 +49,7 @@ __all__ = [
     "CapabilityRegistry",
     "CeoDecisionMemory",
     "ComponentCoordinator",
+    "ComposedOrganization",
     "ConsumptionRecord",
     "ContextualCouncilDeliberation",
     "DeliberationCapability",
@@ -60,5 +66,7 @@ __all__ = [
     "RequestContext",
     "RequestDispatcher",
     "StrategicCouncilProposal",
+    "compose_organization",
     "default_capability_registry",
+    "resolve_capabilities",
 ]
