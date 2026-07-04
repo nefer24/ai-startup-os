@@ -13,6 +13,13 @@ from aisos.orchestrator.capability import (
     CapabilityDescriptor,
     DeliberationCapability,
 )
+from aisos.orchestrator.catalog import (
+    CatalogState,
+    CatalogTransition,
+    CatalogTransitionKind,
+    GovernedCatalog,
+    initial_catalog_state,
+)
 from aisos.orchestrator.composition import (
     ComposedOrganization,
     compose_organization,
@@ -58,6 +65,9 @@ __all__ = [
     "CapabilityDeprecation",
     "CapabilityDescriptor",
     "CapabilityRegistry",
+    "CatalogState",
+    "CatalogTransition",
+    "CatalogTransitionKind",
     "CeoDecisionMemory",
     "ComponentCoordinator",
     "ComposedOrganization",
@@ -71,6 +81,7 @@ __all__ = [
     "ExecutionContext",
     "GovernedCapabilityCreator",
     "GovernedCapabilityDeprecator",
+    "GovernedCatalog",
     "InstantiatedOrganization",
     "LifecycleManager",
     "OrchestrationContext",
@@ -83,5 +94,6 @@ __all__ = [
     "StrategicCouncilProposal",
     "compose_organization",
     "default_capability_registry",
+    "initial_catalog_state",
     "resolve_capabilities",
 ]
