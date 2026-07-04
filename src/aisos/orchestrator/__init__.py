@@ -54,6 +54,7 @@ from aisos.orchestrator.instantiation import (
 from aisos.orchestrator.interfaces import Orchestrator, StrategicCouncilProposal
 from aisos.orchestrator.lifecycle import LifecycleManager
 from aisos.orchestrator.memory_context import CeoDecisionMemory, ContextualCouncilDeliberation
+from aisos.orchestrator.memory_query import MemoryConsultation
 from aisos.orchestrator.registry import CapabilityRegistry, default_capability_registry
 from aisos.orchestrator.resume import CEODecisionInput, CEODecisionResumer
 from aisos.orchestrator.strategic_council import (
@@ -97,6 +98,7 @@ __all__ = [
     "GovernedMemory",
     "InstantiatedOrganization",
     "LifecycleManager",
+    "MemoryConsultation",
     "OrchestrationContext",
     "OrchestrationResult",
     "OrchestrationStatus",
