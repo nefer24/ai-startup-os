@@ -55,6 +55,13 @@ from aisos.orchestrator.lifecycle import LifecycleManager
 from aisos.orchestrator.memory_context import CeoDecisionMemory, ContextualCouncilDeliberation
 from aisos.orchestrator.registry import CapabilityRegistry, default_capability_registry
 from aisos.orchestrator.resume import CEODecisionInput, CEODecisionResumer
+from aisos.orchestrator.strategic_council import (
+    CatalogConcern,
+    CatalogEvolutionRequest,
+    CatalogRecommendation,
+    CatalogRecommendationKind,
+    StrategicCouncil,
+)
 
 __all__ = [
     "EXPERT_COUNCIL_CAPABILITY",
@@ -65,6 +72,10 @@ __all__ = [
     "CapabilityDeprecation",
     "CapabilityDescriptor",
     "CapabilityRegistry",
+    "CatalogConcern",
+    "CatalogEvolutionRequest",
+    "CatalogRecommendation",
+    "CatalogRecommendationKind",
     "CatalogState",
     "CatalogTransition",
     "CatalogTransitionKind",
@@ -91,6 +102,7 @@ __all__ = [
     "OrganizationInstantiator",
     "RequestContext",
     "RequestDispatcher",
+    "StrategicCouncil",
     "StrategicCouncilProposal",
     "compose_organization",
     "default_capability_registry",
