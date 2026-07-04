@@ -34,6 +34,10 @@ from aisos.orchestrator.deliberation import (
     DeliberationVerdict,
 )
 from aisos.orchestrator.dispatcher import RequestDispatcher
+from aisos.orchestrator.instantiation import (
+    InstantiatedOrganization,
+    OrganizationInstantiator,
+)
 from aisos.orchestrator.interfaces import Orchestrator, StrategicCouncilProposal
 from aisos.orchestrator.lifecycle import LifecycleManager
 from aisos.orchestrator.memory_context import CeoDecisionMemory, ContextualCouncilDeliberation
@@ -58,11 +62,13 @@ __all__ = [
     "DeliberationPort",
     "DeliberationVerdict",
     "ExecutionContext",
+    "InstantiatedOrganization",
     "LifecycleManager",
     "OrchestrationContext",
     "OrchestrationResult",
     "OrchestrationStatus",
     "Orchestrator",
+    "OrganizationInstantiator",
     "RequestContext",
     "RequestDispatcher",
     "StrategicCouncilProposal",
