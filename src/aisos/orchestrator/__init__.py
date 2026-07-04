@@ -7,6 +7,12 @@ et ne prend aucune decision automatique. Sans framework, sans broker, sans API, 
 
 from __future__ import annotations
 
+from aisos.orchestrator.capability import (
+    EXPERT_COUNCIL_CAPABILITY,
+    Capability,
+    CapabilityDescriptor,
+    DeliberationCapability,
+)
 from aisos.orchestrator.context import (
     DeliberationContextResolver,
     ExecutionContext,
@@ -29,12 +35,16 @@ from aisos.orchestrator.memory_context import CeoDecisionMemory, ContextualCounc
 from aisos.orchestrator.resume import CEODecisionInput, CEODecisionResumer
 
 __all__ = [
+    "EXPERT_COUNCIL_CAPABILITY",
     "CEODecisionInput",
     "CEODecisionResumer",
+    "Capability",
+    "CapabilityDescriptor",
     "CeoDecisionMemory",
     "ComponentCoordinator",
     "ConsumptionRecord",
     "ContextualCouncilDeliberation",
+    "DeliberationCapability",
     "DeliberationContextResolver",
     "DeliberationKind",
     "DeliberationPort",
