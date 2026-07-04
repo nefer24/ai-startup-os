@@ -46,6 +46,7 @@ from aisos.orchestrator.deprecation import (
     GovernedCapabilityDeprecator,
 )
 from aisos.orchestrator.dispatcher import RequestDispatcher
+from aisos.orchestrator.governed_memory import GovernedMemory
 from aisos.orchestrator.instantiation import (
     InstantiatedOrganization,
     OrganizationInstantiator,
@@ -93,6 +94,7 @@ __all__ = [
     "GovernedCapabilityCreator",
     "GovernedCapabilityDeprecator",
     "GovernedCatalog",
+    "GovernedMemory",
     "InstantiatedOrganization",
     "LifecycleManager",
     "OrchestrationContext",
