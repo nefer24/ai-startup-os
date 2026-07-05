@@ -23,6 +23,11 @@ E6.4 pose la quatrieme brique : **recevoir** — permettre a une organisation de
 la **reception gouvernee** d'un artefact expose (`ReceivedFederatedArtifact`, `ReceptionStatus`),
 **sous consentement destination valide**, **sans integrer** cet artefact (ni memoire, ni audit, ni
 catalogue, ni raisonnement).
+
+E6.5 pose la cinquieme brique : **coordonner** — representer une **coordination federee complete**
+(`GovernedFederatedCoordination`, `CoordinationStatus`) comme un **lien verifiable** entre
+l'exposition (E6.3) et la reception (E6.4) : une **preuve structurelle de relation**, **jamais une
+autorite**, sans creer le moindre pouvoir.
 """
 
 from __future__ import annotations
@@ -34,6 +39,7 @@ from aisos.federation.consent import (
     DirectionalConsent,
     FederationConsent,
 )
+from aisos.federation.coordination import CoordinationStatus, GovernedFederatedCoordination
 from aisos.federation.exposure import ExposableFederatedArtifact, ExposureStatus
 from aisos.federation.identity import FederatedOrganizationIdentity, FederationStatus
 from aisos.federation.reception import ReceivedFederatedArtifact, ReceptionStatus
@@ -42,12 +48,14 @@ __all__ = [
     "ArtifactType",
     "ConsentDirection",
     "ConsentStatus",
+    "CoordinationStatus",
     "DirectionalConsent",
     "ExposableFederatedArtifact",
     "ExposureStatus",
     "FederatedOrganizationIdentity",
     "FederationConsent",
     "FederationStatus",
+    "GovernedFederatedCoordination",
     "ReceivedFederatedArtifact",
     "ReceptionStatus",
 ]
