@@ -28,6 +28,11 @@ E6.5 pose la cinquieme brique : **coordonner** — representer une **coordinatio
 (`GovernedFederatedCoordination`, `CoordinationStatus`) comme un **lien verifiable** entre
 l'exposition (E6.3) et la reception (E6.4) : une **preuve structurelle de relation**, **jamais une
 autorite**, sans creer le moindre pouvoir.
+
+E6.6 pose la sixieme brique : **consulter** — permettre a une organisation destination de
+**consulter** un artefact federe **deja coordonne** (`GovernedFederatedConsultation`,
+`ConsultationStatus`) comme **entree informationnelle gouvernee**, **sans integrer** cet artefact
+(ni memoire, ni audit, ni catalogue, ni raisonnement).
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ from aisos.federation.consent import (
     DirectionalConsent,
     FederationConsent,
 )
+from aisos.federation.consultation import ConsultationStatus, GovernedFederatedConsultation
 from aisos.federation.coordination import CoordinationStatus, GovernedFederatedCoordination
 from aisos.federation.exposure import ExposableFederatedArtifact, ExposureStatus
 from aisos.federation.identity import FederatedOrganizationIdentity, FederationStatus
@@ -48,6 +54,7 @@ __all__ = [
     "ArtifactType",
     "ConsentDirection",
     "ConsentStatus",
+    "ConsultationStatus",
     "CoordinationStatus",
     "DirectionalConsent",
     "ExposableFederatedArtifact",
@@ -55,6 +62,7 @@ __all__ = [
     "FederatedOrganizationIdentity",
     "FederationConsent",
     "FederationStatus",
+    "GovernedFederatedConsultation",
     "GovernedFederatedCoordination",
     "ReceivedFederatedArtifact",
     "ReceptionStatus",
