@@ -26,6 +26,11 @@ E7.4 pose la quatrieme brique : **planifier** — representer un **plan d'evolut
 (`GovernedEvolutionPlan`, `EvolutionPlanStatus`) a partir d'une analyse produite (E7.3) : la
 description gouvernee des etapes qu'il faudrait suivre SI le CEO approuve — une preparation
 immuable, sans aucun pouvoir de decision, d'approbation, d'application ni d'execution.
+
+E7.5 pose la cinquieme brique : **decider** — representer l'**acte decisionnel reserve au CEO**
+(`GovernedEvolutionDecision`, `EvolutionDecision`, `EvolutionDecisionStatus`) sur un plan prepare
+(E7.4). C'est le seul endroit ou une decision CEO apparait ; elle reste un **verdict** (approuve /
+refuse / reporte / demande une revision) **sans effet operationnel** : meme APPROVE n'applique rien.
 """
 
 from __future__ import annotations
@@ -34,6 +39,11 @@ from aisos.evolution.analysis import (
     EvolutionAnalysisRecommendation,
     EvolutionAnalysisStatus,
     GovernedEvolutionAnalysis,
+)
+from aisos.evolution.decision import (
+    EvolutionDecision,
+    EvolutionDecisionStatus,
+    GovernedEvolutionDecision,
 )
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
 from aisos.evolution.plan import EvolutionPlanStatus, GovernedEvolutionPlan
@@ -46,6 +56,8 @@ from aisos.evolution.proposal import (
 __all__ = [
     "EvolutionAnalysisRecommendation",
     "EvolutionAnalysisStatus",
+    "EvolutionDecision",
+    "EvolutionDecisionStatus",
     "EvolutionNeed",
     "EvolutionNeedKind",
     "EvolutionNeedStatus",
@@ -53,6 +65,7 @@ __all__ = [
     "EvolutionProposalStatus",
     "EvolutionProposalType",
     "GovernedEvolutionAnalysis",
+    "GovernedEvolutionDecision",
     "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
 ]
