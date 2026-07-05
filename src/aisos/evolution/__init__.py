@@ -39,6 +39,13 @@ valide (E7.4), sur decision APPROVE au statut DECIDED (E7.5). C'est la premiere 
 d'application, mais elle reste **declarative et bornee** : elle **constate** la conformite au plan —
 sans decision nouvelle, sans execution runtime, sans mutation libre ni reouverture des contrats
 figes.
+
+E7.7 pose la septieme brique : **tracer** — representer la **tracabilite gouvernee** du cycle
+d'evolution et sa memorisation contextuelle (`GovernedEvolutionTrace`, `EvolutionTraceStatus`),
+reliant besoin (E7.1), proposition (E7.2), analyse (E7.3), plan (E7.4), decision (E7.5) et
+application (E7.6). C'est un **enregistrement de liaison**, immuable : l'audit reste **source de
+verite**, la memoire ne fait que **contextualiser** — sans decider, appliquer, muter, reecrire
+l'histoire ni remplacer l'audit.
 """
 
 from __future__ import annotations
@@ -64,6 +71,7 @@ from aisos.evolution.proposal import (
     EvolutionProposalType,
     GovernedEvolutionProposal,
 )
+from aisos.evolution.trace import EvolutionTraceStatus, GovernedEvolutionTrace
 
 __all__ = [
     "EvolutionAnalysisRecommendation",
@@ -77,9 +85,11 @@ __all__ = [
     "EvolutionPlanStatus",
     "EvolutionProposalStatus",
     "EvolutionProposalType",
+    "EvolutionTraceStatus",
     "GovernedEvolutionAnalysis",
     "GovernedEvolutionApplication",
     "GovernedEvolutionDecision",
     "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
+    "GovernedEvolutionTrace",
 ]
