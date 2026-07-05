@@ -60,6 +60,13 @@ gouverne de cycles** issus d'un historique (`GovernedEvolutionCycleGroup`,
 READ. C'est un **recueil etiquette** immuable de traces (toutes issues de l'historique, TRACED, meme
 organisation), conservees telles quelles : sans analyser, comparer, identifier de pattern,
 recommander, decider, fusionner ni reordonner.
+
+E8.3 poursuit l'evolution continue gouvernee : **identifier** — representer un **pattern recurrent**
+dans un groupe (`GovernedEvolutionPattern`, `EvolutionPatternType`, `EvolutionPatternConfidence`,
+`EvolutionPatternStatus`) a partir d'un groupe E8.2 au statut GROUPED. C'est un **constat
+descriptif** immuable d'une recurrence (type et confiance descriptifs, traces de soutien du
+groupe) : sans recommander, decider, autoriser, creer un besoin/proposition, appliquer ni modifier.
+`HIGH` ne vaut jamais "autorise".
 """
 
 from __future__ import annotations
@@ -84,6 +91,12 @@ from aisos.evolution.grouping import (
 )
 from aisos.evolution.history import EvolutionHistoryStatus, GovernedEvolutionHistory
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
+from aisos.evolution.pattern import (
+    EvolutionPatternConfidence,
+    EvolutionPatternStatus,
+    EvolutionPatternType,
+    GovernedEvolutionPattern,
+)
 from aisos.evolution.plan import EvolutionPlanStatus, GovernedEvolutionPlan
 from aisos.evolution.proposal import (
     EvolutionProposalStatus,
@@ -103,6 +116,9 @@ __all__ = [
     "EvolutionNeed",
     "EvolutionNeedKind",
     "EvolutionNeedStatus",
+    "EvolutionPatternConfidence",
+    "EvolutionPatternStatus",
+    "EvolutionPatternType",
     "EvolutionPlanStatus",
     "EvolutionProposalStatus",
     "EvolutionProposalType",
@@ -112,6 +128,7 @@ __all__ = [
     "GovernedEvolutionCycleGroup",
     "GovernedEvolutionDecision",
     "GovernedEvolutionHistory",
+    "GovernedEvolutionPattern",
     "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
     "GovernedEvolutionTrace",
