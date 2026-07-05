@@ -30,7 +30,15 @@ immuable, sans aucun pouvoir de decision, d'approbation, d'application ni d'exec
 E7.5 pose la cinquieme brique : **decider** — representer l'**acte decisionnel reserve au CEO**
 (`GovernedEvolutionDecision`, `EvolutionDecision`, `EvolutionDecisionStatus`) sur un plan prepare
 (E7.4). C'est le seul endroit ou une decision CEO apparait ; elle reste un **verdict** (approuve /
-refuse / reporte / demande une revision) **sans effet operationnel** : meme APPROVE n'applique rien.
+refuse / reporte / demande une revision) **sans effet operationnel** : meme APPROVE n'applique
+rien.
+
+E7.6 pose la sixieme brique : **appliquer** — representer l'**application gouvernee** d'une
+evolution **approuvee** (`GovernedEvolutionApplication`, `EvolutionApplicationStatus`) selon le plan
+valide (E7.4), sur decision APPROVE au statut DECIDED (E7.5). C'est la premiere etape ou l'on parle
+d'application, mais elle reste **declarative et bornee** : elle **constate** la conformite au plan —
+sans decision nouvelle, sans execution runtime, sans mutation libre ni reouverture des contrats
+figes.
 """
 
 from __future__ import annotations
@@ -39,6 +47,10 @@ from aisos.evolution.analysis import (
     EvolutionAnalysisRecommendation,
     EvolutionAnalysisStatus,
     GovernedEvolutionAnalysis,
+)
+from aisos.evolution.application import (
+    EvolutionApplicationStatus,
+    GovernedEvolutionApplication,
 )
 from aisos.evolution.decision import (
     EvolutionDecision,
@@ -56,6 +68,7 @@ from aisos.evolution.proposal import (
 __all__ = [
     "EvolutionAnalysisRecommendation",
     "EvolutionAnalysisStatus",
+    "EvolutionApplicationStatus",
     "EvolutionDecision",
     "EvolutionDecisionStatus",
     "EvolutionNeed",
@@ -65,6 +78,7 @@ __all__ = [
     "EvolutionProposalStatus",
     "EvolutionProposalType",
     "GovernedEvolutionAnalysis",
+    "GovernedEvolutionApplication",
     "GovernedEvolutionDecision",
     "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
