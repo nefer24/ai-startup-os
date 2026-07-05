@@ -21,6 +21,11 @@ E7.3 pose la troisieme brique : **analyser** — representer l'**analyse strateg
 (`GovernedEvolutionAnalysis`, `EvolutionAnalysisRecommendation`, `EvolutionAnalysisStatus`) d'une
 proposition en cours (E7.2), portee par une autorite consultative (jamais le CEO), immuable et sans
 aucun pouvoir de decision, de plan ni d'application ; sa recommandation reste **consultative**.
+
+E7.4 pose la quatrieme brique : **planifier** — representer un **plan d'evolution gouverne**
+(`GovernedEvolutionPlan`, `EvolutionPlanStatus`) a partir d'une analyse produite (E7.3) : la
+description gouvernee des etapes qu'il faudrait suivre SI le CEO approuve — une preparation
+immuable, sans aucun pouvoir de decision, d'approbation, d'application ni d'execution.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from aisos.evolution.analysis import (
     GovernedEvolutionAnalysis,
 )
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
+from aisos.evolution.plan import EvolutionPlanStatus, GovernedEvolutionPlan
 from aisos.evolution.proposal import (
     EvolutionProposalStatus,
     EvolutionProposalType,
@@ -43,8 +49,10 @@ __all__ = [
     "EvolutionNeed",
     "EvolutionNeedKind",
     "EvolutionNeedStatus",
+    "EvolutionPlanStatus",
     "EvolutionProposalStatus",
     "EvolutionProposalType",
     "GovernedEvolutionAnalysis",
+    "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
 ]
