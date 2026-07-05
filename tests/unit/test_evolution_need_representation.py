@@ -214,14 +214,12 @@ def test_no_central_authority_type_exists() -> None:
         assert not hasattr(need_module, forbidden), f"aucune autorite centrale : {forbidden}"
 
 
-def test_public_surface_is_only_need_and_statuses() -> None:
+def test_public_surface_exposes_need_and_statuses() -> None:
     import aisos.evolution as evolution
 
-    assert set(evolution.__all__) == {
-        "EvolutionNeed",
-        "EvolutionNeedKind",
-        "EvolutionNeedStatus",
-    }
+    # E7.1 exporte son besoin et ses statuts ; la surface du package peut croitre (E7.2+), mais le
+    # contrat de representation de E7.1 reste present et inchange.
+    assert {"EvolutionNeed", "EvolutionNeedKind", "EvolutionNeedStatus"} <= set(evolution.__all__)
 
 
 # --- Contrats E1-E6 non rouverts ; cerveau gele ; aucune ecriture -----------------------------

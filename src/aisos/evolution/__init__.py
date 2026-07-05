@@ -11,14 +11,27 @@ CEO.**
 E7.1 pose la premiere brique : **representer** un **besoin d'evolution** (`EvolutionNeed`,
 `EvolutionNeedKind`, `EvolutionNeedStatus`) — une declaration gouvernee, immuable, portee par le CEO
 local, sans pouvoir, sans auto-detection, sans rien declencher.
+
+E7.2 pose la deuxieme brique : **proposer** — formuler une **proposition d'evolution
+organisationnelle** (`GovernedEvolutionProposal`, `EvolutionProposalType`,
+`EvolutionProposalStatus`) liee a un besoin declare (E7.1), portee par le CEO local, immuable et
+sans aucun pouvoir de decision, d'analyse, de plan ni d'application.
 """
 
 from __future__ import annotations
 
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
+from aisos.evolution.proposal import (
+    EvolutionProposalStatus,
+    EvolutionProposalType,
+    GovernedEvolutionProposal,
+)
 
 __all__ = [
     "EvolutionNeed",
     "EvolutionNeedKind",
     "EvolutionNeedStatus",
+    "EvolutionProposalStatus",
+    "EvolutionProposalType",
+    "GovernedEvolutionProposal",
 ]
