@@ -46,6 +46,13 @@ reliant besoin (E7.1), proposition (E7.2), analyse (E7.3), plan (E7.4), decision
 application (E7.6). C'est un **enregistrement de liaison**, immuable : l'audit reste **source de
 verite**, la memoire ne fait que **contextualiser** — sans decider, appliquer, muter, reecrire
 l'histoire ni remplacer l'audit.
+
+E8.1 ouvre l'evolution continue gouvernee : **lire** — representer une **lecture gouvernee de
+plusieurs traces E7 passees** (`GovernedEvolutionHistory`, `EvolutionHistoryStatus`), toutes au
+statut TRACED et dans la meme organisation. C'est un **recueil immuable** de traces, dans l'ordre
+fourni : sans analyser, regrouper, comparer, identifier de pattern, recommander, decider ni modifier
+les traces. *Evolution continue = lecture gouvernee de cycles passes pour preparer de nouveaux
+cycles soumis au CEO.*
 """
 
 from __future__ import annotations
@@ -64,6 +71,7 @@ from aisos.evolution.decision import (
     EvolutionDecisionStatus,
     GovernedEvolutionDecision,
 )
+from aisos.evolution.history import EvolutionHistoryStatus, GovernedEvolutionHistory
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
 from aisos.evolution.plan import EvolutionPlanStatus, GovernedEvolutionPlan
 from aisos.evolution.proposal import (
@@ -79,6 +87,7 @@ __all__ = [
     "EvolutionApplicationStatus",
     "EvolutionDecision",
     "EvolutionDecisionStatus",
+    "EvolutionHistoryStatus",
     "EvolutionNeed",
     "EvolutionNeedKind",
     "EvolutionNeedStatus",
@@ -89,6 +98,7 @@ __all__ = [
     "GovernedEvolutionAnalysis",
     "GovernedEvolutionApplication",
     "GovernedEvolutionDecision",
+    "GovernedEvolutionHistory",
     "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
     "GovernedEvolutionTrace",
