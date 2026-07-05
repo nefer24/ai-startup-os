@@ -9,13 +9,30 @@ super-orchestrateur, aucune autorite centrale.
 E6.1 pose la premiere brique : **identifier** une organisation autonome comme participante
 federable (`FederatedOrganizationIdentity`, `FederationStatus`) — une declaration en lecture seule,
 sans pouvoir, sans coordination, sans echange.
+
+E6.2 pose la deuxieme brique : **consentir** — representer le **consentement gouverne** entre deux
+organisations federables (`FederationConsent`, `DirectionalConsent`, `ArtifactType`,
+`ConsentDirection`, `ConsentStatus`), chaque cote porte par son CEO local — une declaration
+immuable, **sans encore echanger** quoi que ce soit.
 """
 
 from __future__ import annotations
 
+from aisos.federation.consent import (
+    ArtifactType,
+    ConsentDirection,
+    ConsentStatus,
+    DirectionalConsent,
+    FederationConsent,
+)
 from aisos.federation.identity import FederatedOrganizationIdentity, FederationStatus
 
 __all__ = [
+    "ArtifactType",
+    "ConsentDirection",
+    "ConsentStatus",
+    "DirectionalConsent",
     "FederatedOrganizationIdentity",
+    "FederationConsent",
     "FederationStatus",
 ]

@@ -193,10 +193,12 @@ def test_no_central_authority_type_exists() -> None:
         assert not hasattr(identity_module, forbidden), f"aucune autorite centrale : {forbidden}"
 
 
-def test_public_surface_is_only_identity_and_status() -> None:
+def test_public_surface_exposes_identity_and_status() -> None:
     import aisos.federation as federation
 
-    assert set(federation.__all__) == {"FederatedOrganizationIdentity", "FederationStatus"}
+    # E6.1 exporte son identite et son statut ; la surface du package peut croitre (E6.2+), mais le
+    # contrat d'identification de E6.1 reste present et inchange.
+    assert {"FederatedOrganizationIdentity", "FederationStatus"} <= set(federation.__all__)
 
 
 # --- Contrats E1-E5 non rouverts ; cerveau gele ; aucune ecriture ------------------------------
