@@ -11,11 +11,14 @@ from __future__ import annotations
 from aisos.reasoning.budget import BudgetBoundedReasoningEngine, ReasoningBudget
 from aisos.reasoning.engine import GovernedReasoningEngine
 from aisos.reasoning.grounding import MemoryGroundedReasoningEngine, render_memory_context
+from aisos.reasoning.trace import ReasoningTrace, ReasoningTracer
 
 __all__ = [
     "BudgetBoundedReasoningEngine",
     "GovernedReasoningEngine",
     "MemoryGroundedReasoningEngine",
     "ReasoningBudget",
+    "ReasoningTrace",
+    "ReasoningTracer",
     "render_memory_context",
 ]
