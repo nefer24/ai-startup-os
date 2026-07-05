@@ -67,6 +67,14 @@ dans un groupe (`GovernedEvolutionPattern`, `EvolutionPatternType`, `EvolutionPa
 descriptif** immuable d'une recurrence (type et confiance descriptifs, traces de soutien du
 groupe) : sans recommander, decider, autoriser, creer un besoin/proposition, appliquer ni modifier.
 `HIGH` ne vaut jamais "autorise".
+
+E8.4 poursuit l'evolution continue gouvernee : **evaluer** — representer une **evaluation de la
+continuite organisationnelle** a partir d'un pattern (`GovernedEvolutionContinuityAssessment`,
+`EvolutionContinuityLevel`, `EvolutionContinuitySignal`, `EvolutionContinuityAssessmentStatus`) a
+partir d'un pattern E8.3 au statut IDENTIFIED. C'est un **constat descriptif** immuable (niveau et
+signaux descriptifs, traces de soutien issues du pattern) : sans recommander, decider, autoriser,
+corriger, creer un besoin/proposition, appliquer ni modifier. `STABLE` ne vaut jamais "autorise" ;
+`FRAGMENTED` ne declenche aucune correction.
 """
 
 from __future__ import annotations
@@ -79,6 +87,12 @@ from aisos.evolution.analysis import (
 from aisos.evolution.application import (
     EvolutionApplicationStatus,
     GovernedEvolutionApplication,
+)
+from aisos.evolution.continuity import (
+    EvolutionContinuityAssessmentStatus,
+    EvolutionContinuityLevel,
+    EvolutionContinuitySignal,
+    GovernedEvolutionContinuityAssessment,
 )
 from aisos.evolution.decision import (
     EvolutionDecision,
@@ -109,6 +123,9 @@ __all__ = [
     "EvolutionAnalysisRecommendation",
     "EvolutionAnalysisStatus",
     "EvolutionApplicationStatus",
+    "EvolutionContinuityAssessmentStatus",
+    "EvolutionContinuityLevel",
+    "EvolutionContinuitySignal",
     "EvolutionCycleGroupStatus",
     "EvolutionDecision",
     "EvolutionDecisionStatus",
@@ -125,6 +142,7 @@ __all__ = [
     "EvolutionTraceStatus",
     "GovernedEvolutionAnalysis",
     "GovernedEvolutionApplication",
+    "GovernedEvolutionContinuityAssessment",
     "GovernedEvolutionCycleGroup",
     "GovernedEvolutionDecision",
     "GovernedEvolutionHistory",
