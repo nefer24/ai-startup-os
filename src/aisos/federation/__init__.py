@@ -14,6 +14,10 @@ E6.2 pose la deuxieme brique : **consentir** — representer le **consentement g
 organisations federables (`FederationConsent`, `DirectionalConsent`, `ArtifactType`,
 `ConsentDirection`, `ConsentStatus`), chaque cote porte par son CEO local — une declaration
 immuable, **sans encore echanger** quoi que ce soit.
+
+E6.3 pose la troisieme brique : **exposer** — permettre a une organisation source de declarer qu'un
+artefact est **exposable** (`ExposableFederatedArtifact`, `ExposureStatus`), **sous consentement
+source valide**, **sans encore transmettre** l'artefact a une destination.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from aisos.federation.consent import (
     DirectionalConsent,
     FederationConsent,
 )
+from aisos.federation.exposure import ExposableFederatedArtifact, ExposureStatus
 from aisos.federation.identity import FederatedOrganizationIdentity, FederationStatus
 
 __all__ = [
@@ -32,6 +37,8 @@ __all__ = [
     "ConsentDirection",
     "ConsentStatus",
     "DirectionalConsent",
+    "ExposableFederatedArtifact",
+    "ExposureStatus",
     "FederatedOrganizationIdentity",
     "FederationConsent",
     "FederationStatus",
