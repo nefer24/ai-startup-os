@@ -16,10 +16,20 @@ E7.2 pose la deuxieme brique : **proposer** — formuler une **proposition d'evo
 organisationnelle** (`GovernedEvolutionProposal`, `EvolutionProposalType`,
 `EvolutionProposalStatus`) liee a un besoin declare (E7.1), portee par le CEO local, immuable et
 sans aucun pouvoir de decision, d'analyse, de plan ni d'application.
+
+E7.3 pose la troisieme brique : **analyser** — representer l'**analyse strategique gouvernee**
+(`GovernedEvolutionAnalysis`, `EvolutionAnalysisRecommendation`, `EvolutionAnalysisStatus`) d'une
+proposition en cours (E7.2), portee par une autorite consultative (jamais le CEO), immuable et sans
+aucun pouvoir de decision, de plan ni d'application ; sa recommandation reste **consultative**.
 """
 
 from __future__ import annotations
 
+from aisos.evolution.analysis import (
+    EvolutionAnalysisRecommendation,
+    EvolutionAnalysisStatus,
+    GovernedEvolutionAnalysis,
+)
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
 from aisos.evolution.proposal import (
     EvolutionProposalStatus,
@@ -28,10 +38,13 @@ from aisos.evolution.proposal import (
 )
 
 __all__ = [
+    "EvolutionAnalysisRecommendation",
+    "EvolutionAnalysisStatus",
     "EvolutionNeed",
     "EvolutionNeedKind",
     "EvolutionNeedStatus",
     "EvolutionProposalStatus",
     "EvolutionProposalType",
+    "GovernedEvolutionAnalysis",
     "GovernedEvolutionProposal",
 ]
