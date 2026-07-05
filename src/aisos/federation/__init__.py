@@ -18,6 +18,11 @@ immuable, **sans encore echanger** quoi que ce soit.
 E6.3 pose la troisieme brique : **exposer** — permettre a une organisation source de declarer qu'un
 artefact est **exposable** (`ExposableFederatedArtifact`, `ExposureStatus`), **sous consentement
 source valide**, **sans encore transmettre** l'artefact a une destination.
+
+E6.4 pose la quatrieme brique : **recevoir** — permettre a une organisation destination de declarer
+la **reception gouvernee** d'un artefact expose (`ReceivedFederatedArtifact`, `ReceptionStatus`),
+**sous consentement destination valide**, **sans integrer** cet artefact (ni memoire, ni audit, ni
+catalogue, ni raisonnement).
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from aisos.federation.consent import (
 )
 from aisos.federation.exposure import ExposableFederatedArtifact, ExposureStatus
 from aisos.federation.identity import FederatedOrganizationIdentity, FederationStatus
+from aisos.federation.reception import ReceivedFederatedArtifact, ReceptionStatus
 
 __all__ = [
     "ArtifactType",
@@ -42,4 +48,6 @@ __all__ = [
     "FederatedOrganizationIdentity",
     "FederationConsent",
     "FederationStatus",
+    "ReceivedFederatedArtifact",
+    "ReceptionStatus",
 ]
