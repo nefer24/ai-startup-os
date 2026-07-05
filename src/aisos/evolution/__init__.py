@@ -53,6 +53,13 @@ statut TRACED et dans la meme organisation. C'est un **recueil immuable** de tra
 fourni : sans analyser, regrouper, comparer, identifier de pattern, recommander, decider ni modifier
 les traces. *Evolution continue = lecture gouvernee de cycles passes pour preparer de nouveaux
 cycles soumis au CEO.*
+
+E8.2 poursuit l'evolution continue gouvernee : **regrouper** — representer un **regroupement
+gouverne de cycles** issus d'un historique (`GovernedEvolutionCycleGroup`,
+`EvolutionCycleGroupStatus`) sous une **cle descriptive**, a partir d'un historique E8.1 au statut
+READ. C'est un **recueil etiquette** immuable de traces (toutes issues de l'historique, TRACED, meme
+organisation), conservees telles quelles : sans analyser, comparer, identifier de pattern,
+recommander, decider, fusionner ni reordonner.
 """
 
 from __future__ import annotations
@@ -71,6 +78,10 @@ from aisos.evolution.decision import (
     EvolutionDecisionStatus,
     GovernedEvolutionDecision,
 )
+from aisos.evolution.grouping import (
+    EvolutionCycleGroupStatus,
+    GovernedEvolutionCycleGroup,
+)
 from aisos.evolution.history import EvolutionHistoryStatus, GovernedEvolutionHistory
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
 from aisos.evolution.plan import EvolutionPlanStatus, GovernedEvolutionPlan
@@ -85,6 +96,7 @@ __all__ = [
     "EvolutionAnalysisRecommendation",
     "EvolutionAnalysisStatus",
     "EvolutionApplicationStatus",
+    "EvolutionCycleGroupStatus",
     "EvolutionDecision",
     "EvolutionDecisionStatus",
     "EvolutionHistoryStatus",
@@ -97,6 +109,7 @@ __all__ = [
     "EvolutionTraceStatus",
     "GovernedEvolutionAnalysis",
     "GovernedEvolutionApplication",
+    "GovernedEvolutionCycleGroup",
     "GovernedEvolutionDecision",
     "GovernedEvolutionHistory",
     "GovernedEvolutionPlan",
