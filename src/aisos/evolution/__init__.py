@@ -83,6 +83,15 @@ evaluation E8.4 au statut ASSESSED. C'est un **signalement descriptif** immuable
 descriptifs, signaux et traces de soutien issus de l'evaluation) : sans corriger, recommander,
 sanctionner, decider, autoriser, creer un besoin/proposition, appliquer ni modifier. Meme `CRITICAL`
 ne declenche aucune correction.
+
+E8.6 poursuit l'evolution continue gouvernee : **contextualiser** — representer un **contexte
+d'apprentissage organisationnel** assemblant E8.1 a E8.5
+(`GovernedOrganizationalLearningContext`, `OrganizationalLearningObservation`,
+`OrganizationalLearningMaturity`, `OrganizationalLearningContextStatus`). C'est un **assemblage
+descriptif** immuable (chaine coherente history->group->pattern->assessment->drift_detection,
+observations et maturite descriptives, traces issues de l'evaluation) : sans decider, recommander,
+corriger, remplacer l'audit, ecrire la memoire ni devenir une preuve. `CONSOLIDATED` ne vaut jamais
+"autorise".
 """
 
 from __future__ import annotations
@@ -119,6 +128,12 @@ from aisos.evolution.grouping import (
     GovernedEvolutionCycleGroup,
 )
 from aisos.evolution.history import EvolutionHistoryStatus, GovernedEvolutionHistory
+from aisos.evolution.learning import (
+    GovernedOrganizationalLearningContext,
+    OrganizationalLearningContextStatus,
+    OrganizationalLearningMaturity,
+    OrganizationalLearningObservation,
+)
 from aisos.evolution.need import EvolutionNeed, EvolutionNeedKind, EvolutionNeedStatus
 from aisos.evolution.pattern import (
     EvolutionPatternConfidence,
@@ -170,4 +185,8 @@ __all__ = [
     "GovernedEvolutionProposal",
     "GovernedEvolutionTrace",
     "GovernedGovernanceDriftDetection",
+    "GovernedOrganizationalLearningContext",
+    "OrganizationalLearningContextStatus",
+    "OrganizationalLearningMaturity",
+    "OrganizationalLearningObservation",
 ]
