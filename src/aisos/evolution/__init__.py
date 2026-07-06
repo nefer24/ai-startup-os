@@ -101,6 +101,14 @@ gouvernee et consultative pour de futurs cycles E7** issue d'un contexte
 une **suggestion consultative** immuable (type/priorite/raisons descriptifs, traces issues du
 contexte) : sans decider, autoriser, creer un besoin/proposition, declencher un cycle E7, appliquer
 ni modifier. `URGENT` ne declenche aucune action ; le CEO reste seul decideur.
+
+E8.8 cloture l'evolution continue gouvernee : **cloturer** — representer la **cloture gouvernee de
+E8** (`GovernedContinuousEvolutionClosure`, `ContinuousEvolutionClosureGuarantee`,
+`ContinuousEvolutionClosureStatus`) en **verifiant** la coherence complete de la chaine E8.1..E8.7
+et en **confirmant** des garanties de gouvernance descriptives. C'est un **constat de verification**
+immuable : sans decider, appliquer une recommandation, creer un cycle E7, ouvrir E9, modifier les
+objets E8, reecrire l'audit ni devenir une preuve. Le CEO reste seul decideur ; les futurs cycles
+repassent par E7.
 """
 
 from __future__ import annotations
@@ -113,6 +121,11 @@ from aisos.evolution.analysis import (
 from aisos.evolution.application import (
     EvolutionApplicationStatus,
     GovernedEvolutionApplication,
+)
+from aisos.evolution.closure import (
+    ContinuousEvolutionClosureGuarantee,
+    ContinuousEvolutionClosureStatus,
+    GovernedContinuousEvolutionClosure,
 )
 from aisos.evolution.continuity import (
     EvolutionContinuityAssessmentStatus,
@@ -166,6 +179,8 @@ from aisos.evolution.recommendation import (
 from aisos.evolution.trace import EvolutionTraceStatus, GovernedEvolutionTrace
 
 __all__ = [
+    "ContinuousEvolutionClosureGuarantee",
+    "ContinuousEvolutionClosureStatus",
     "EvolutionAnalysisRecommendation",
     "EvolutionAnalysisStatus",
     "EvolutionApplicationStatus",
@@ -194,6 +209,7 @@ __all__ = [
     "GovernanceDriftSeverity",
     "GovernanceDriftSignal",
     "GovernanceDriftType",
+    "GovernedContinuousEvolutionClosure",
     "GovernedEvolutionAnalysis",
     "GovernedEvolutionApplication",
     "GovernedEvolutionContinuityAssessment",
