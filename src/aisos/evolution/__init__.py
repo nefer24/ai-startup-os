@@ -75,6 +75,14 @@ partir d'un pattern E8.3 au statut IDENTIFIED. C'est un **constat descriptif** i
 signaux descriptifs, traces de soutien issues du pattern) : sans recommander, decider, autoriser,
 corriger, creer un besoin/proposition, appliquer ni modifier. `STABLE` ne vaut jamais "autorise" ;
 `FRAGMENTED` ne declenche aucune correction.
+
+E8.5 poursuit l'evolution continue gouvernee : **detecter** — representer une **detection de derive
+de gouvernance** (`GovernedGovernanceDriftDetection`, `GovernanceDriftType`,
+`GovernanceDriftSeverity`, `GovernanceDriftSignal`, `GovernanceDriftDetectionStatus`) a partir d'une
+evaluation E8.4 au statut ASSESSED. C'est un **signalement descriptif** immuable (type et severite
+descriptifs, signaux et traces de soutien issus de l'evaluation) : sans corriger, recommander,
+sanctionner, decider, autoriser, creer un besoin/proposition, appliquer ni modifier. Meme `CRITICAL`
+ne declenche aucune correction.
 """
 
 from __future__ import annotations
@@ -98,6 +106,13 @@ from aisos.evolution.decision import (
     EvolutionDecision,
     EvolutionDecisionStatus,
     GovernedEvolutionDecision,
+)
+from aisos.evolution.drift import (
+    GovernanceDriftDetectionStatus,
+    GovernanceDriftSeverity,
+    GovernanceDriftSignal,
+    GovernanceDriftType,
+    GovernedGovernanceDriftDetection,
 )
 from aisos.evolution.grouping import (
     EvolutionCycleGroupStatus,
@@ -140,6 +155,10 @@ __all__ = [
     "EvolutionProposalStatus",
     "EvolutionProposalType",
     "EvolutionTraceStatus",
+    "GovernanceDriftDetectionStatus",
+    "GovernanceDriftSeverity",
+    "GovernanceDriftSignal",
+    "GovernanceDriftType",
     "GovernedEvolutionAnalysis",
     "GovernedEvolutionApplication",
     "GovernedEvolutionContinuityAssessment",
@@ -150,4 +169,5 @@ __all__ = [
     "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
     "GovernedEvolutionTrace",
+    "GovernedGovernanceDriftDetection",
 ]
