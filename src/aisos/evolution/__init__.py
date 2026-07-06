@@ -92,6 +92,15 @@ descriptif** immuable (chaine coherente history->group->pattern->assessment->dri
 observations et maturite descriptives, traces issues de l'evaluation) : sans decider, recommander,
 corriger, remplacer l'audit, ecrire la memoire ni devenir une preuve. `CONSOLIDATED` ne vaut jamais
 "autorise".
+
+E8.7 poursuit l'evolution continue gouvernee : **recommander** — representer une **recommandation
+gouvernee et consultative pour de futurs cycles E7** issue d'un contexte
+(`GovernedFutureEvolutionRecommendation`, `FutureEvolutionRecommendationType`,
+`FutureEvolutionRecommendationPriority`, `FutureEvolutionRecommendationReason`,
+`FutureEvolutionRecommendationStatus`) a partir d'un contexte E8.6 au statut CONTEXTUALIZED. C'est
+une **suggestion consultative** immuable (type/priorite/raisons descriptifs, traces issues du
+contexte) : sans decider, autoriser, creer un besoin/proposition, declencher un cycle E7, appliquer
+ni modifier. `URGENT` ne declenche aucune action ; le CEO reste seul decideur.
 """
 
 from __future__ import annotations
@@ -147,6 +156,13 @@ from aisos.evolution.proposal import (
     EvolutionProposalType,
     GovernedEvolutionProposal,
 )
+from aisos.evolution.recommendation import (
+    FutureEvolutionRecommendationPriority,
+    FutureEvolutionRecommendationReason,
+    FutureEvolutionRecommendationStatus,
+    FutureEvolutionRecommendationType,
+    GovernedFutureEvolutionRecommendation,
+)
 from aisos.evolution.trace import EvolutionTraceStatus, GovernedEvolutionTrace
 
 __all__ = [
@@ -170,6 +186,10 @@ __all__ = [
     "EvolutionProposalStatus",
     "EvolutionProposalType",
     "EvolutionTraceStatus",
+    "FutureEvolutionRecommendationPriority",
+    "FutureEvolutionRecommendationReason",
+    "FutureEvolutionRecommendationStatus",
+    "FutureEvolutionRecommendationType",
     "GovernanceDriftDetectionStatus",
     "GovernanceDriftSeverity",
     "GovernanceDriftSignal",
@@ -184,6 +204,7 @@ __all__ = [
     "GovernedEvolutionPlan",
     "GovernedEvolutionProposal",
     "GovernedEvolutionTrace",
+    "GovernedFutureEvolutionRecommendation",
     "GovernedGovernanceDriftDetection",
     "GovernedOrganizationalLearningContext",
     "OrganizationalLearningContextStatus",
