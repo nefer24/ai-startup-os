@@ -34,8 +34,9 @@ opérationnel C0.6 (`aisos.operational_audit`) ni la persistance C0.3.
   déclaratif non destructif.
   - Le **`content_hash`** scelle **tout le contenu opérationnel** : identité, `entry_type`,
     `summary`, `context`, `created_at`, **ainsi que `references`, `tags` et `non_probative_notice`**
-    (sérialisation explicite et stable, ordre des tuples conservé). Le **statut** en est exclu, afin
-    que l'archivage reste déclaratif et non destructif (la copie garde la même empreinte).
+    (sérialisation explicite et stable, ordre des tuples conservé). Le **statut** en est exclu afin
+    que le changement déclaratif de statut ne casse pas le scellage ; une copie archivée via le store
+    est **rescellée avec son propre identifiant**.
   - Le **`non_probative_notice`** est **obligatoire ET validé** : non vide, il doit mentionner le
     caractère **non probant** (« non probante »/« non probatif ») **et** l'**audit** ; une notice qui
     affirme l'inverse (« preuve », « validée », simple « contexte utile ») est **refusée**.
