@@ -98,6 +98,9 @@ def test_content_hash_is_deterministic() -> None:
         summary=entry.summary,
         context=entry.context,
         created_at=entry.created_at,
+        references=entry.references,
+        tags=entry.tags,
+        non_probative_notice=entry.non_probative_notice,
     )
     # Deterministe : deux calculs identiques donnent la meme empreinte.
     assert entry.content_hash == _entry().content_hash
@@ -112,7 +115,7 @@ def test_tampered_hash_is_rejected() -> None:
             summary="s",
             context="c",
             created_at=_NOW,
-            non_probative_notice="n",
+            non_probative_notice="memoire non probante : ne remplace jamais l'audit",
             content_hash="deadbeef",
         )
 
@@ -127,7 +130,7 @@ def test_required_text_is_enforced(field: str) -> None:
         "organization_id": "org-a",
         "summary": "s",
         "context": "c",
-        "non_probative_notice": "n",
+        "non_probative_notice": "memoire non probante : ne remplace jamais l'audit",
     }
     text_fields[field] = ""
     with pytest.raises(ValidationError):
@@ -235,8 +238,122 @@ def test_store_archive_keeps_original_and_adds_copy() -> None:
         summary=archived.summary,
         context=archived.context,
         created_at=archived.created_at,
+        references=archived.references,
+        tags=archived.tags,
+        non_probative_notice=archived.non_probative_notice,
     )
     assert len(store.list_entries()) == 2
+
+
+def test_archiving_still_works_after_hash_reinforcement() -> None:
+    # Le scellage renforce (references + tags + notice) ne casse pas l'archivage non destructif.
+    store = InMemoryOperationalMemoryStore()
+    store.append(
+        _entry(entry_id="mem-1", tags=("focuslife", "mvp")),
+    )
+    archived = store.archive("mem-1", archived_entry_id="mem-1-arch")
+    original = store.get("mem-1")
+    assert original is not None
+    assert original.status is OperationalMemoryEntryStatus.REMEMBERED
+    assert archived.status is OperationalMemoryEntryStatus.ARCHIVED
+    # Contenu operationnel preserve dans la copie (references, tags, notice).
+    assert archived.references == original.references
+    assert archived.tags == original.tags
+    assert archived.non_probative_notice == original.non_probative_notice
+
+
+# --- Scellage renforcé : références / tags / notice entrent dans l'empreinte --------------------
+
+
+def test_changing_references_changes_content_hash() -> None:
+    base = _entry()
+    other = OperationalMemoryEntry.of(
+        entry_id=base.id,
+        organization_id=base.organization_id,
+        entry_type=base.entry_type,
+        summary=base.summary,
+        context=base.context,
+        created_at=base.created_at,
+        non_probative_notice=base.non_probative_notice,
+        references=(
+            OperationalMemoryReference(
+                kind=OperationalMemoryReferenceKind.AUDIT_REFERENCE, reference="audit://9"
+            ),
+        ),
+        tags=base.tags,
+    )
+    assert other.content_hash != base.content_hash
+
+
+def test_changing_tags_changes_content_hash() -> None:
+    base = _entry(tags=("focuslife",))
+    other = _entry(tags=("focuslife", "mvp"))
+    assert other.content_hash != base.content_hash
+
+
+def test_changing_non_probative_notice_changes_content_hash() -> None:
+    base = _entry()
+    other = OperationalMemoryEntry.of(
+        entry_id=base.id,
+        organization_id=base.organization_id,
+        entry_type=base.entry_type,
+        summary=base.summary,
+        context=base.context,
+        created_at=base.created_at,
+        non_probative_notice=(
+            "contexte non probatif : ne constitue pas une preuve, ne remplace pas l'audit"
+        ),
+        references=base.references,
+        tags=base.tags,
+    )
+    assert other.content_hash != base.content_hash
+
+
+# --- Notice non probante : validation renforcée ------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "preuve officielle",  # ne mentionne ni non-probant ni audit
+        "memoire validee",  # affirme l'inverse
+        "contexte utile",  # ni non-probant ni audit
+        "non probante mais fiable",  # mentionne non-probant mais pas l'audit
+        "reference d'audit officielle",  # mentionne audit mais pas le caractere non probant
+    ],
+)
+def test_non_conforming_notice_is_rejected(notice: str) -> None:
+    with pytest.raises(ValidationError):
+        OperationalMemoryEntry.of(
+            entry_id="mem-1",
+            organization_id="org-a",
+            entry_type=OperationalMemoryEntryType.PROBLEM_CONTEXT,
+            summary="s",
+            context="c",
+            created_at=_NOW,
+            non_probative_notice=notice,
+        )
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "memoire non probante : ne remplace jamais l'audit",
+        "contexte non probatif, ne constitue pas une preuve et ne remplace pas l'audit",
+        "NON PROBANTE — ne se substitue pas a l'AUDIT",  # insensible a la casse
+    ],
+)
+def test_conforming_notice_is_accepted(notice: str) -> None:
+    entry = OperationalMemoryEntry.of(
+        entry_id="mem-1",
+        organization_id="org-a",
+        entry_type=OperationalMemoryEntryType.PROBLEM_CONTEXT,
+        summary="s",
+        context="c",
+        created_at=_NOW,
+        non_probative_notice=notice,
+    )
+    assert entry.non_probative_notice == notice
 
 
 # --- Réserve append-only -----------------------------------------------------------------------

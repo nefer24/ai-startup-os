@@ -30,8 +30,15 @@ opérationnel C0.6 (`aisos.operational_audit`) ni la persistance C0.3.
   un **futur** contexte problème/idée/objectif/projet/solution/équipe — jamais un objet vivant.
 - **`OperationalMemoryEntry`** (immuable, `frozen`, scellée par `content_hash`) : `id`,
   `organization_id`, `entry_type`, `summary`, `context`, `status`, `created_at`, `references`, `tags`,
-  `non_probative_notice` **obligatoire**, `content_hash` **vérifié** à la construction. Fabrique
-  `.of(...)` scellant l'empreinte ; `archived()` déclaratif non destructif.
+  `non_probative_notice`, `content_hash`. Fabrique `.of(...)` scellant l'empreinte ; `archived()`
+  déclaratif non destructif.
+  - Le **`content_hash`** scelle **tout le contenu opérationnel** : identité, `entry_type`,
+    `summary`, `context`, `created_at`, **ainsi que `references`, `tags` et `non_probative_notice`**
+    (sérialisation explicite et stable, ordre des tuples conservé). Le **statut** en est exclu, afin
+    que l'archivage reste déclaratif et non destructif (la copie garde la même empreinte).
+  - Le **`non_probative_notice`** est **obligatoire ET validé** : non vide, il doit mentionner le
+    caractère **non probant** (« non probante »/« non probatif ») **et** l'**audit** ; une notice qui
+    affirme l'inverse (« preuve », « validée », simple « contexte utile ») est **refusée**.
 - **`ReadOnlyOperationalMemoryStore`** / **`AppendOnlyOperationalMemoryStore`** (Protocols) ;
   **`InMemoryOperationalMemoryStore`** : `append` / `get` / `list_entries` / `list_by_organization` /
   `list_by_type` / `list_by_status` / `list_by_tag` / `archive`.
@@ -40,8 +47,10 @@ opérationnel C0.6 (`aisos.operational_audit`) ni la persistance C0.3.
 
 - **C0.7 introduit une fondation de mémoire opérationnelle**, réalignée sur la mission produit :
   retenir le contexte du futur système de **création/amélioration de solutions**.
-- **Non probante** : chaque entrée porte un `non_probative_notice` obligatoire. La mémoire est un
-  **contexte utile** ; elle ne **prouve** rien et **ne remplace jamais l'audit**.
+- **Non probante** : chaque entrée porte un `non_probative_notice` **obligatoire et validé** (il doit
+  réaffirmer le caractère non probant et mentionner l'audit). La mémoire est un **contexte utile** ;
+  elle ne **prouve** rien et **ne remplace jamais l'audit** — cet invariant est scellé dans le
+  `content_hash` et vérifié à la construction.
 - **Ne décide pas / n'applique rien / ne crée pas de solution / ne crée pas d'équipe IA** : la mémoire
   **retient** ; elle ne statue pas. Aucune surface de pouvoir métier.
 - **Append-only, non destructif** : `REMEMBERED` déclaratif ; l'archivage ajoute une **copie**

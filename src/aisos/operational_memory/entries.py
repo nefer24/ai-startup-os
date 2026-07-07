@@ -132,6 +132,23 @@ class OperationalMemoryReference(ImmutableModel):
         return value
 
 
+# Delimiteurs de serialisation stables (caracteres de controle ASCII, absents d'un texte normal) :
+# ``\x1f`` (unit separator) separe les champs, ``\x1e`` (record separator) separe les references.
+_FIELD_SEP = "\x1f"
+_RECORD_SEP = "\x1e"
+
+
+def _serialize_references(references: tuple[OperationalMemoryReference, ...]) -> str:
+    """Serialise les references de maniere **stable et deterministe**, dans l'ordre du tuple.
+
+    Chaque reference est reduite a ses champs (`kind.value`, `reference`, `label`) ; l'ordre du
+    tuple est **conserve** (significatif) afin que l'empreinte suive exactement l'egalite du modele.
+    """
+    return _RECORD_SEP.join(
+        _FIELD_SEP.join((ref.kind.value, ref.reference, ref.label)) for ref in references
+    )
+
+
 def compute_entry_hash(
     *,
     entry_id: str,
@@ -140,12 +157,21 @@ def compute_entry_hash(
     summary: str,
     context: str,
     created_at: dt.datetime,
+    references: tuple[OperationalMemoryReference, ...] = (),
+    tags: tuple[str, ...] = (),
+    non_probative_notice: str = "",
 ) -> str:
-    """Calcule l'empreinte SHA-256 (hex) des champs cles d'une entree. Deterministe.
+    """Calcule l'empreinte SHA-256 (hex) du contenu operationnel d'une entree. Deterministe.
 
-    Le statut n'entre **pas** dans l'empreinte : ainsi une copie archivee (`archived()`) conserve la
-    meme empreinte que l'entree memorisee d'origine, l'archivage restant declaratif et non
-    destructif.
+    Scelle **tout le contenu operationnel sensible** : identite (`entry_id`, `organization_id`),
+    `entry_type`, `summary`, `context`, `created_at`, mais aussi les `references`, les `tags` et le
+    `non_probative_notice`. La serialisation est **explicite et stable** (delimiteurs de controle
+    fixes), sans dependance externe ni horloge interne : l'ordre du tuple de `references` et de
+    `tags` est **conserve** (significatif).
+
+    Le **statut** n'entre volontairement **pas** dans l'empreinte : ainsi une copie archivee
+    (`archived()`) conserve la meme empreinte que l'entree memorisee d'origine — l'archivage reste
+    **declaratif et non destructif** sans casser le scellage.
     """
     payload = "|".join(
         (
@@ -155,6 +181,9 @@ def compute_entry_hash(
             summary,
             context,
             created_at.isoformat(),
+            non_probative_notice,
+            "tags:" + _FIELD_SEP.join(tags),
+            "refs:" + _serialize_references(references),
         )
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -173,9 +202,11 @@ class OperationalMemoryEntry(ImmutableModel):
       * ``created_at`` — horodatage (fourni par l'appelant ; ce module n'appelle pas l'horloge) ;
       * ``references`` — tuple d'`OperationalMemoryReference` declaratives ;
       * ``tags`` — tuple d'etiquettes libres (chaines) pour un filtrage simple, sans recherche ;
-      * ``non_probative_notice`` — rappel non vide que la memoire est **non probante** et **ne
-        remplace jamais l'audit** ;
-      * ``content_hash`` — empreinte SHA-256 des champs cles, **verifiee** a la construction.
+      * ``non_probative_notice`` — rappel **valide** (non vide, mentionnant le caractere **non
+        probant** et l'**audit**) que la memoire ne remplace jamais l'audit ;
+      * ``content_hash`` — empreinte SHA-256 du **contenu operationnel** (identite, type, summary,
+        context, created_at, **references, tags, non_probative_notice**), **verifiee** a la
+        construction ; le statut en est exclu pour preserver l'archivage non destructif.
 
     Immuable (``frozen``) et deterministe. N'expose **aucune** methode de decision, de validation,
     d'application, de mutation, de reecriture, de suppression, de creation de solution/equipe IA, de
@@ -213,6 +244,25 @@ class OperationalMemoryEntry(ImmutableModel):
             )
         return value
 
+    @field_validator("non_probative_notice")
+    @classmethod
+    def _notice_reasserts_non_probative(cls, value: str) -> str:
+        """La notice doit **rappeler** l'invariant : memoire non probante, ne remplace pas l'audit.
+
+        Verification **locale et deterministe** (aucun moteur semantique) : la notice doit
+        mentionner le caractere **non probant** (« non prob » couvre « non probante » /
+        « non probatif ») **et**
+        l'**audit**. Une notice affirmant l'inverse (« preuve », « validee », simple « contexte
+        utile ») est refusee. La valeur reste par ailleurs non vide (cf. `_text_not_blank`).
+        """
+        lowered = value.lower()
+        if "non prob" not in lowered or "audit" not in lowered:
+            raise ValueError(
+                "non_probative_notice doit rappeler que la memoire est non probante (ou non "
+                "probatif) et ne remplace pas l'audit"
+            )
+        return value
+
     @model_validator(mode="after")
     def _content_hash_seals_entry(self) -> OperationalMemoryEntry:
         """L'empreinte scelle les champs cles : ``content_hash`` doit y correspondre.
@@ -228,9 +278,15 @@ class OperationalMemoryEntry(ImmutableModel):
             summary=self.summary,
             context=self.context,
             created_at=self.created_at,
+            references=self.references,
+            tags=self.tags,
+            non_probative_notice=self.non_probative_notice,
         )
         if self.content_hash != expected:
-            raise ValueError("content_hash doit etre l'empreinte SHA-256 des champs cles")
+            raise ValueError(
+                "content_hash doit etre l'empreinte SHA-256 du contenu operationnel (identite, "
+                "type, summary, context, created_at, references, tags, non_probative_notice)"
+            )
         return self
 
     @classmethod
@@ -267,6 +323,9 @@ class OperationalMemoryEntry(ImmutableModel):
                 summary=summary,
                 context=context,
                 created_at=created_at,
+                references=references,
+                tags=tags,
+                non_probative_notice=non_probative_notice,
             ),
         )
 

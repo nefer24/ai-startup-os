@@ -23,6 +23,7 @@ import re
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import aisos.operational_memory.entries as entries_module
 import aisos.operational_memory.store as store_module
@@ -70,7 +71,23 @@ def test_every_entry_is_non_probative() -> None:
     # Le rappel non probant est obligatoire et non vide : aucune entree ne peut se poser en preuve.
     entry = _entry()
     assert entry.non_probative_notice
-    assert "non probante" in entry.non_probative_notice.lower()
+    assert "non prob" in entry.non_probative_notice.lower()
+
+
+def test_entry_notice_must_reassert_non_probative_and_audit() -> None:
+    # Invariant : toute entree DOIT porter une notice mentionnant le caractere non probant ET
+    # l'audit. Une notice qui l'omet ou affirme l'inverse est refusee a la construction.
+    for bad in ("preuve officielle", "memoire validee", "contexte utile", "non probant sans plus"):
+        with pytest.raises(ValidationError, match="non probante"):
+            OperationalMemoryEntry.of(
+                entry_id="mem-x",
+                organization_id="org-a",
+                entry_type=OperationalMemoryEntryType.PROBLEM_CONTEXT,
+                summary="s",
+                context="c",
+                created_at=_WHEN,
+                non_probative_notice=bad,
+            )
 
 
 def test_memory_is_not_a_source_of_truth_for_audit() -> None:
