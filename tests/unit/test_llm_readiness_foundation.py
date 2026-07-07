@@ -212,6 +212,49 @@ def test_conforming_notice_is_accepted() -> None:
     assert "decide" in response.non_decision_notice.lower()
 
 
+@pytest.mark.parametrize(
+    "notice",
+    [
+        "Le LLM ne decide pas, n'applique pas et ne remplace ni le CEO ni l'audit.",
+        "Réponse non décisionnelle : le LLM ne remplace pas le CEO et ne remplace jamais l’audit.",  # noqa: RUF001
+        "Le LLM ne décide pas et ne se substitue ni au CEO ni à l’audit.",  # noqa: RUF001
+    ],
+)
+def test_conforming_notice_variants_are_accepted(notice: str) -> None:
+    # Formulations reellement non decisionnelles (accents et apostrophes courbes tolerees).
+    response = _response(notice=notice)
+    assert response.non_decision_notice == notice
+
+
+@pytest.mark.parametrize(
+    "notice",
+    [
+        # Contient decide + CEO + audit mais AFFIRME l'inverse de l'invariant : doit etre refusee.
+        "Le LLM décide pour le CEO et remplace l’audit.",  # noqa: RUF001
+        "Le LLM valide la décision CEO.",
+        "Le LLM applique la décision et fait foi dans l’audit.",  # noqa: RUF001
+        "Le LLM remplace le CEO.",
+        "Le LLM remplace l’audit.",  # noqa: RUF001
+    ],
+)
+def test_dangerous_notice_is_rejected(notice: str) -> None:
+    with pytest.raises(ValidationError):
+        LLMReadinessResponse.of(
+            response_id="resp-1",
+            request_id="req-1",
+            status=LLMReadinessStatus.PRODUCED,
+            model_label="m",
+            provider_label="p",
+            non_decision_notice=notice,
+        )
+
+
+def test_disabled_mode_yields_denied_policy_decision() -> None:
+    # DISABLED = etat sur (LLM eteint) : la policy refuse toute demande en ce mode.
+    decision = LLMReadinessPolicy().evaluate(_request(mode=LLMReadinessMode.DISABLED))
+    assert decision.status is LLMReadinessPolicyDecisionStatus.DENIED
+
+
 # --- Politique de readiness --------------------------------------------------------------------
 
 

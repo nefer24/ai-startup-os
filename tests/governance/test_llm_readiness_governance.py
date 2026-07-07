@@ -133,8 +133,17 @@ def test_readiness_never_writes_audit_or_memory() -> None:
 
 
 def test_response_notice_reasserts_non_decision_ceo_and_audit() -> None:
-    # Invariant : toute reponse DOIT porter une notice non decisionnelle mentionnant CEO ET audit.
-    for bad in ("reponse officielle", "le llm decide", "ne decide pas mais fait foi"):
+    # Invariant : une reponse ne peut JAMAIS porter une notice qui affirme que le LLM decide ou
+    # remplace le CEO/audit — meme si elle contient par ailleurs les mots decide/CEO/audit.
+    dangerous = (
+        "reponse officielle",
+        "le llm decide",
+        "ne decide pas mais fait foi",
+        "Le LLM décide pour le CEO et remplace l’audit.",  # noqa: RUF001
+        "Le LLM valide la décision CEO.",
+        "Le LLM remplace l’audit.",  # noqa: RUF001
+    )
+    for bad in dangerous:
         with pytest.raises(ValueError, match="non_decision_notice"):
             LLMReadinessResponse.of(
                 response_id="r",

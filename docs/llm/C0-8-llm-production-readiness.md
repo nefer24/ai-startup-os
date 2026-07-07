@@ -19,6 +19,8 @@ n'importe l'infrastructure LLM E1 (`aisos.infrastructure.llm`), ni aucun module 
 
 - **`LLMReadinessMode`** : `REPLAY_ONLY`, `DETERMINISTIC_TEST`, `DISABLED`,
   `PROVIDER_READY_DECLARATIVE`. **Aucun `LIVE_PRODUCTION`** — aucun mode n'appelle un modèle réel.
+  `DISABLED` représente un **état sûr où le LLM est éteint** ; une demande en mode `DISABLED` est donc
+  refusée par la policy avec `DENIED`, car **aucune assistance ne doit être produite**.
 - **`LLMReadinessPurpose`** (8 intentions d'assistance descriptives) : résumé de contexte, aide à la
   réponse / au raisonnement / à la rédaction / à l'identification de risques / à l'analyse de
   solution / à l'idée d'amélioration / au briefing CEO. Ce sont des **intentions**, jamais des actions.

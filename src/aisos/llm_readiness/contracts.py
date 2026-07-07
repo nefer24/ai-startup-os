@@ -209,6 +209,66 @@ def compute_response_hash(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+# --- Validation d'une notice reellement non decisionnelle (deterministe, sans semantique) ---
+
+# Affirmations positives **dangereuses** : rejettent la notice meme si elle mentionne les mots-cles.
+_DANGEROUS_NOTICE_PHRASES: tuple[str, ...] = (
+    "remplace le ceo",
+    "remplace l'audit",
+    "fait foi",
+    "decide pour",
+    "valide la decision",
+    "applique la decision",
+)
+
+# La notice doit porter une variante de **chacun** des trois groupes de non-affirmation.
+_NON_DECISION_PHRASES: tuple[str, ...] = (
+    "ne decide pas",
+    "non decisionnel",
+    "ne prend pas de decision",
+)
+_NON_REPLACE_CEO_PHRASES: tuple[str, ...] = (
+    "ne remplace pas le ceo",
+    "ne remplace ni le ceo",
+    "ne se substitue pas au ceo",
+    "ne se substitue ni au ceo",
+    "ni le ceo",
+    "ni au ceo",
+)
+_NON_REPLACE_AUDIT_PHRASES: tuple[str, ...] = (
+    "ne remplace pas l'audit",
+    "ne remplace jamais l'audit",
+    "ne se substitue pas a l'audit",
+    "ne se substitue jamais a l'audit",
+    "ni l'audit",
+    "ni a l'audit",
+)
+
+_ACCENT_FOLD = str.maketrans("àâäéèêëîïôöùûüç", "aaaeeeeiioouuuc")
+
+
+def _normalize_notice(value: str) -> str:
+    """Normalise une notice : minuscule, apostrophes droites, sans accent. Comparaison stable."""
+    return value.lower().replace("\u2019", "'").translate(_ACCENT_FOLD)
+
+
+def _notice_asserts_non_decision(value: str) -> bool:
+    """Vrai si la notice affirme **les trois** interdits sans affirmation positive dangereuse.
+
+    Deterministe et local : (1) rejet immediat si une formulation dangereuse est presente ; (2)
+    sinon, acceptation seulement si une variante de non-decision **et** de non-remplacement du CEO
+    **et** de non-remplacement de l'audit est presente.
+    """
+    folded = _normalize_notice(value)
+    if any(bad in folded for bad in _DANGEROUS_NOTICE_PHRASES):
+        return False
+    return (
+        any(phrase in folded for phrase in _NON_DECISION_PHRASES)
+        and any(phrase in folded for phrase in _NON_REPLACE_CEO_PHRASES)
+        and any(phrase in folded for phrase in _NON_REPLACE_AUDIT_PHRASES)
+    )
+
+
 class LLMReadinessResponse(ImmutableModel):
     """Reponse LLM **declarative** immuable et scellee. Une assistance non autoritaire, jamais un
     acte.
@@ -248,21 +308,20 @@ class LLMReadinessResponse(ImmutableModel):
     @field_validator("non_decision_notice")
     @classmethod
     def _notice_reasserts_non_decision(cls, value: str) -> str:
-        """La notice doit **rappeler** l'invariant : le LLM ne decide pas, ne remplace ni CEO ni
-        audit.
+        """La notice doit affirmer l'invariant : le LLM **ne decide pas** et **ne remplace ni le CEO
+        ni l'audit**.
 
-        Verification **locale et deterministe** (aucun moteur semantique) : la notice doit
-        mentionner
-        le caractere **non decisionnel** (« ne decide pas » — « decid »/« décid »), le **CEO**
-        **et**
-        l'**audit**. Une notice affirmant l'inverse (« decision officielle », « valide ») est
-        refusee.
+        Verification **locale et deterministe** (aucun moteur semantique). Il ne suffit **pas** de
+        mentionner « decide », « CEO » et « audit » : la notice doit porter une **formulation
+        reellement non decisionnelle**. Elle est acceptee seulement si elle rappelle **les trois**
+        interdits (non-decision, non-remplacement du CEO, non-remplacement de l'audit) et **aucune**
+        affirmation positive dangereuse (« LLM decide », « valide/applique la decision », « remplace
+        le CEO/l'audit », « fait foi »). Voir `_notice_asserts_non_decision`.
         """
-        low = value.lower()
-        if ("decid" not in low and "décid" not in low) or "ceo" not in low or "audit" not in low:
+        if not _notice_asserts_non_decision(value):
             raise ValueError(
-                "non_decision_notice doit rappeler que le LLM ne decide pas et ne remplace ni le "
-                "CEO ni l'audit"
+                "non_decision_notice doit affirmer explicitement que le LLM ne decide pas et ne "
+                "remplace ni le CEO ni l'audit (formulation reellement non decisionnelle requise)"
             )
         return value
 
