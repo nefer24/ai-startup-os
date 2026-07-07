@@ -469,19 +469,40 @@ _DANGEROUS_NOTICE_PHRASES: tuple[str, ...] = (
     "sans validation du ceo",
 )
 
-# La notice doit porter une variante de **chacun** des deux groupes.
-_NON_FINAL_PHRASES: tuple[str, ...] = (
+# La notice doit porter une variante de **chacun** des quatre groupes de garantie :
+# (1) candidat, (2) non final, (3) non applique/aucune solution appliquee, (4) validation CEO.
+_CANDIDATE_PHRASES: tuple[str, ...] = (
     "candidat",
+    "candidate",
+)
+_NON_FINAL_PHRASES: tuple[str, ...] = (
     "non final",
+    "non finale",
+    "pas final",
+    "pas finale",
+)
+_NON_APPLIED_PHRASES: tuple[str, ...] = (
     "non applique",
-    "n'applique",
+    "non appliquee",
+    "pas applique",
+    "pas appliquee",
+    "aucune solution n'est appliquee",
+    "aucune solution n est appliquee",
+    "ne cree ni n'applique",
+    "ne cree ni n applique",
+    "ne cree pas de solution",
+    "n'applique aucune solution",
+    "n applique aucune solution",
 )
 _CEO_VALIDATION_PHRASES: tuple[str, ...] = (
     "validation ceo",
     "validation du ceo",
     "validation explicite du ceo",
-    "valide par le ceo",
     "necessite validation ceo",
+    "necessite la validation du ceo",
+    "exige la validation du ceo",
+    "requiert validation ceo",
+    "requiert la validation du ceo",
 )
 
 _ACCENT_FOLD = str.maketrans("àâäéèêëîïôöùûüç", "aaaeeeeiioouuuc")
@@ -493,16 +514,19 @@ def _normalize_notice(value: str) -> str:
 
 
 def _notice_asserts_non_final(value: str) -> bool:
-    """Vrai si la notice affirme le caractere candidat/non final **et** l'exigence de validation
-    CEO.
+    """Vrai si la notice porte **les quatre** garanties, sans aucune formulation dangereuse.
 
-    Deterministe et local : (1) rejet immediat si une formulation dangereuse est presente ; (2)
-    sinon, acceptation seulement si une variante « non final/candidat » **et** une variante
-    « validation CEO » sont presentes.
+    Deterministe et local (aucun moteur semantique) : (1) rejet immediat si une formulation
+    dangereuse est presente ; (2) sinon, acceptation seulement si les quatre garanties sont
+    presentes — **candidat**, **non final**, **non applique** (ou « aucune solution appliquee » /
+    « ne cree pas de solution ») **et** **validation CEO**.
     """
     folded = _normalize_notice(value)
     if any(bad in folded for bad in _DANGEROUS_NOTICE_PHRASES):
         return False
-    return any(p in folded for p in _NON_FINAL_PHRASES) and any(
-        p in folded for p in _CEO_VALIDATION_PHRASES
+    return (
+        any(phrase in folded for phrase in _CANDIDATE_PHRASES)
+        and any(phrase in folded for phrase in _NON_FINAL_PHRASES)
+        and any(phrase in folded for phrase in _NON_APPLIED_PHRASES)
+        and any(phrase in folded for phrase in _CEO_VALIDATION_PHRASES)
     )

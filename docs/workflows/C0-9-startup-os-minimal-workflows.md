@@ -35,9 +35,11 @@ Module : `src/aisos/startup_workflows/` — `models.py` (modèles immuables + ha
   `requires_ceo_validation`. Aucune méthode `execute`/`run`/`apply`.
 - **`StartupWorkflowCandidateResult`** (immuable) : `summary`, `candidate_plan`, `expertise_needs`,
   `risks`, `requires_ceo_validation` (**doit rester `True`**), `non_final_notice` (**obligatoire et
-  validé** : rappelle que le résultat est candidat/non final, non appliqué, et exige la validation
-  CEO ; une notice affirmant l'inverse — « solution finale », « prête à exécuter/déployer »,
+  validé** : une notice affirmant l'inverse — « solution finale », « prête à exécuter/déployer »,
   « application automatique », « approuvé sans CEO » — est refusée).
+  - La notice doit porter **simultanément les quatre garanties** : **candidat**, **non final**, **non
+    appliqué** (aucune solution appliquée / ne crée pas de solution) et **validation CEO
+    obligatoire**. Une notice qui n'en porte que trois est refusée.
 - **`StartupWorkflow`** (immuable, scellé par `content_hash`) : `id`, `organization_id`, `kind`,
   `status`, `input`, `steps` (≥ 1, positions 1-indexées strictement croissantes), `candidate_result`
   (`requires_ceo_validation=True` imposé), `references`, `content_hash` **vérifié**. Fabrique

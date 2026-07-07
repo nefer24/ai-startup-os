@@ -29,10 +29,11 @@ from aisos.startup_workflows.models import (
     StartupWorkflowStepKind,
 )
 
-# Notice canonique : resultat candidat, non final, non applique, exigeant la validation du CEO.
+# Notice canonique portant les **quatre** garanties : candidat, non final, non applique, validation
+# CEO. Conforme a la validation renforcee de `StartupWorkflowCandidateResult.non_final_notice`.
 _NON_FINAL_NOTICE = (
-    "Resultat candidat non final : ce plan ne cree ni n'applique aucune solution et exige la "
-    "validation du CEO avant toute action."
+    "Plan candidat non final et non applique : "
+    "il ne cree pas de solution et necessite validation CEO."
 )
 
 # Etapes **declaratives** communes, dans l'ordre. (kind, titre, description) — jamais executees.

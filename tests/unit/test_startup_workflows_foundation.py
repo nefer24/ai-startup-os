@@ -180,7 +180,8 @@ def test_workflow_rejects_result_without_ceo_validation() -> None:
     "notice",
     [
         "Résultat candidat non final : aucune solution n'est appliquée sans validation explicite du CEO.",  # noqa: E501
-        "Plan candidat non appliqué : il ne crée pas de solution et nécessite validation CEO.",
+        "Plan candidat non final et non appliqué : il ne crée pas de solution et nécessite validation CEO.",  # noqa: E501
+        "Plan candidat non final : il ne crée ni n'applique aucune solution et exige la validation du CEO.",  # noqa: E501
     ],
 )
 def test_conforming_non_final_notice_is_accepted(notice: str) -> None:
@@ -190,20 +191,69 @@ def test_conforming_non_final_notice_is_accepted(notice: str) -> None:
     assert result.non_final_notice == notice
 
 
+def test_complete_non_final_notice_is_accepted() -> None:
+    result = StartupWorkflowCandidateResult(
+        summary="s",
+        candidate_plan="p",
+        non_final_notice=(
+            "Plan candidat non final et non applique : "
+            "il ne cree pas de solution et necessite validation CEO."
+        ),
+    )
+    assert result.non_final_notice
+
+
 @pytest.mark.parametrize(
     "notice",
     [
         "",
-        "Solution finale prête à exécuter.",
-        "Application automatique validée.",
-        "Plan approuvé sans CEO.",
-        "Plan candidat.",  # manque la validation CEO
-        "Nécessite validation CEO.",  # manque le caractere candidat/non final
+        "Solution finale prête à exécuter.",  # dangereuse
+        "Application automatique validée.",  # dangereuse
+        "Plan approuvé sans CEO.",  # dangereuse
     ],
 )
-def test_dangerous_or_incomplete_non_final_notice_is_rejected(notice: str) -> None:
+def test_dangerous_non_final_notice_is_rejected(notice: str) -> None:
     with pytest.raises(ValidationError):
         StartupWorkflowCandidateResult(summary="s", candidate_plan="p", non_final_notice=notice)
+
+
+def test_notice_missing_non_final_and_non_applied_is_rejected() -> None:
+    # Contient candidat + validation CEO, mais ni « non final » ni « non applique ».
+    with pytest.raises(ValidationError):
+        StartupWorkflowCandidateResult(
+            summary="s",
+            candidate_plan="p",
+            non_final_notice="Plan candidat necessitant validation CEO.",
+        )
+
+
+def test_notice_missing_candidate_and_non_applied_is_rejected() -> None:
+    # Contient non final + validation CEO, mais ni « candidat » ni « non applique ».
+    with pytest.raises(ValidationError):
+        StartupWorkflowCandidateResult(
+            summary="s",
+            candidate_plan="p",
+            non_final_notice="Plan non final necessitant validation CEO.",
+        )
+
+
+def test_notice_missing_candidate_and_non_final_is_rejected() -> None:
+    # Contient non applique + validation CEO, mais ni « candidat » ni « non final ».
+    with pytest.raises(ValidationError):
+        StartupWorkflowCandidateResult(
+            summary="s",
+            candidate_plan="p",
+            non_final_notice="Plan non applique necessitant validation CEO.",
+        )
+
+
+def test_builder_produces_complete_non_final_notice() -> None:
+    workflow = StartupWorkflowBuilder().build(_input())
+    notice = workflow.candidate_result.non_final_notice.lower()
+    assert "candidat" in notice
+    assert "non final" in notice
+    assert "non applique" in notice or "ne cree pas de solution" in notice
+    assert "validation ceo" in notice or "validation du ceo" in notice
 
 
 # --- content_hash : scellage déterministe ------------------------------------------------------
