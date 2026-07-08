@@ -208,7 +208,54 @@ l'analyse / faiblesses / améliorations / version candidate / différenciation, 
 **Demander une révision**. L'approbation change le statut **sans aucune exécution automatique** ;
 l'amélioration n'est jamais présentée comme une solution finale.
 
+## Phase 4B-R — Fabrique d'entreprises IA spécialisées
+
+**Réalignement fondateur :** AI-SOS n'est pas une plateforme de conseil — c'est une **fabrique
+d'entreprises IA spécialisées**. À partir d'un **plan ou d'une amélioration approuvé**, AI-SOS
+**compose une entreprise IA temporaire candidate** organisée pour produire un livrable concret :
+départements, spécialités, **cellules d'au moins 10 experts par spécialité**, protocole de débat
+contradictoire, coordination interne et **contrat de livraison**. Cette phase **ne fait que
+composer** : l'entreprise n'est **jamais exécutée** et reste candidate jusqu'à validation CEO.
+
+**Équipe de composition (4 appels LLM couvrant 5 blocs) :**
+
+1. **AI Company Architect** — nom, mission, objectif, départements de l'entreprise IA.
+2. **Department & Specialty Designer** — départements → spécialités de production.
+3. **Debate Protocol Architect** — protocole de débat contradictoire, coordination, workflow.
+4. **Delivery & Governance Reviewer** — livrables concrets, contrat de livraison, validations CEO.
+
+Le **5ᵉ bloc — Expert Cell Designer** — est réalisé de façon **déterministe** par AI-SOS
+(`build_expert_cells`) : chaque spécialité est développée en une cellule de **10 experts** aux
+angles d'analyse et rôles de débat distincts (théoricien, praticien, auditeur, Red Team,
+performance, intégration, sécurité, UX, données, synthétiseur). Cela **garantit** l'invariant
+« ≥ 10 experts par spécialité » quelle que soit la sortie du LLM. Chaque expert porte 8 champs :
+`name`, `specialty`, `expertise_area`, `skills`, `angle_of_analysis`, `debate_role`,
+`expected_objections`, `expected_contribution`.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/companies/specialized` | compose une entreprise IA depuis une source **approuvée** |
+| `GET` | `/companies/specialized` | liste les entreprises IA |
+| `GET` | `/companies/specialized/{id}` | relit une entreprise IA |
+| `POST` | `/companies/specialized/{id}/approve` | validation CEO → `approved` |
+| `POST` | `/companies/specialized/{id}/request-revision` | demande de révision → `revision_requested` |
+
+**Règle de source :** seule une source `approved` peut être entreprise. Source absente → **404** ;
+source non approuvée → **409** avec message clair.
+
+**Interface :** l'onglet **« Composer une entreprise IA spécialisée »** (Streamlit) permet de choisir
+un type de source, sélectionner une source approuvée, composer l'entreprise, lire sa composition
+(mission, objectif, départements, **cellules d'experts**, protocole de débat, coordination, workflow
+de production, livrables, contrat de livraison, validations CEO, risques), puis **Approuver** /
+**Demander une révision** — toujours **via le client HTTP**.
+
+> **Cette entreprise IA est candidate. Elle n'est pas encore exécutée. Aucune production ni
+> livraison ne commence sans validation CEO explicite.**
+
 ## Prochaine tranche
 
-**Phase 4 (proposée)** — persistance/observabilité renforcées ou création d'équipes IA
-spécialisées à partir d'un plan approuvé (« fabrique d'équipes IA »), à cadrer par le CEO.
+**Phase 5 (proposée)** — à cadrer par le CEO : première **exécution encadrée** d'un livrable par
+l'entreprise IA approuvée (produire / tester / documenter), toujours sous validation CEO, ou
+observabilité renforcée (coûts LLM, historique).

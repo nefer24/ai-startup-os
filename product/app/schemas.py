@@ -11,6 +11,7 @@ _DEFAULT_PROMPT = "Réponds en une phrase courte confirmant que le runtime AI-SO
 
 InputType = Literal["problem", "idea", "objective"]
 PlanStatus = Literal["draft", "candidate", "approved", "revision_requested"]
+SourceType = Literal["solution_plan", "solution_improvement"]
 
 
 class HealthOut(BaseModel):
@@ -123,6 +124,47 @@ class ImprovementOut(BaseModel):
     differentiation: str
     risks: str
     expertise_needs: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class SpecializedAICompanyCreateRequest(BaseModel):
+    """Entrée CEO : composer une entreprise IA spécialisée depuis une source approuvée (4B-R)."""
+
+    source_type: SourceType
+    source_id: int
+
+
+class SpecializedAICompanyOut(BaseModel):
+    """Entreprise IA spécialisée candidate renvoyée par l'API.
+
+    `departments` est du texte ; `specialties` et `expert_cells` sont des chaînes JSON
+    (l'UI/les tests les parsent pour vérifier ≥ 10 experts par spécialité).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source_type: str
+    source_id: int
+    source_title: str
+    ai_company_name: str
+    company_mission: str
+    company_goal: str
+    departments: str
+    specialties: str
+    expert_cells: str
+    debate_protocol: str
+    coordination_model: str
+    production_workflow: str
+    concrete_deliverables: str
+    delivery_contract: str
+    ceo_validation_points: str
+    governance_notes: str
+    risks: str
     status: str
     error: str
     llm_model: str

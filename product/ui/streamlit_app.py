@@ -12,6 +12,7 @@ Lancement :
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -313,6 +314,183 @@ def render_improvement_actions(client: SolutionPlansAPIClient, item: dict[str, A
             )
 
 
+COMPANY_CANDIDATE_NOTICE = (
+    "Cette entreprise IA est **candidate**. Elle n'est pas encore exécutée. Aucune production "
+    "ni livraison ne commence sans validation CEO explicite."
+)
+
+
+def render_company_compose(client: SolutionPlansAPIClient) -> None:
+    """Entreprise IA — choisir une source approuvée et composer une entreprise IA spécialisée."""
+    st.header("1. Choisir une source approuvée")
+    st.caption(
+        "Seule une source **approuvée** (plan ou amélioration) peut être entreprise. "
+        + COMPANY_CANDIDATE_NOTICE
+    )
+    source_type = st.selectbox(
+        "Type de source",
+        ["solution_plan", "solution_improvement"],
+        format_func=lambda value: {
+            "solution_plan": "Plan de solution",
+            "solution_improvement": "Amélioration de solution",
+        }[value],
+    )
+    try:
+        sources = (
+            client.list_plans() if source_type == "solution_plan" else client.list_improvements()
+        )
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les sources : {exc}")
+        return
+
+    approved = [s for s in sources if s.get("status") == "approved"]
+    if not approved:
+        st.info(
+            "Aucune source approuvée pour ce type. Approuvez d'abord un plan ou une amélioration."
+        )
+        return
+
+    labels = {int(s["id"]): f"#{s['id']} — {s.get('title', '')}" for s in approved}
+    source_id = st.selectbox(
+        "Source approuvée", list(labels.keys()), format_func=lambda i: labels[i]
+    )
+    chosen = next(s for s in approved if int(s["id"]) == source_id)
+    summary = (
+        chosen.get("candidate_plan") or chosen.get("improved_solution_candidate") or ""
+    ).strip()
+    if summary:
+        st.markdown(f"**Résumé de la source :** {summary[:200]}")
+
+    compose_spinner = (
+        "AI-SOS compose l'entreprise IA "
+        "(Architect → Départements/Spécialités → Débat → Livraison/Gouvernance)…"
+    )
+    if st.button("Composer l'entreprise IA spécialisée"):
+        with st.spinner(compose_spinner):
+            try:
+                company = client.create_specialized_company(source_type, int(source_id))
+            except APIError as exc:
+                st.error(f"Échec de la composition : {exc}")
+                return
+        if company.get("status") == "draft":
+            st.warning(
+                "Entreprise IA enregistrée en **brouillon** : la composition a échoué "
+                f"(clé API manquante ?). Erreur : {company.get('error', '')}"
+            )
+        else:
+            st.success(f"Entreprise IA spécialisée candidate #{company.get('id')} composée.")
+        st.session_state["selected_company_id"] = company.get("id")
+
+
+def render_companies_list(client: SolutionPlansAPIClient) -> None:
+    """Entreprise IA — lister les entreprises IA spécialisées candidates."""
+    st.header("2. Entreprises IA spécialisées candidates")
+    try:
+        companies = client.list_specialized_companies()
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les entreprises IA : {exc}")
+        return
+
+    if not companies:
+        st.info("Aucune entreprise IA pour l'instant. Composez-en une depuis une source approuvée.")
+        return
+
+    for company in companies:
+        st.markdown(
+            f"**#{company.get('id')}** · {status_badge(company.get('status', ''))} · "
+            f"source `{company.get('source_type')}` #{company.get('source_id')}\n\n"
+            f"**{company.get('ai_company_name') or company.get('source_title', '')}**"
+        )
+    ids = [int(company["id"]) for company in companies]
+    current = st.session_state.get("selected_company_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox("Sélectionner une entreprise IA à détailler", ids, index=default_index)
+    st.session_state["selected_company_id"] = selected
+
+
+def _render_expert_cells(raw_cells: str) -> None:
+    """Affiche les cellules d'experts (JSON) : ≥ 10 experts par spécialité."""
+    try:
+        cells = json.loads(raw_cells) if raw_cells else []
+    except (json.JSONDecodeError, ValueError):
+        st.write("_(cellules non lisibles)_")
+        return
+    if not cells:
+        st.write("_(aucune cellule)_")
+        return
+    for cell in cells:
+        experts = cell.get("experts", [])
+        st.markdown(
+            f"**{cell.get('department', '')} → {cell.get('specialty', '')}** "
+            f"— {len(experts)} experts"
+        )
+        for expert in experts:
+            st.markdown(
+                f"- **{expert.get('name', '')}** · rôle de débat : {expert.get('debate_role', '')} "
+                f"· angle : {expert.get('angle_of_analysis', '')} · objections : "
+                f"{expert.get('expected_objections', '')}"
+            )
+
+
+def render_company_detail(client: SolutionPlansAPIClient) -> None:
+    """Entreprise IA — détail complet de l'entreprise sélectionnée."""
+    st.header("3. Détail de l'entreprise IA sélectionnée")
+    company_id = st.session_state.get("selected_company_id")
+    if company_id is None:
+        st.info("Sélectionnez une entreprise IA dans la liste.")
+        return
+    try:
+        company = client.get_specialized_company(int(company_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer l'entreprise IA : {exc}")
+        return
+
+    st.subheader(f"#{company.get('id')} — {company.get('ai_company_name', '')}")
+    st.write(f"**Statut :** {status_badge(company.get('status', ''))}")
+    st.write(
+        f"**Source :** `{company.get('source_type')}` #{company.get('source_id')} — "
+        f"{company.get('source_title', '')}"
+    )
+    if company.get("error"):
+        st.error(f"Erreur historisée : {company['error']}")
+
+    _section("Mission", company.get("company_mission", ""))
+    _section("Objectif", company.get("company_goal", ""))
+    _section("Départements", company.get("departments", ""))
+    st.markdown("**Cellules d'experts (≥ 10 experts par spécialité)**")
+    _render_expert_cells(company.get("expert_cells", ""))
+    _section("Protocole de débat contradictoire", company.get("debate_protocol", ""))
+    _section("Coordination interne", company.get("coordination_model", ""))
+    _section("Workflow de production", company.get("production_workflow", ""))
+    _section("Livrables concrets", company.get("concrete_deliverables", ""))
+    _section("Contrat de livraison", company.get("delivery_contract", ""))
+    _section("Points de validation CEO", company.get("ceo_validation_points", ""))
+    _section("Notes de gouvernance", company.get("governance_notes", ""))
+    _section("Risques", company.get("risks", ""))
+
+    render_company_actions(client, company)
+
+
+def render_company_actions(client: SolutionPlansAPIClient, company: dict[str, Any]) -> None:
+    """Entreprise IA — actions de gouvernance CEO (approuver / demander révision)."""
+    st.header("4. Validation CEO")
+    st.caption(COMPANY_CANDIDATE_NOTICE)
+    company_id = int(company["id"])
+    col_approve, col_revision = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approuver cette entreprise IA"):
+            _act(
+                lambda: client.approve_specialized_company(company_id),
+                "Entreprise IA approuvée (aucune exécution ni production déclenchée).",
+            )
+    with col_revision:
+        if st.button("🟠 Demander une révision", key="company_revision"):
+            _act(
+                lambda: client.request_specialized_company_revision(company_id),
+                "Révision demandée.",
+            )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -327,7 +505,13 @@ def main() -> None:
     except APIError:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
-    tab_create, tab_improve = st.tabs(["Créer une solution", "Améliorer une solution existante"])
+    tab_create, tab_improve, tab_company = st.tabs(
+        [
+            "Créer une solution",
+            "Améliorer une solution existante",
+            "Composer une entreprise IA spécialisée",
+        ]
+    )
     with tab_create:
         render_submit(client)
         render_plans_list(client)
@@ -336,6 +520,10 @@ def main() -> None:
         render_improvement_submit(client)
         render_improvements_list(client)
         render_improvement_detail(client)
+    with tab_company:
+        render_company_compose(client)
+        render_companies_list(client)
+        render_company_detail(client)
 
 
 if __name__ == "__main__":
