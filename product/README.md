@@ -288,8 +288,44 @@ contenu / notes de production / revue qualité / risques / notes de validation C
 > **Ce livrable est candidat. L'approbation ne déclenche aucun déploiement, aucune livraison
 > externe, aucune modification automatique du repo. Le livrable n'est jamais présenté comme final.**
 
+## Phase 6 — Itération contrôlée sur un livrable
+
+Le CEO peut demander une **révision guidée** d'un livrable existant : AI-SOS produit une **nouvelle
+version candidate**, la **compare** à la version précédente et conserve l'**historique append-only**.
+**Le livrable original (V1) n'est jamais écrasé** ; chaque révision crée une nouvelle version (V2, V3…).
+
+**Processus d'itération (4 appels LLM) :**
+
+1. **Revision Analyst** — comprend le livrable, les instructions, contraintes et focus areas.
+2. **Version Producer** — produit la nouvelle version candidate.
+3. **Version Comparator** — compare version précédente et nouvelle (améliorations, compromis).
+4. **Quality & Governance Reviewer** — périmètre, clarté, risques, points à valider CEO.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/deliverables/{id}/versions` | produit une nouvelle version candidate |
+| `GET` | `/deliverables/{id}/versions` | liste les versions d'un livrable |
+| `GET` | `/deliverables/{id}/versions/compare` | comparaison simple (V1 incluse) |
+| `GET` | `/deliverable-versions/{id}` | relit une version |
+| `POST` | `/deliverable-versions/{id}/approve` | validation CEO → `approved` |
+| `POST` | `/deliverable-versions/{id}/request-revision` | révision → `revision_requested` |
+
+**Règle :** livrable source absent → **404**. Le livrable peut être `candidate`, `approved` ou
+`revision_requested`. `version_number` s'incrémente (V2, V3…) ; `source_version_id` chaîne les versions.
+
+**Interface :** onglet **« Itérer sur un livrable »** (Streamlit) — saisir l'ID du livrable, voir son
+contenu actuel (V1), saisir instructions / contraintes / focus areas, produire une nouvelle version,
+voir l'**historique et la comparaison**, lire le détail (version_number, contenu, résumé des
+changements, comparaison, revue qualité, risques, notes CEO), puis **Approuver** / **Demander une
+révision** — toujours **via le client HTTP**.
+
+> **Une version approuvée ne déclenche aucun déploiement, aucune livraison externe, aucune
+> modification automatique du repo. Le livrable original n'est jamais écrasé.**
+
 ## Prochaine tranche
 
-**Phase 6 (proposée)** — à cadrer par le CEO : itération sur un livrable (versions successives
-sous validation), ou observabilité renforcée (coûts LLM, historique, export), ou production de
-plusieurs livrables coordonnés d'une même entreprise IA.
+**Phase 7 (proposée)** — à cadrer par le CEO : observabilité renforcée (coûts LLM, historique,
+export), production de plusieurs livrables coordonnés d'une même entreprise IA, ou consolidation
+d'une version approuvée en « livrable de référence ».

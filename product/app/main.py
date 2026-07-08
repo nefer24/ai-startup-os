@@ -33,9 +33,18 @@ Endpoints Phase 5 (Production encadrée d'un livrable) :
   * POST /deliverables/{id}/approve              — validation CEO (statut approved).
   * POST /deliverables/{id}/request-revision     — demande de révision.
 
-Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA et
-livrables restent candidats tant que le CEO ne les a pas validés ; l'approbation ne déclenche
-aucune exécution, aucune production automatique, aucun déploiement, aucune modification du repo.
+Endpoints Phase 6 (Itération contrôlée sur un livrable) :
+  * POST /deliverables/{id}/versions             — produit une nouvelle version candidate.
+  * GET  /deliverables/{id}/versions             — liste les versions d'un livrable.
+  * GET  /deliverables/{id}/versions/compare     — comparaison simple des versions.
+  * GET  /deliverable-versions/{id}              — relit une version.
+  * POST /deliverable-versions/{id}/approve      — validation CEO d'une version.
+  * POST /deliverable-versions/{id}/request-revision — demande de révision d'une version.
+
+Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
+livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
+déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
+du repo. L'itération est append-only : le livrable original n'est jamais écrasé.
 """
 
 from __future__ import annotations
@@ -58,6 +67,7 @@ from app.company_deliverables import (
 from app.config import get_settings
 from app.db import (
     CompanyDeliverable,
+    DeliverableVersion,
     LLMResult,
     SolutionImprovement,
     SolutionPlan,
@@ -65,10 +75,20 @@ from app.db import (
     make_engine,
     make_session_factory,
 )
+from app.deliverable_versions import (
+    DeliverableNotFoundError,
+    compare_versions,
+    generate_version,
+    list_versions,
+    load_deliverable,
+    set_version_status,
+)
 from app.llm import LLMClient, build_llm_client
 from app.schemas import (
     DeliverableCreateRequest,
     DeliverableOut,
+    DeliverableVersionCreateRequest,
+    DeliverableVersionOut,
     HealthOut,
     ImprovementCreateRequest,
     ImprovementOut,
@@ -391,4 +411,81 @@ def request_revision_deliverable(deliverable_id: int, db: DbSession) -> Delivera
     deliverable = _get_deliverable_or_404(db, deliverable_id)
     return DeliverableOut.model_validate(
         set_deliverable_status(db, deliverable, "revision_requested")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Itération contrôlée sur un livrable (versioning append-only).
+# ---------------------------------------------------------------------------
+def _get_version_or_404(db: Session, version_id: int) -> DeliverableVersion:
+    """Récupère une version par id ou lève 404."""
+    version = db.get(DeliverableVersion, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="version introuvable")
+    return version
+
+
+@app.post(
+    "/deliverables/{deliverable_id}/versions",
+    response_model=DeliverableVersionOut,
+    status_code=201,
+)
+def create_deliverable_version(
+    deliverable_id: int, payload: DeliverableVersionCreateRequest, db: DbSession, llm: LLM
+) -> DeliverableVersionOut:
+    """Produit une nouvelle version candidate d'un livrable existant. N'écrase jamais l'original."""
+    try:
+        deliverable = load_deliverable(db, deliverable_id)
+    except DeliverableNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="livrable introuvable") from exc
+    version = generate_version(
+        db, llm, deliverable, payload, llm_model=get_settings().anthropic_model
+    )
+    return DeliverableVersionOut.model_validate(version)
+
+
+@app.get(
+    "/deliverables/{deliverable_id}/versions",
+    response_model=list[DeliverableVersionOut],
+)
+def list_deliverable_versions(deliverable_id: int, db: DbSession) -> list[DeliverableVersionOut]:
+    """Liste les versions d'un livrable, de la plus récente à la plus ancienne."""
+    return [DeliverableVersionOut.model_validate(row) for row in list_versions(db, deliverable_id)]
+
+
+@app.get("/deliverables/{deliverable_id}/versions/compare")
+def compare_deliverable_versions(deliverable_id: int, db: DbSession) -> list[dict[str, object]]:
+    """Comparaison simple des versions d'un livrable (V1 originale incluse)."""
+    try:
+        deliverable = load_deliverable(db, deliverable_id)
+    except DeliverableNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="livrable introuvable") from exc
+    return compare_versions(db, deliverable)
+
+
+@app.get("/deliverable-versions/{version_id}", response_model=DeliverableVersionOut)
+def get_deliverable_version(version_id: int, db: DbSession) -> DeliverableVersionOut:
+    """Retourne une version précise."""
+    return DeliverableVersionOut.model_validate(_get_version_or_404(db, version_id))
+
+
+@app.post(
+    "/deliverable-versions/{version_id}/approve",
+    response_model=DeliverableVersionOut,
+)
+def approve_deliverable_version(version_id: int, db: DbSession) -> DeliverableVersionOut:
+    """Validation CEO d'une version : passe en `approved`. Aucun déploiement, aucune livraison."""
+    version = _get_version_or_404(db, version_id)
+    return DeliverableVersionOut.model_validate(set_version_status(db, version, "approved"))
+
+
+@app.post(
+    "/deliverable-versions/{version_id}/request-revision",
+    response_model=DeliverableVersionOut,
+)
+def request_revision_deliverable_version(version_id: int, db: DbSession) -> DeliverableVersionOut:
+    """Demande de révision d'une version : passe en `revision_requested`. Ne relance rien."""
+    version = _get_version_or_404(db, version_id)
+    return DeliverableVersionOut.model_validate(
+        set_version_status(db, version, "revision_requested")
     )

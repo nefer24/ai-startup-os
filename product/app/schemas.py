@@ -218,3 +218,52 @@ class DeliverableOut(BaseModel):
     llm_model: str
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class DeliverableVersionCreateRequest(BaseModel):
+    """Entrée CEO : demander une révision guidée d'un livrable existant (Phase 6)."""
+
+    revision_instructions: str
+    constraints: str = ""
+    focus_areas: str = ""
+
+    @field_validator("revision_instructions")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Refuse une valeur vide ou faite uniquement d'espaces."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("constraints", "focus_areas")
+    @classmethod
+    def _strip_optional(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+
+class DeliverableVersionOut(BaseModel):
+    """Version candidate d'un livrable renvoyée par l'API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    deliverable_id: int
+    company_id: int
+    version_number: int
+    source_version_id: int | None
+    revision_instructions: str
+    constraints: str
+    focus_areas: str
+    content: str
+    change_summary: str
+    comparison_to_previous: str
+    quality_review: str
+    risks: str
+    ceo_validation_notes: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime

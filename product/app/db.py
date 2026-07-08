@@ -183,6 +183,45 @@ class CompanyDeliverable(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class DeliverableVersion(Base):
+    """Nouvelle version candidate d'un livrable existant, produite par itération (Phase 6).
+
+    Historique **append-only** : le livrable original (V1) n'est jamais modifié ; chaque révision
+    guidée crée une nouvelle ligne (V2, V3…). Reste **candidate** jusqu'à validation CEO ;
+    l'approbation ne déclenche **aucun déploiement, aucune livraison externe, aucune modification
+    du repo**. Une version candidate n'est jamais présentée comme finale.
+    """
+
+    __tablename__ = "deliverable_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Rattachement.
+    deliverable_id: Mapped[int] = mapped_column(default=0)
+    company_id: Mapped[int] = mapped_column(default=0)
+    version_number: Mapped[int] = mapped_column(default=2)
+    source_version_id: Mapped[int | None] = mapped_column(default=None)
+    # Demande CEO.
+    revision_instructions: Mapped[str] = mapped_column(Text, default="")
+    constraints: Mapped[str] = mapped_column(Text, default="")
+    focus_areas: Mapped[str] = mapped_column(Text, default="")
+    # Production de la version.
+    content: Mapped[str] = mapped_column(Text, default="")
+    change_summary: Mapped[str] = mapped_column(Text, default="")
+    comparison_to_previous: Mapped[str] = mapped_column(Text, default="")
+    quality_review: Mapped[str] = mapped_column(Text, default="")
+    risks: Mapped[str] = mapped_column(Text, default="")
+    ceo_validation_notes: Mapped[str] = mapped_column(Text, default="")
+    # Statut de gouvernance : draft / candidate / approved / revision_requested.
+    status: Mapped[str] = mapped_column(String, default="candidate")
+    # Audit / diagnostic (optionnels).
+    raw_agent_outputs: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    llm_model: Mapped[str] = mapped_column(String, default="")
+    # Horodatages.
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 def make_engine(database_url: str) -> Engine:
     """Construit un moteur SQLAlchemy. `check_same_thread=False` pour SQLite + FastAPI."""
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
