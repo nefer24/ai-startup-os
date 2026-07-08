@@ -313,6 +313,149 @@ def render_improvement_actions(client: SolutionPlansAPIClient, item: dict[str, A
             )
 
 
+def render_team_compose(client: SolutionPlansAPIClient) -> None:
+    """Équipe — choisir une source approuvée et composer une équipe IA spécialisée."""
+    st.header("1. Choisir une source approuvée")
+    st.caption(
+        "Seule une source **approuvée** (plan ou amélioration) peut être équipée. "
+        "L'approbation d'une équipe ne déclenche **aucune exécution automatique**."
+    )
+    source_type = st.selectbox(
+        "Type de source",
+        ["solution_plan", "solution_improvement"],
+        format_func=lambda value: {
+            "solution_plan": "Plan de solution",
+            "solution_improvement": "Amélioration de solution",
+        }[value],
+    )
+    try:
+        sources = (
+            client.list_plans() if source_type == "solution_plan" else client.list_improvements()
+        )
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les sources : {exc}")
+        return
+
+    approved = [s for s in sources if s.get("status") == "approved"]
+    if not approved:
+        st.info(
+            "Aucune source approuvée pour ce type. Approuvez d'abord un plan ou une amélioration."
+        )
+        return
+
+    labels = {int(s["id"]): f"#{s['id']} — {s.get('title', '')}" for s in approved}
+    source_id = st.selectbox(
+        "Source approuvée", list(labels.keys()), format_func=lambda i: labels[i]
+    )
+    chosen = next(s for s in approved if int(s["id"]) == source_id)
+    summary = (
+        chosen.get("candidate_plan") or chosen.get("improved_solution_candidate") or ""
+    ).strip()
+    if summary:
+        st.markdown(f"**Résumé de la source :** {summary[:200]}")
+
+    compose_spinner = (
+        "L'équipe de composition travaille (Designer → Skills → Workflow → Gouvernance)…"
+    )
+    if st.button("Composer l'équipe IA spécialisée"):
+        with st.spinner(compose_spinner):
+            try:
+                team = client.create_specialized_team(source_type, int(source_id))
+            except APIError as exc:
+                st.error(f"Échec de la composition : {exc}")
+                return
+        if team.get("status") == "draft":
+            st.warning(
+                "Équipe enregistrée en **brouillon** : la composition a échoué "
+                f"(clé API manquante ?). Erreur : {team.get('error', '')}"
+            )
+        else:
+            st.success(f"Équipe spécialisée candidate #{team.get('id')} composée.")
+        st.session_state["selected_team_id"] = team.get("id")
+
+
+def render_teams_list(client: SolutionPlansAPIClient) -> None:
+    """Équipe — lister les équipes spécialisées candidates."""
+    st.header("2. Équipes spécialisées candidates")
+    try:
+        teams = client.list_specialized_teams()
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les équipes : {exc}")
+        return
+
+    if not teams:
+        st.info("Aucune équipe pour l'instant. Composez-en une depuis une source approuvée.")
+        return
+
+    for team in teams:
+        st.markdown(
+            f"**#{team.get('id')}** · {status_badge(team.get('status', ''))} · "
+            f"source `{team.get('source_type')}` #{team.get('source_id')}\n\n"
+            f"**{team.get('team_name') or team.get('source_title', '')}**"
+        )
+    ids = [int(team["id"]) for team in teams]
+    current = st.session_state.get("selected_team_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox("Sélectionner une équipe à détailler", ids, index=default_index)
+    st.session_state["selected_team_id"] = selected
+
+
+def render_team_detail(client: SolutionPlansAPIClient) -> None:
+    """Équipe — détail complet de l'équipe sélectionnée."""
+    st.header("3. Détail de l'équipe sélectionnée")
+    team_id = st.session_state.get("selected_team_id")
+    if team_id is None:
+        st.info("Sélectionnez une équipe dans la liste.")
+        return
+    try:
+        team = client.get_specialized_team(int(team_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer l'équipe : {exc}")
+        return
+
+    st.subheader(f"#{team.get('id')} — {team.get('team_name', '')}")
+    st.write(f"**Statut :** {status_badge(team.get('status', ''))}")
+    st.write(
+        f"**Source :** `{team.get('source_type')}` #{team.get('source_id')} — "
+        f"{team.get('source_title', '')}"
+    )
+    if team.get("error"):
+        st.error(f"Erreur historisée : {team['error']}")
+
+    _section("Mission", team.get("mission", ""))
+    _section("Rôles", team.get("roles", ""))
+    _section("Compétences", team.get("skills", ""))
+    _section("Workflow", team.get("workflow", ""))
+    _section("Livrables", team.get("deliverables", ""))
+    _section("Notes de gouvernance", team.get("governance_notes", ""))
+    _section("Risques", team.get("risks", ""))
+
+    render_team_actions(client, team)
+
+
+def render_team_actions(client: SolutionPlansAPIClient, team: dict[str, Any]) -> None:
+    """Équipe — actions de gouvernance CEO (approuver / demander révision)."""
+    st.header("4. Validation CEO")
+    st.caption(
+        "L'approbation d'une équipe IA **ne déclenche aucune exécution automatique** : "
+        "l'équipe reste une composition candidate, non opérationnelle sans décision humaine."
+    )
+    team_id = int(team["id"])
+    col_approve, col_revision = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approuver cette équipe"):
+            _act(
+                lambda: client.approve_specialized_team(team_id),
+                "Équipe approuvée (aucune exécution déclenchée).",
+            )
+    with col_revision:
+        if st.button("🟠 Demander une révision", key="team_revision"):
+            _act(
+                lambda: client.request_specialized_team_revision(team_id),
+                "Révision demandée.",
+            )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -327,7 +470,13 @@ def main() -> None:
     except APIError:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
-    tab_create, tab_improve = st.tabs(["Créer une solution", "Améliorer une solution existante"])
+    tab_create, tab_improve, tab_team = st.tabs(
+        [
+            "Créer une solution",
+            "Améliorer une solution existante",
+            "Composer une équipe IA spécialisée",
+        ]
+    )
     with tab_create:
         render_submit(client)
         render_plans_list(client)
@@ -336,6 +485,10 @@ def main() -> None:
         render_improvement_submit(client)
         render_improvements_list(client)
         render_improvement_detail(client)
+    with tab_team:
+        render_team_compose(client)
+        render_teams_list(client)
+        render_team_detail(client)
 
 
 if __name__ == "__main__":

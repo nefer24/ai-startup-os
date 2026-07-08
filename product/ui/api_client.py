@@ -131,3 +131,32 @@ class SolutionPlansAPIClient:
             "POST", f"/solutions/improvements/{improvement_id}/request-revision"
         )
         return result
+
+    # --- Phase 4B : fabrique d'équipes IA spécialisées -----------------------
+    def create_specialized_team(self, source_type: str, source_id: int) -> dict[str, Any]:
+        """Compose une équipe spécialisée depuis une source (`POST /teams/specialized`)."""
+        payload = {"source_type": source_type, "source_id": source_id}
+        result: dict[str, Any] = self._request("POST", "/teams/specialized", json=payload)
+        return result
+
+    def list_specialized_teams(self) -> list[dict[str, Any]]:
+        """Liste les équipes spécialisées (`GET /teams/specialized`)."""
+        result: list[dict[str, Any]] = self._request("GET", "/teams/specialized")
+        return result
+
+    def get_specialized_team(self, team_id: int) -> dict[str, Any]:
+        """Retourne une équipe précise (`GET /teams/specialized/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/teams/specialized/{team_id}")
+        return result
+
+    def approve_specialized_team(self, team_id: int) -> dict[str, Any]:
+        """Validation CEO (`POST /teams/specialized/{id}/approve`). Aucune exécution."""
+        result: dict[str, Any] = self._request("POST", f"/teams/specialized/{team_id}/approve")
+        return result
+
+    def request_specialized_team_revision(self, team_id: int) -> dict[str, Any]:
+        """Demande de révision (`POST /teams/specialized/{id}/request-revision`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/teams/specialized/{team_id}/request-revision"
+        )
+        return result

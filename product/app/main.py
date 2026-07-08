@@ -19,7 +19,14 @@ Endpoints Phase 3 (Amélioration d'une solution existante) :
   * POST /solutions/improvements/{id}/approve           — validation CEO (statut approved).
   * POST /solutions/improvements/{id}/request-revision  — demande de révision.
 
-Aucune décision automatique, aucune action destructive : plans et améliorations restent
+Endpoints Phase 4B (Fabrique d'équipes IA spécialisées) :
+  * POST /teams/specialized                        — compose une équipe depuis une source approuvée.
+  * GET  /teams/specialized                        — liste les équipes spécialisées.
+  * GET  /teams/specialized/{id}                   — relit une équipe.
+  * POST /teams/specialized/{id}/approve           — validation CEO (statut approved).
+  * POST /teams/specialized/{id}/request-revision  — demande de révision.
+
+Aucune décision automatique, aucune action destructive : plans, améliorations et équipes restent
 candidats tant que le CEO ne les a pas validés, et l'approbation ne déclenche aucune exécution.
 """
 
@@ -38,6 +45,7 @@ from app.db import (
     LLMResult,
     SolutionImprovement,
     SolutionPlan,
+    SpecializedTeam,
     make_engine,
     make_session_factory,
 )
@@ -50,9 +58,18 @@ from app.schemas import (
     LLMTestRequest,
     SolutionPlanCreateRequest,
     SolutionPlanOut,
+    SpecializedTeamCreateRequest,
+    SpecializedTeamOut,
 )
 from app.solution_improvements import generate_improvement, set_improvement_status
 from app.solution_plans import generate_solution_plan, set_plan_status
+from app.specialized_teams import (
+    SourceNotApprovedError,
+    SourceNotFoundError,
+    generate_specialized_team,
+    load_source_info,
+    set_team_status,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -225,3 +242,60 @@ def request_revision_improvement(improvement_id: int, db: DbSession) -> Improvem
     return ImprovementOut.model_validate(
         set_improvement_status(db, improvement, "revision_requested")
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4B — Fabrique d'équipes IA spécialisées.
+# ---------------------------------------------------------------------------
+def _get_team_or_404(db: Session, team_id: int) -> SpecializedTeam:
+    """Récupère une équipe par id ou lève 404."""
+    team = db.get(SpecializedTeam, team_id)
+    if team is None:
+        raise HTTPException(status_code=404, detail="équipe introuvable")
+    return team
+
+
+@app.post("/teams/specialized", response_model=SpecializedTeamOut, status_code=201)
+def create_specialized_team(
+    payload: SpecializedTeamCreateRequest, db: DbSession, llm: LLM
+) -> SpecializedTeamOut:
+    """Compose une équipe IA spécialisée depuis une source **approuvée**. N'exécute rien."""
+    try:
+        info = load_source_info(db, payload.source_type, payload.source_id)
+    except SourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="source introuvable") from exc
+    except SourceNotApprovedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    team = generate_specialized_team(db, llm, info, llm_model=get_settings().anthropic_model)
+    return SpecializedTeamOut.model_validate(team)
+
+
+@app.get("/teams/specialized", response_model=list[SpecializedTeamOut])
+def list_specialized_teams(db: DbSession) -> list[SpecializedTeamOut]:
+    """Liste les équipes spécialisées, du plus récent au plus ancien (limite 100)."""
+    rows = (
+        db.execute(select(SpecializedTeam).order_by(SpecializedTeam.id.desc()).limit(100))
+        .scalars()
+        .all()
+    )
+    return [SpecializedTeamOut.model_validate(row) for row in rows]
+
+
+@app.get("/teams/specialized/{team_id}", response_model=SpecializedTeamOut)
+def get_specialized_team(team_id: int, db: DbSession) -> SpecializedTeamOut:
+    """Retourne une équipe spécialisée précise."""
+    return SpecializedTeamOut.model_validate(_get_team_or_404(db, team_id))
+
+
+@app.post("/teams/specialized/{team_id}/approve", response_model=SpecializedTeamOut)
+def approve_specialized_team(team_id: int, db: DbSession) -> SpecializedTeamOut:
+    """Validation CEO : passe l'équipe en `approved`. Ne déclenche aucune exécution."""
+    team = _get_team_or_404(db, team_id)
+    return SpecializedTeamOut.model_validate(set_team_status(db, team, "approved"))
+
+
+@app.post("/teams/specialized/{team_id}/request-revision", response_model=SpecializedTeamOut)
+def request_revision_specialized_team(team_id: int, db: DbSession) -> SpecializedTeamOut:
+    """Demande de révision CEO : passe l'équipe en `revision_requested`. Ne relance rien."""
+    team = _get_team_or_404(db, team_id)
+    return SpecializedTeamOut.model_validate(set_team_status(db, team, "revision_requested"))

@@ -208,7 +208,42 @@ l'analyse / faiblesses / améliorations / version candidate / différenciation, 
 **Demander une révision**. L'approbation change le statut **sans aucune exécution automatique** ;
 l'amélioration n'est jamais présentée comme une solution finale.
 
+## Phase 4B — Fabrique d'équipes IA spécialisées
+
+À partir d'un **plan ou d'une amélioration approuvé**, AI-SOS **compose** une équipe IA
+spécialisée candidate (rôles, compétences, workflow, livrables, gouvernance). Cette phase
+**ne fait que composer** : l'équipe n'est jamais exécutée et reste candidate jusqu'à validation CEO.
+
+**Équipe de composition (4 rôles, 4 appels LLM) :**
+
+1. **Team Designer** — identifie les rôles IA nécessaires, le nom et la mission de l'équipe.
+2. **Skill Mapper** — compétences, responsabilités, entrées/sorties de chaque rôle.
+3. **Workflow Architect** — ordre de travail, dépendances, validations, livrables.
+4. **Governance Reviewer** — points de validation CEO, limites, risques, garde-fous.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/teams/specialized` | compose une équipe depuis une source **approuvée** |
+| `GET` | `/teams/specialized` | liste les équipes |
+| `GET` | `/teams/specialized/{id}` | relit une équipe |
+| `POST` | `/teams/specialized/{id}/approve` | validation CEO → `approved` |
+| `POST` | `/teams/specialized/{id}/request-revision` | demande de révision → `revision_requested` |
+
+**Règle de source :** seule une source `approved` peut être équipée. Source absente → **404** ;
+source non approuvée → **409** avec message clair.
+
+**Interface :** l'onglet **« Composer une équipe IA spécialisée »** (Streamlit) permet de choisir un
+type de source (plan / amélioration), sélectionner une source approuvée, composer l'équipe, lire sa
+composition (mission, rôles, compétences, workflow, livrables, gouvernance, risques), puis
+**Approuver** / **Demander une révision** — toujours **via le client HTTP**.
+
+> **L'approbation d'une équipe IA ne déclenche aucune exécution automatique** ; l'équipe reste une
+> composition candidate, non opérationnelle sans décision humaine.
+
 ## Prochaine tranche
 
-**Phase 4 (proposée)** — persistance/observabilité renforcées ou création d'équipes IA
-spécialisées à partir d'un plan approuvé (« fabrique d'équipes IA »), à cadrer par le CEO.
+**Phase 5 (proposée)** — à cadrer par le CEO : première **exécution encadrée** d'un livrable par
+l'équipe approuvée (production/test/documentation), toujours sous validation CEO, ou observabilité
+renforcée (coûts LLM, historique).

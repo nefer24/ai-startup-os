@@ -11,6 +11,7 @@ _DEFAULT_PROMPT = "Réponds en une phrase courte confirmant que le runtime AI-SO
 
 InputType = Literal["problem", "idea", "objective"]
 PlanStatus = Literal["draft", "candidate", "approved", "revision_requested"]
+SourceType = Literal["solution_plan", "solution_improvement"]
 
 
 class HealthOut(BaseModel):
@@ -123,6 +124,37 @@ class ImprovementOut(BaseModel):
     differentiation: str
     risks: str
     expertise_needs: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class SpecializedTeamCreateRequest(BaseModel):
+    """Entrée CEO : composer une équipe IA spécialisée depuis une source approuvée (Phase 4B)."""
+
+    source_type: SourceType
+    source_id: int
+
+
+class SpecializedTeamOut(BaseModel):
+    """Équipe IA spécialisée candidate renvoyée par l'API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source_type: str
+    source_id: int
+    source_title: str
+    team_name: str
+    mission: str
+    roles: str
+    skills: str
+    workflow: str
+    deliverables: str
+    governance_notes: str
+    risks: str
     status: str
     error: str
     llm_model: str
