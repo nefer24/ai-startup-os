@@ -132,31 +132,33 @@ class SolutionPlansAPIClient:
         )
         return result
 
-    # --- Phase 4B : fabrique d'équipes IA spécialisées -----------------------
-    def create_specialized_team(self, source_type: str, source_id: int) -> dict[str, Any]:
-        """Compose une équipe spécialisée depuis une source (`POST /teams/specialized`)."""
+    # --- Phase 4B-R : fabrique d'entreprises IA spécialisées -----------------
+    def create_specialized_company(self, source_type: str, source_id: int) -> dict[str, Any]:
+        """Compose une entreprise IA candidate (`POST /companies/specialized`)."""
         payload = {"source_type": source_type, "source_id": source_id}
-        result: dict[str, Any] = self._request("POST", "/teams/specialized", json=payload)
+        result: dict[str, Any] = self._request("POST", "/companies/specialized", json=payload)
         return result
 
-    def list_specialized_teams(self) -> list[dict[str, Any]]:
-        """Liste les équipes spécialisées (`GET /teams/specialized`)."""
-        result: list[dict[str, Any]] = self._request("GET", "/teams/specialized")
+    def list_specialized_companies(self) -> list[dict[str, Any]]:
+        """Liste les entreprises IA spécialisées (`GET /companies/specialized`)."""
+        result: list[dict[str, Any]] = self._request("GET", "/companies/specialized")
         return result
 
-    def get_specialized_team(self, team_id: int) -> dict[str, Any]:
-        """Retourne une équipe précise (`GET /teams/specialized/{id}`)."""
-        result: dict[str, Any] = self._request("GET", f"/teams/specialized/{team_id}")
+    def get_specialized_company(self, company_id: int) -> dict[str, Any]:
+        """Retourne une entreprise IA précise (`GET /companies/specialized/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/companies/specialized/{company_id}")
         return result
 
-    def approve_specialized_team(self, team_id: int) -> dict[str, Any]:
-        """Validation CEO (`POST /teams/specialized/{id}/approve`). Aucune exécution."""
-        result: dict[str, Any] = self._request("POST", f"/teams/specialized/{team_id}/approve")
-        return result
-
-    def request_specialized_team_revision(self, team_id: int) -> dict[str, Any]:
-        """Demande de révision (`POST /teams/specialized/{id}/request-revision`)."""
+    def approve_specialized_company(self, company_id: int) -> dict[str, Any]:
+        """Validation CEO (`POST /companies/specialized/{id}/approve`). Aucune exécution."""
         result: dict[str, Any] = self._request(
-            "POST", f"/teams/specialized/{team_id}/request-revision"
+            "POST", f"/companies/specialized/{company_id}/approve"
+        )
+        return result
+
+    def request_specialized_company_revision(self, company_id: int) -> dict[str, Any]:
+        """Demande de révision (`POST /companies/specialized/{id}/request-revision`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/companies/specialized/{company_id}/request-revision"
         )
         return result

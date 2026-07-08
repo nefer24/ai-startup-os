@@ -34,16 +34,21 @@ def strip_code_fences(text: str) -> str:
     return stripped
 
 
+def parse_json(raw: str) -> Any:
+    """Parse une réponse JSON (dict ou liste), ou retourne `None` si non exploitable."""
+    try:
+        return json.loads(strip_code_fences(raw))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
 def parse_json_fields(raw: str, fields: Sequence[str]) -> dict[str, str] | None:
     """Extrait les `fields` d'une réponse JSON.
 
     Retourne un dict `{champ: texte}` (chaque champ manquant devient `""`), ou `None`
     si la réponse n'est pas un objet JSON exploitable — au caller de gérer le repli.
     """
-    try:
-        data = json.loads(strip_code_fences(raw))
-    except (json.JSONDecodeError, ValueError):
-        return None
+    data = parse_json(raw)
     if not isinstance(data, dict):
         return None
     return {field: as_text(data.get(field, "")) for field in fields}

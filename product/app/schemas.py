@@ -131,15 +131,19 @@ class ImprovementOut(BaseModel):
     updated_at: dt.datetime
 
 
-class SpecializedTeamCreateRequest(BaseModel):
-    """Entrée CEO : composer une équipe IA spécialisée depuis une source approuvée (Phase 4B)."""
+class SpecializedAICompanyCreateRequest(BaseModel):
+    """Entrée CEO : composer une entreprise IA spécialisée depuis une source approuvée (4B-R)."""
 
     source_type: SourceType
     source_id: int
 
 
-class SpecializedTeamOut(BaseModel):
-    """Équipe IA spécialisée candidate renvoyée par l'API."""
+class SpecializedAICompanyOut(BaseModel):
+    """Entreprise IA spécialisée candidate renvoyée par l'API.
+
+    `departments` est du texte ; `specialties` et `expert_cells` sont des chaînes JSON
+    (l'UI/les tests les parsent pour vérifier ≥ 10 experts par spécialité).
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -147,12 +151,18 @@ class SpecializedTeamOut(BaseModel):
     source_type: str
     source_id: int
     source_title: str
-    team_name: str
-    mission: str
-    roles: str
-    skills: str
-    workflow: str
-    deliverables: str
+    ai_company_name: str
+    company_mission: str
+    company_goal: str
+    departments: str
+    specialties: str
+    expert_cells: str
+    debate_protocol: str
+    coordination_model: str
+    production_workflow: str
+    concrete_deliverables: str
+    delivery_contract: str
+    ceo_validation_points: str
     governance_notes: str
     risks: str
     status: str

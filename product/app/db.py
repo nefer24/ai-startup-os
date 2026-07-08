@@ -101,29 +101,38 @@ class SolutionImprovement(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
-class SpecializedTeam(Base):
-    """Équipe IA spécialisée candidate, composée pour un plan/amélioration approuvé (Phase 4B).
+class SpecializedAICompany(Base):
+    """Entreprise IA spécialisée candidate, composée pour un plan/amélioration approuvé (4B-R).
 
-    Fruit de l'équipe de composition (Team Designer, Skill Mapper, Workflow Architect,
-    Governance Reviewer). Cette phase **compose seulement** : l'équipe n'est jamais exécutée,
-    reste **candidate** jusqu'à validation CEO, et n'est pas opérationnelle au-delà de sa
-    composition candidate.
+    Fruit de l'équipe de composition (AI Company Architect, Department & Specialty Designer,
+    Debate Protocol Architect, Delivery & Governance Reviewer) + composition déterministe des
+    cellules d'experts (≥ 10 experts par spécialité). Cette phase **compose seulement** :
+    l'entreprise n'est jamais exécutée, reste **candidate** jusqu'à validation CEO, et n'est pas
+    opérationnelle au-delà de sa composition candidate.
+
+    `departments` est un texte ; `specialties` et `expert_cells` sont des chaînes JSON.
     """
 
-    __tablename__ = "specialized_teams"
+    __tablename__ = "specialized_ai_companies"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Source approuvée à l'origine de l'équipe.
+    # Source approuvée à l'origine de l'entreprise IA.
     source_type: Mapped[str] = mapped_column(String, default="")
     source_id: Mapped[int] = mapped_column(default=0)
     source_title: Mapped[str] = mapped_column(String, default="")
-    # Composition de l'équipe.
-    team_name: Mapped[str] = mapped_column(Text, default="")
-    mission: Mapped[str] = mapped_column(Text, default="")
-    roles: Mapped[str] = mapped_column(Text, default="")
-    skills: Mapped[str] = mapped_column(Text, default="")
-    workflow: Mapped[str] = mapped_column(Text, default="")
-    deliverables: Mapped[str] = mapped_column(Text, default="")
+    # Composition de l'entreprise IA.
+    ai_company_name: Mapped[str] = mapped_column(Text, default="")
+    company_mission: Mapped[str] = mapped_column(Text, default="")
+    company_goal: Mapped[str] = mapped_column(Text, default="")
+    departments: Mapped[str] = mapped_column(Text, default="")
+    specialties: Mapped[str] = mapped_column(Text, default="")
+    expert_cells: Mapped[str] = mapped_column(Text, default="")
+    debate_protocol: Mapped[str] = mapped_column(Text, default="")
+    coordination_model: Mapped[str] = mapped_column(Text, default="")
+    production_workflow: Mapped[str] = mapped_column(Text, default="")
+    concrete_deliverables: Mapped[str] = mapped_column(Text, default="")
+    delivery_contract: Mapped[str] = mapped_column(Text, default="")
+    ceo_validation_points: Mapped[str] = mapped_column(Text, default="")
     governance_notes: Mapped[str] = mapped_column(Text, default="")
     risks: Mapped[str] = mapped_column(Text, default="")
     # Statut de gouvernance : draft / candidate / approved / revision_requested.

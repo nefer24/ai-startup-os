@@ -1,4 +1,4 @@
-"""Application FastAPI du runtime produit AI-SOS (Phases 0 à 3).
+"""Application FastAPI du runtime produit AI-SOS (Phases 0 à 4B-R).
 
 Endpoints Phase 0 (runtime) :
   * GET  /health        — statut du service.
@@ -19,15 +19,16 @@ Endpoints Phase 3 (Amélioration d'une solution existante) :
   * POST /solutions/improvements/{id}/approve           — validation CEO (statut approved).
   * POST /solutions/improvements/{id}/request-revision  — demande de révision.
 
-Endpoints Phase 4B (Fabrique d'équipes IA spécialisées) :
-  * POST /teams/specialized                        — compose une équipe depuis une source approuvée.
-  * GET  /teams/specialized                        — liste les équipes spécialisées.
-  * GET  /teams/specialized/{id}                   — relit une équipe.
-  * POST /teams/specialized/{id}/approve           — validation CEO (statut approved).
-  * POST /teams/specialized/{id}/request-revision  — demande de révision.
+Endpoints Phase 4B-R (Fabrique d'entreprises IA spécialisées) :
+  * POST /companies/specialized                        — compose une entreprise IA candidate.
+  * GET  /companies/specialized                        — liste les entreprises IA spécialisées.
+  * GET  /companies/specialized/{id}                   — relit une entreprise IA.
+  * POST /companies/specialized/{id}/approve           — validation CEO (statut approved).
+  * POST /companies/specialized/{id}/request-revision  — demande de révision.
 
-Aucune décision automatique, aucune action destructive : plans, améliorations et équipes restent
-candidats tant que le CEO ne les a pas validés, et l'approbation ne déclenche aucune exécution.
+Aucune décision automatique, aucune action destructive : plans, améliorations et entreprises IA
+restent candidats tant que le CEO ne les a pas validés, et l'approbation ne déclenche aucune
+exécution (ni production, ni livraison).
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from app.db import (
     LLMResult,
     SolutionImprovement,
     SolutionPlan,
-    SpecializedTeam,
+    SpecializedAICompany,
     make_engine,
     make_session_factory,
 )
@@ -58,17 +59,17 @@ from app.schemas import (
     LLMTestRequest,
     SolutionPlanCreateRequest,
     SolutionPlanOut,
-    SpecializedTeamCreateRequest,
-    SpecializedTeamOut,
+    SpecializedAICompanyCreateRequest,
+    SpecializedAICompanyOut,
 )
 from app.solution_improvements import generate_improvement, set_improvement_status
 from app.solution_plans import generate_solution_plan, set_plan_status
-from app.specialized_teams import (
+from app.specialized_companies import (
     SourceNotApprovedError,
     SourceNotFoundError,
-    generate_specialized_team,
+    generate_specialized_company,
     load_source_info,
-    set_team_status,
+    set_company_status,
 )
 
 if TYPE_CHECKING:
@@ -245,57 +246,62 @@ def request_revision_improvement(improvement_id: int, db: DbSession) -> Improvem
 
 
 # ---------------------------------------------------------------------------
-# Phase 4B — Fabrique d'équipes IA spécialisées.
+# Phase 4B-R — Fabrique d'entreprises IA spécialisées.
 # ---------------------------------------------------------------------------
-def _get_team_or_404(db: Session, team_id: int) -> SpecializedTeam:
-    """Récupère une équipe par id ou lève 404."""
-    team = db.get(SpecializedTeam, team_id)
-    if team is None:
-        raise HTTPException(status_code=404, detail="équipe introuvable")
-    return team
+def _get_company_or_404(db: Session, company_id: int) -> SpecializedAICompany:
+    """Récupère une entreprise IA par id ou lève 404."""
+    company = db.get(SpecializedAICompany, company_id)
+    if company is None:
+        raise HTTPException(status_code=404, detail="entreprise IA introuvable")
+    return company
 
 
-@app.post("/teams/specialized", response_model=SpecializedTeamOut, status_code=201)
-def create_specialized_team(
-    payload: SpecializedTeamCreateRequest, db: DbSession, llm: LLM
-) -> SpecializedTeamOut:
-    """Compose une équipe IA spécialisée depuis une source **approuvée**. N'exécute rien."""
+@app.post("/companies/specialized", response_model=SpecializedAICompanyOut, status_code=201)
+def create_specialized_company(
+    payload: SpecializedAICompanyCreateRequest, db: DbSession, llm: LLM
+) -> SpecializedAICompanyOut:
+    """Compose une entreprise IA spécialisée depuis une source **approuvée**. N'exécute rien."""
     try:
         info = load_source_info(db, payload.source_type, payload.source_id)
     except SourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail="source introuvable") from exc
     except SourceNotApprovedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    team = generate_specialized_team(db, llm, info, llm_model=get_settings().anthropic_model)
-    return SpecializedTeamOut.model_validate(team)
+    company = generate_specialized_company(db, llm, info, llm_model=get_settings().anthropic_model)
+    return SpecializedAICompanyOut.model_validate(company)
 
 
-@app.get("/teams/specialized", response_model=list[SpecializedTeamOut])
-def list_specialized_teams(db: DbSession) -> list[SpecializedTeamOut]:
-    """Liste les équipes spécialisées, du plus récent au plus ancien (limite 100)."""
+@app.get("/companies/specialized", response_model=list[SpecializedAICompanyOut])
+def list_specialized_companies(db: DbSession) -> list[SpecializedAICompanyOut]:
+    """Liste les entreprises IA spécialisées, du plus récent au plus ancien (limite 100)."""
     rows = (
-        db.execute(select(SpecializedTeam).order_by(SpecializedTeam.id.desc()).limit(100))
+        db.execute(select(SpecializedAICompany).order_by(SpecializedAICompany.id.desc()).limit(100))
         .scalars()
         .all()
     )
-    return [SpecializedTeamOut.model_validate(row) for row in rows]
+    return [SpecializedAICompanyOut.model_validate(row) for row in rows]
 
 
-@app.get("/teams/specialized/{team_id}", response_model=SpecializedTeamOut)
-def get_specialized_team(team_id: int, db: DbSession) -> SpecializedTeamOut:
-    """Retourne une équipe spécialisée précise."""
-    return SpecializedTeamOut.model_validate(_get_team_or_404(db, team_id))
+@app.get("/companies/specialized/{company_id}", response_model=SpecializedAICompanyOut)
+def get_specialized_company(company_id: int, db: DbSession) -> SpecializedAICompanyOut:
+    """Retourne une entreprise IA spécialisée précise."""
+    return SpecializedAICompanyOut.model_validate(_get_company_or_404(db, company_id))
 
 
-@app.post("/teams/specialized/{team_id}/approve", response_model=SpecializedTeamOut)
-def approve_specialized_team(team_id: int, db: DbSession) -> SpecializedTeamOut:
-    """Validation CEO : passe l'équipe en `approved`. Ne déclenche aucune exécution."""
-    team = _get_team_or_404(db, team_id)
-    return SpecializedTeamOut.model_validate(set_team_status(db, team, "approved"))
+@app.post("/companies/specialized/{company_id}/approve", response_model=SpecializedAICompanyOut)
+def approve_specialized_company(company_id: int, db: DbSession) -> SpecializedAICompanyOut:
+    """Validation CEO : passe l'entreprise en `approved`. Ne déclenche aucune exécution."""
+    company = _get_company_or_404(db, company_id)
+    return SpecializedAICompanyOut.model_validate(set_company_status(db, company, "approved"))
 
 
-@app.post("/teams/specialized/{team_id}/request-revision", response_model=SpecializedTeamOut)
-def request_revision_specialized_team(team_id: int, db: DbSession) -> SpecializedTeamOut:
-    """Demande de révision CEO : passe l'équipe en `revision_requested`. Ne relance rien."""
-    team = _get_team_or_404(db, team_id)
-    return SpecializedTeamOut.model_validate(set_team_status(db, team, "revision_requested"))
+@app.post(
+    "/companies/specialized/{company_id}/request-revision",
+    response_model=SpecializedAICompanyOut,
+)
+def request_revision_specialized_company(company_id: int, db: DbSession) -> SpecializedAICompanyOut:
+    """Demande de révision CEO : passe l'entreprise en `revision_requested`. Ne relance rien."""
+    company = _get_company_or_404(db, company_id)
+    return SpecializedAICompanyOut.model_validate(
+        set_company_status(db, company, "revision_requested")
+    )
