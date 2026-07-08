@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "aisos-product"
 version = "0.1.0"
@@ -23,6 +27,11 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
 ]
+
+# Le produit expose deux packages top-level (app = backend, ui = interface). On les déclare
+# explicitement : l'auto-découverte setuptools refuse un flat-layout à plusieurs packages.
+[tool.setuptools]
+packages = ["app", "ui"]
 
 # ---------------------------------------------------------------------------
 # Outillage SCOPÉ au dossier product/ (indépendant de la racine).
