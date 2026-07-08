@@ -1,0 +1,11 @@
+# Base SQLite locale du produit
+*.db
+*.sqlite
+*.sqlite3
+# Environnement virtuel local
+.venv/
+# Caches
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

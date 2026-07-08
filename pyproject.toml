@@ -50,6 +50,9 @@ packages = ["src/aisos"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# `product/` est le runtime produit ; il a son propre outillage (voir product/pyproject.toml)
+# et sa propre CI (product-ci). On l'exclut de l'outillage racine pour garder les périmètres séparés.
+extend-exclude = ["product"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PT", "RUF"]
