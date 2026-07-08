@@ -136,7 +136,43 @@ curl -s -X POST http://127.0.0.1:8000/solutions/plans/1/approve
 > Sans `ANTHROPIC_API_KEY`, la génération échoue proprement et le plan est sauvegardé au statut
 > `draft` avec le message d'erreur (la trace de la tentative est conservée).
 
+## Phase 2 — Interface CEO minimale (Streamlit)
+
+Une **interface Streamlit** permet au CEO de tout faire **sans `curl`** : soumettre une entrée,
+consulter les plans, ouvrir le détail, **approuver** ou **demander une révision**.
+
+**Séparation stricte des responsabilités :**
+
+- **Streamlit = interface CEO** (`ui/streamlit_app.py`) — ne contient aucune logique métier.
+- **`SolutionPlansAPIClient` = client HTTP typé** (`ui/api_client.py`) — seul lien vers l'API.
+- **FastAPI = logique produit** · **SQLite = persistance** · **agents IA = backend.**
+
+L'interface **n'importe jamais** SQLAlchemy, n'écrit jamais en base et n'appelle jamais Anthropic
+directement : tout passe par l'API via HTTP.
+
+**Configuration :** l'URL de l'API est lue depuis `AI_SOS_API_URL` (défaut `http://127.0.0.1:8000`).
+
+**Lancer la démo (deux terminaux) :**
+
+```bash
+# Terminal 1 — API
+cd product
+cp .env.example .env         # renseigner ANTHROPIC_API_KEY pour un vrai appel
+.venv/bin/uvicorn app.main:app --reload
+
+# Terminal 2 — interface CEO
+cd product
+.venv/bin/streamlit run ui/streamlit_app.py
+```
+
+Puis, dans le navigateur : saisir une entrée → **Générer le plan candidat** → le plan apparaît dans
+la liste → ouvrir son détail → **Approuver** ou **Demander une révision**. L'approbation change le
+statut sans **aucune exécution automatique**.
+
+> Installation de la dépendance Streamlit : `uv pip install --python .venv/bin/python -e ".[dev]"`
+> (ou `.venv/bin/pip install -e ".[dev]"`) réinstalle toutes les dépendances, dont `streamlit`.
+
 ## Prochaine tranche
 
-**Phase 2 (proposée)** — une **interface** minimale (Streamlit) pour soumettre un problème et
-consulter/valider les plans sans `curl`, toujours sur la même API.
+**Phase 3 (proposée)** — amélioration d'une solution existante (« Lorsqu'une solution existe déjà,
+AI-SOS l'analyse, identifie ses faiblesses, propose des améliorations et la fait évoluer »).
