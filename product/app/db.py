@@ -222,6 +222,35 @@ class DeliverableVersion(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class DeliverableReference(Base):
+    """Référence officielle d'un livrable : la version **approuvée** choisie par le CEO (Phase 7).
+
+    Consolidation de gouvernance, **déterministe et sans LLM** : le CEO décide quelle version
+    devient la référence active. **Une seule référence active par livrable** ; définir une
+    nouvelle référence fait passer l'ancienne à `superseded` (historique conservé). Le contenu
+    est **snapshoté** pour figer la référence même si d'autres versions apparaissent ensuite.
+    Aucune génération, aucun déploiement, aucune livraison, aucune modification du repo.
+    """
+
+    __tablename__ = "deliverable_references"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    deliverable_id: Mapped[int] = mapped_column(default=0)
+    reference_version_id: Mapped[int] = mapped_column(default=0)
+    reference_version_number: Mapped[int] = mapped_column(default=0)
+    # Snapshot figé de la version de référence.
+    content_snapshot: Mapped[str] = mapped_column(Text, default="")
+    change_summary_snapshot: Mapped[str] = mapped_column(Text, default="")
+    # Décision CEO.
+    set_by: Mapped[str] = mapped_column(String, default="CEO")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    # Statut : active / superseded.
+    status: Mapped[str] = mapped_column(String, default="active")
+    # Horodatages.
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 def make_engine(database_url: str) -> Engine:
     """Construit un moteur SQLAlchemy. `check_same_thread=False` pour SQLite + FastAPI."""
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}

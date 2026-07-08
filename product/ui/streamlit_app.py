@@ -819,6 +819,108 @@ def render_version_actions(client: SolutionPlansAPIClient, version: dict[str, An
             )
 
 
+REFERENCE_NOTICE = (
+    "La référence officielle est une **décision CEO**. Elle ne déclenche aucun déploiement, "
+    "aucune livraison externe, aucune modification automatique du repo."
+)
+
+
+def render_reference_consolidate(client: SolutionPlansAPIClient) -> None:
+    """Référence — choisir une version approuvée d'un livrable et la consolider en référence."""
+    st.header("1. Choisir un livrable et une version approuvée")
+    st.caption(REFERENCE_NOTICE)
+    deliverable_id_input = st.number_input(
+        "ID du livrable",
+        min_value=1,
+        step=1,
+        value=st.session_state.get("selected_deliverable_id", 1) or 1,
+        key="reference_deliverable_id",
+    )
+    deliverable_id = int(deliverable_id_input)
+    try:
+        versions = client.list_deliverable_versions(deliverable_id)
+    except APIError as exc:
+        st.warning(f"Impossible de récupérer les versions : {exc}")
+        return
+
+    approved = [v for v in versions if v.get("status") == "approved"]
+    if not approved:
+        st.info(
+            "Aucune version **approuvée** pour ce livrable. Approuvez d'abord une version "
+            "(onglet « Itérer sur un livrable »)."
+        )
+        return
+
+    labels = {int(v["id"]): f"#{v['id']} — V{v.get('version_number')}" for v in approved}
+    version_id = st.selectbox(
+        "Version approuvée", list(labels.keys()), format_func=lambda i: labels[i]
+    )
+    reason = st.text_input("Raison de la consolidation")
+    if st.button("📌 Définir comme version de référence"):
+        try:
+            reference = client.set_deliverable_reference(int(version_id), reason.strip())
+        except APIError as exc:
+            st.error(f"Consolidation impossible : {exc}")
+            return
+        st.success(
+            f"Version V{reference.get('reference_version_number')} définie comme référence active."
+        )
+        st.session_state["reference_deliverable_id_active"] = deliverable_id
+
+
+def render_reference_active(client: SolutionPlansAPIClient) -> None:
+    """Référence — afficher la référence active du livrable."""
+    st.header("2. Référence active")
+    deliverable_id = st.session_state.get("reference_deliverable_id_active") or int(
+        st.session_state.get("reference_deliverable_id", 0) or 0
+    )
+    if not deliverable_id:
+        st.info("Consolidez une référence ci-dessus pour l'afficher.")
+        return
+    try:
+        reference = client.get_deliverable_reference(int(deliverable_id))
+    except APIError as exc:
+        st.info(f"Aucune référence active pour ce livrable ({exc}).")
+        return
+
+    st.subheader(
+        f"Référence active — V{reference.get('reference_version_number')} "
+        f"(version #{reference.get('reference_version_id')})"
+    )
+    st.write(
+        f"**Défini par :** {reference.get('set_by')} · **Statut :** "
+        f"{status_badge(reference.get('status', ''))}"
+    )
+    _section("Raison", reference.get("reason", ""))
+    _section("Contenu (snapshot figé)", reference.get("content_snapshot", ""))
+    _section("Résumé des changements (snapshot)", reference.get("change_summary_snapshot", ""))
+
+
+def render_reference_history(client: SolutionPlansAPIClient) -> None:
+    """Référence — historique des changements de référence."""
+    st.header("3. Historique des références")
+    deliverable_id = st.session_state.get("reference_deliverable_id_active") or int(
+        st.session_state.get("reference_deliverable_id", 0) or 0
+    )
+    if not deliverable_id:
+        st.info("Consolidez une référence pour voir l'historique.")
+        return
+    try:
+        history = client.list_deliverable_reference_history(int(deliverable_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer l'historique : {exc}")
+        return
+    if not history:
+        st.info("Aucune référence consolidée pour ce livrable.")
+        return
+    for row in history:
+        st.markdown(
+            f"- **V{row.get('reference_version_number')}** · "
+            f"{status_badge(row.get('status', ''))} · {row.get('created_at', '')}"
+            f"{' — ' + row['reason'] if row.get('reason') else ''}"
+        )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -833,13 +935,21 @@ def main() -> None:
     except APIError:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
-    tab_create, tab_improve, tab_company, tab_deliverable, tab_version = st.tabs(
+    (
+        tab_create,
+        tab_improve,
+        tab_company,
+        tab_deliverable,
+        tab_version,
+        tab_reference,
+    ) = st.tabs(
         [
             "Créer une solution",
             "Améliorer une solution existante",
             "Composer une entreprise IA spécialisée",
             "Produire un livrable encadré",
             "Itérer sur un livrable",
+            "Consolider une référence",
         ]
     )
     with tab_create:
@@ -862,6 +972,10 @@ def main() -> None:
         render_version_iterate(client)
         render_versions_list(client)
         render_version_detail(client)
+    with tab_reference:
+        render_reference_consolidate(client)
+        render_reference_active(client)
+        render_reference_history(client)
 
 
 if __name__ == "__main__":
