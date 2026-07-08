@@ -162,3 +162,46 @@ class SolutionPlansAPIClient:
             "POST", f"/companies/specialized/{company_id}/request-revision"
         )
         return result
+
+    # --- Phase 5 : production encadrée d'un livrable -------------------------
+    def create_company_deliverable(
+        self,
+        company_id: int,
+        deliverable_type: str,
+        title: str,
+        instructions: str,
+        constraints: str = "",
+    ) -> dict[str, Any]:
+        """Produit un livrable candidat (`POST /companies/{id}/deliverables`)."""
+        payload = {
+            "deliverable_type": deliverable_type,
+            "title": title,
+            "instructions": instructions,
+            "constraints": constraints,
+        }
+        result: dict[str, Any] = self._request(
+            "POST", f"/companies/{company_id}/deliverables", json=payload
+        )
+        return result
+
+    def list_company_deliverables(self, company_id: int) -> list[dict[str, Any]]:
+        """Liste les livrables d'une entreprise IA (`GET /companies/{id}/deliverables`)."""
+        result: list[dict[str, Any]] = self._request("GET", f"/companies/{company_id}/deliverables")
+        return result
+
+    def get_deliverable(self, deliverable_id: int) -> dict[str, Any]:
+        """Retourne un livrable précis (`GET /deliverables/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/deliverables/{deliverable_id}")
+        return result
+
+    def approve_deliverable(self, deliverable_id: int) -> dict[str, Any]:
+        """Validation CEO (`POST /deliverables/{id}/approve`). Aucun déploiement ni livraison."""
+        result: dict[str, Any] = self._request("POST", f"/deliverables/{deliverable_id}/approve")
+        return result
+
+    def request_deliverable_revision(self, deliverable_id: int) -> dict[str, Any]:
+        """Demande de révision (`POST /deliverables/{id}/request-revision`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/deliverables/{deliverable_id}/request-revision"
+        )
+        return result

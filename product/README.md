@@ -254,8 +254,42 @@ de production, livrables, contrat de livraison, validations CEO, risques), puis 
 > **Cette entreprise IA est candidate. Elle n'est pas encore exécutée. Aucune production ni
 > livraison ne commence sans validation CEO explicite.**
 
+## Phase 5 — Production encadrée d'un livrable
+
+À partir d'une **entreprise IA approuvée**, le CEO demande **un** livrable limité (spécification,
+cahier technique, plan de tests, documentation, checklist, pseudo-code limité…). AI-SOS organise
+une **production encadrée** et produit un **artefact candidat**, traçable et validable. **Pas
+d'autonomie complète, pas d'exécution de tout le contrat de livraison, aucun déploiement.**
+
+**Processus de production (4 appels LLM, PAS un appel par expert) :**
+
+1. **Deliverable Planner** — comprend la demande, choisit la structure du livrable.
+2. **Expert Cell Synthesizer** — synthèse encadrée des départements/spécialités/cellules déjà composés.
+3. **Deliverable Producer** — produit le contenu concret du livrable.
+4. **Quality & Governance Reviewer** — clarté, limites, risques, conformité, points à valider CEO.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/companies/{id}/deliverables` | produit un livrable candidat depuis une entreprise **approuvée** |
+| `GET` | `/companies/{id}/deliverables` | liste les livrables d'une entreprise IA |
+| `GET` | `/deliverables/{id}` | relit un livrable |
+| `POST` | `/deliverables/{id}/approve` | validation CEO → `approved` |
+| `POST` | `/deliverables/{id}/request-revision` | demande de révision → `revision_requested` |
+
+**Règle de source :** entreprise IA absente → **404** ; entreprise non approuvée → **409**.
+
+**Interface :** onglet **« Produire un livrable encadré »** (Streamlit) — sélectionner une entreprise
+IA approuvée, saisir type / titre / instructions / contraintes, produire le livrable, lire
+contenu / notes de production / revue qualité / risques / notes de validation CEO, puis **Approuver**
+/ **Demander une révision** — toujours **via le client HTTP**.
+
+> **Ce livrable est candidat. L'approbation ne déclenche aucun déploiement, aucune livraison
+> externe, aucune modification automatique du repo. Le livrable n'est jamais présenté comme final.**
+
 ## Prochaine tranche
 
-**Phase 5 (proposée)** — à cadrer par le CEO : première **exécution encadrée** d'un livrable par
-l'entreprise IA approuvée (produire / tester / documenter), toujours sous validation CEO, ou
-observabilité renforcée (coûts LLM, historique).
+**Phase 6 (proposée)** — à cadrer par le CEO : itération sur un livrable (versions successives
+sous validation), ou observabilité renforcée (coûts LLM, historique, export), ou production de
+plusieurs livrables coordonnés d'une même entreprise IA.

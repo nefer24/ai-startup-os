@@ -146,6 +146,43 @@ class SpecializedAICompany(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class CompanyDeliverable(Base):
+    """Livrable candidat produit de façon **encadrée** par une entreprise IA approuvée (Phase 5).
+
+    Fruit d'une production limitée (Deliverable Planner, Expert Cell Synthesizer, Deliverable
+    Producer, Quality & Governance Reviewer). Reste **candidat** jusqu'à validation CEO ;
+    l'approbation ne déclenche **aucun déploiement, aucune livraison externe, aucune modification
+    du repo**. Le livrable n'est jamais présenté comme final.
+    """
+
+    __tablename__ = "company_deliverables"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Entreprise IA approuvée à l'origine du livrable.
+    company_id: Mapped[int] = mapped_column(default=0)
+    company_name: Mapped[str] = mapped_column(String, default="")
+    # Demande CEO.
+    deliverable_type: Mapped[str] = mapped_column(String, default="")
+    title: Mapped[str] = mapped_column(String, default="")
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    constraints: Mapped[str] = mapped_column(Text, default="")
+    # Production encadrée.
+    content: Mapped[str] = mapped_column(Text, default="")
+    production_notes: Mapped[str] = mapped_column(Text, default="")
+    quality_review: Mapped[str] = mapped_column(Text, default="")
+    risks: Mapped[str] = mapped_column(Text, default="")
+    ceo_validation_notes: Mapped[str] = mapped_column(Text, default="")
+    # Statut de gouvernance : draft / candidate / approved / revision_requested.
+    status: Mapped[str] = mapped_column(String, default="candidate")
+    # Audit / diagnostic (optionnels).
+    raw_agent_outputs: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    llm_model: Mapped[str] = mapped_column(String, default="")
+    # Horodatages.
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 def make_engine(database_url: str) -> Engine:
     """Construit un moteur SQLAlchemy. `check_same_thread=False` pour SQLite + FastAPI."""
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}

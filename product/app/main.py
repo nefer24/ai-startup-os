@@ -26,9 +26,16 @@ Endpoints Phase 4B-R (Fabrique d'entreprises IA spécialisées) :
   * POST /companies/specialized/{id}/approve           — validation CEO (statut approved).
   * POST /companies/specialized/{id}/request-revision  — demande de révision.
 
-Aucune décision automatique, aucune action destructive : plans, améliorations et entreprises IA
-restent candidats tant que le CEO ne les a pas validés, et l'approbation ne déclenche aucune
-exécution (ni production, ni livraison).
+Endpoints Phase 5 (Production encadrée d'un livrable) :
+  * POST /companies/{id}/deliverables            — produit un livrable candidat encadré.
+  * GET  /companies/{id}/deliverables            — liste les livrables d'une entreprise IA.
+  * GET  /deliverables/{id}                      — relit un livrable.
+  * POST /deliverables/{id}/approve              — validation CEO (statut approved).
+  * POST /deliverables/{id}/request-revision     — demande de révision.
+
+Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA et
+livrables restent candidats tant que le CEO ne les a pas validés ; l'approbation ne déclenche
+aucune exécution, aucune production automatique, aucun déploiement, aucune modification du repo.
 """
 
 from __future__ import annotations
@@ -41,8 +48,16 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.company_deliverables import (
+    CompanyNotApprovedError,
+    CompanyNotFoundError,
+    generate_deliverable,
+    load_approved_company,
+    set_deliverable_status,
+)
 from app.config import get_settings
 from app.db import (
+    CompanyDeliverable,
     LLMResult,
     SolutionImprovement,
     SolutionPlan,
@@ -52,6 +67,8 @@ from app.db import (
 )
 from app.llm import LLMClient, build_llm_client
 from app.schemas import (
+    DeliverableCreateRequest,
+    DeliverableOut,
     HealthOut,
     ImprovementCreateRequest,
     ImprovementOut,
@@ -304,4 +321,74 @@ def request_revision_specialized_company(company_id: int, db: DbSession) -> Spec
     company = _get_company_or_404(db, company_id)
     return SpecializedAICompanyOut.model_validate(
         set_company_status(db, company, "revision_requested")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Production encadrée d'un livrable par une entreprise IA approuvée.
+# ---------------------------------------------------------------------------
+def _get_deliverable_or_404(db: Session, deliverable_id: int) -> CompanyDeliverable:
+    """Récupère un livrable par id ou lève 404."""
+    deliverable = db.get(CompanyDeliverable, deliverable_id)
+    if deliverable is None:
+        raise HTTPException(status_code=404, detail="livrable introuvable")
+    return deliverable
+
+
+@app.post(
+    "/companies/{company_id}/deliverables",
+    response_model=DeliverableOut,
+    status_code=201,
+)
+def create_company_deliverable(
+    company_id: int, payload: DeliverableCreateRequest, db: DbSession, llm: LLM
+) -> DeliverableOut:
+    """Produit un livrable candidat encadré pour une entreprise IA **approuvée**. N'exécute rien."""
+    try:
+        company = load_approved_company(db, company_id)
+    except CompanyNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="entreprise IA introuvable") from exc
+    except CompanyNotApprovedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    deliverable = generate_deliverable(
+        db, llm, company, payload, llm_model=get_settings().anthropic_model
+    )
+    return DeliverableOut.model_validate(deliverable)
+
+
+@app.get("/companies/{company_id}/deliverables", response_model=list[DeliverableOut])
+def list_company_deliverables(company_id: int, db: DbSession) -> list[DeliverableOut]:
+    """Liste les livrables d'une entreprise IA, du plus récent au plus ancien (limite 100)."""
+    rows = (
+        db.execute(
+            select(CompanyDeliverable)
+            .where(CompanyDeliverable.company_id == company_id)
+            .order_by(CompanyDeliverable.id.desc())
+            .limit(100)
+        )
+        .scalars()
+        .all()
+    )
+    return [DeliverableOut.model_validate(row) for row in rows]
+
+
+@app.get("/deliverables/{deliverable_id}", response_model=DeliverableOut)
+def get_deliverable(deliverable_id: int, db: DbSession) -> DeliverableOut:
+    """Retourne un livrable précis."""
+    return DeliverableOut.model_validate(_get_deliverable_or_404(db, deliverable_id))
+
+
+@app.post("/deliverables/{deliverable_id}/approve", response_model=DeliverableOut)
+def approve_deliverable(deliverable_id: int, db: DbSession) -> DeliverableOut:
+    """Validation CEO : passe le livrable en `approved`. Aucun déploiement, aucune livraison."""
+    deliverable = _get_deliverable_or_404(db, deliverable_id)
+    return DeliverableOut.model_validate(set_deliverable_status(db, deliverable, "approved"))
+
+
+@app.post("/deliverables/{deliverable_id}/request-revision", response_model=DeliverableOut)
+def request_revision_deliverable(deliverable_id: int, db: DbSession) -> DeliverableOut:
+    """Demande de révision CEO : passe le livrable en `revision_requested`. Ne relance rien."""
+    deliverable = _get_deliverable_or_404(db, deliverable_id)
+    return DeliverableOut.model_validate(
+        set_deliverable_status(db, deliverable, "revision_requested")
     )

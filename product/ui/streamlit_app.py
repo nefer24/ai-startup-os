@@ -491,6 +491,178 @@ def render_company_actions(client: SolutionPlansAPIClient, company: dict[str, An
             )
 
 
+DELIVERABLE_CANDIDATE_NOTICE = (
+    "Ce livrable est **candidat**. L'approbation ne déclenche **aucun déploiement, aucune "
+    "livraison externe, aucune modification automatique du repo**."
+)
+
+DELIVERABLE_TYPES = [
+    "technical_spec",
+    "functional_spec",
+    "architecture",
+    "test_plan",
+    "documentation",
+    "readme",
+    "launch_strategy",
+    "audit_report",
+    "implementation_plan",
+    "system_prompt",
+    "checklist",
+    "prototype_text",
+    "pseudo_code",
+]
+
+
+def render_deliverable_produce(client: SolutionPlansAPIClient) -> None:
+    """Livrable — choisir une entreprise IA approuvée et produire un livrable encadré."""
+    st.header("1. Choisir une entreprise IA approuvée")
+    st.caption(DELIVERABLE_CANDIDATE_NOTICE)
+    try:
+        companies = client.list_specialized_companies()
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les entreprises IA : {exc}")
+        return
+
+    approved = [c for c in companies if c.get("status") == "approved"]
+    if not approved:
+        st.info(
+            "Aucune entreprise IA approuvée. Approuvez d'abord une entreprise IA "
+            "(onglet précédent)."
+        )
+        return
+
+    labels = {
+        int(c["id"]): f"#{c['id']} — {c.get('ai_company_name') or c.get('source_title', '')}"
+        for c in approved
+    }
+    company_id = st.selectbox(
+        "Entreprise IA approuvée", list(labels.keys()), format_func=lambda i: labels[i]
+    )
+    chosen = next(c for c in approved if int(c["id"]) == company_id)
+    if chosen.get("delivery_contract"):
+        st.markdown(f"**Contrat de livraison :** {chosen['delivery_contract'][:200]}")
+
+    st.subheader("2. Demander un livrable encadré")
+    with st.form("produce_deliverable"):
+        deliverable_type = st.selectbox("Type de livrable", DELIVERABLE_TYPES)
+        title = st.text_input("Titre du livrable")
+        instructions = st.text_area("Instructions")
+        constraints = st.text_area(
+            "Contraintes", value="Version limitée, pas de code complet, pas de déploiement."
+        )
+        submitted = st.form_submit_button("Produire le livrable candidat")
+
+    if not submitted:
+        return
+    if not title.strip() or not instructions.strip():
+        st.error("Le titre et les instructions sont obligatoires.")
+        return
+    produce_spinner = (
+        "L'entreprise IA produit le livrable (Planner → Synthèse → Producer → Qualité)…"
+    )
+    with st.spinner(produce_spinner):
+        try:
+            deliverable = client.create_company_deliverable(
+                int(company_id),
+                deliverable_type,
+                title.strip(),
+                instructions.strip(),
+                constraints.strip(),
+            )
+        except APIError as exc:
+            st.error(f"Échec de la production : {exc}")
+            return
+    if deliverable.get("status") == "draft":
+        st.warning(
+            "Livrable enregistré en **brouillon** : la production a échoué "
+            f"(clé API manquante ?). Erreur : {deliverable.get('error', '')}"
+        )
+    else:
+        st.success(f"Livrable candidat #{deliverable.get('id')} produit.")
+    st.session_state["selected_deliverable_company_id"] = int(company_id)
+    st.session_state["selected_deliverable_id"] = deliverable.get("id")
+
+
+def render_deliverables_list(client: SolutionPlansAPIClient) -> None:
+    """Livrable — lister les livrables candidats de l'entreprise IA sélectionnée."""
+    st.header("3. Livrables candidats")
+    company_id = st.session_state.get("selected_deliverable_company_id")
+    if company_id is None:
+        st.info("Produisez un livrable ci-dessus pour voir la liste.")
+        return
+    try:
+        deliverables = client.list_company_deliverables(int(company_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les livrables : {exc}")
+        return
+
+    if not deliverables:
+        st.info("Aucun livrable pour cette entreprise IA.")
+        return
+
+    for item in deliverables:
+        st.markdown(
+            f"**#{item.get('id')}** · {status_badge(item.get('status', ''))} · "
+            f"`{item.get('deliverable_type')}`\n\n**{item.get('title', '')}**"
+        )
+    ids = [int(item["id"]) for item in deliverables]
+    current = st.session_state.get("selected_deliverable_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox("Sélectionner un livrable à détailler", ids, index=default_index)
+    st.session_state["selected_deliverable_id"] = selected
+
+
+def render_deliverable_detail(client: SolutionPlansAPIClient) -> None:
+    """Livrable — détail complet du livrable sélectionné."""
+    st.header("4. Détail du livrable sélectionné")
+    deliverable_id = st.session_state.get("selected_deliverable_id")
+    if deliverable_id is None:
+        st.info("Sélectionnez un livrable dans la liste.")
+        return
+    try:
+        item = client.get_deliverable(int(deliverable_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer le livrable : {exc}")
+        return
+
+    st.subheader(f"#{item.get('id')} — {item.get('title', '')}")
+    st.write(f"**Statut :** {status_badge(item.get('status', ''))}")
+    st.write(
+        f"**Type :** `{item.get('deliverable_type')}` · "
+        f"**Entreprise IA :** {item.get('company_name', '')} (#{item.get('company_id')})"
+    )
+    if item.get("error"):
+        st.error(f"Erreur historisée : {item['error']}")
+
+    _section("Contenu du livrable", item.get("content", ""))
+    _section("Notes de production", item.get("production_notes", ""))
+    _section("Revue qualité", item.get("quality_review", ""))
+    _section("Risques", item.get("risks", ""))
+    _section("Notes de validation CEO", item.get("ceo_validation_notes", ""))
+
+    render_deliverable_actions(client, item)
+
+
+def render_deliverable_actions(client: SolutionPlansAPIClient, item: dict[str, Any]) -> None:
+    """Livrable — actions de gouvernance CEO (approuver / demander révision)."""
+    st.header("5. Validation CEO")
+    st.caption(DELIVERABLE_CANDIDATE_NOTICE)
+    deliverable_id = int(item["id"])
+    col_approve, col_revision = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approuver ce livrable"):
+            _act(
+                lambda: client.approve_deliverable(deliverable_id),
+                "Livrable approuvé (aucun déploiement, aucune livraison, aucune modif repo).",
+            )
+    with col_revision:
+        if st.button("🟠 Demander une révision", key="deliverable_revision"):
+            _act(
+                lambda: client.request_deliverable_revision(deliverable_id),
+                "Révision demandée.",
+            )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -505,11 +677,12 @@ def main() -> None:
     except APIError:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
-    tab_create, tab_improve, tab_company = st.tabs(
+    tab_create, tab_improve, tab_company, tab_deliverable = st.tabs(
         [
             "Créer une solution",
             "Améliorer une solution existante",
             "Composer une entreprise IA spécialisée",
+            "Produire un livrable encadré",
         ]
     )
     with tab_create:
@@ -524,6 +697,10 @@ def main() -> None:
         render_company_compose(client)
         render_companies_list(client)
         render_company_detail(client)
+    with tab_deliverable:
+        render_deliverable_produce(client)
+        render_deliverables_list(client)
+        render_deliverable_detail(client)
 
 
 if __name__ == "__main__":
