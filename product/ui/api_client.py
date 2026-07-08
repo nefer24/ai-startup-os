@@ -85,3 +85,49 @@ class SolutionPlansAPIClient:
             "POST", f"/solutions/plans/{plan_id}/request-revision"
         )
         return result
+
+    # --- Phase 3 : amélioration d'une solution existante ---------------------
+    def create_improvement(
+        self,
+        title: str,
+        description: str,
+        context: str = "",
+        improvement_goals: str = "",
+        constraints: str = "",
+        notes: str = "",
+    ) -> dict[str, Any]:
+        """Crée une amélioration candidate (`POST /solutions/improvements`)."""
+        payload = {
+            "title": title,
+            "description": description,
+            "context": context,
+            "improvement_goals": improvement_goals,
+            "constraints": constraints,
+            "notes": notes,
+        }
+        result: dict[str, Any] = self._request("POST", "/solutions/improvements", json=payload)
+        return result
+
+    def list_improvements(self) -> list[dict[str, Any]]:
+        """Liste les améliorations (`GET /solutions/improvements`)."""
+        result: list[dict[str, Any]] = self._request("GET", "/solutions/improvements")
+        return result
+
+    def get_improvement(self, improvement_id: int) -> dict[str, Any]:
+        """Retourne une amélioration précise (`GET /solutions/improvements/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/solutions/improvements/{improvement_id}")
+        return result
+
+    def approve_improvement(self, improvement_id: int) -> dict[str, Any]:
+        """Validation CEO (`POST /solutions/improvements/{id}/approve`). Aucune exécution."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/solutions/improvements/{improvement_id}/approve"
+        )
+        return result
+
+    def request_improvement_revision(self, improvement_id: int) -> dict[str, Any]:
+        """Demande de révision (`POST /solutions/improvements/{id}/request-revision`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/solutions/improvements/{improvement_id}/request-revision"
+        )
+        return result

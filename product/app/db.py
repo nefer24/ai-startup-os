@@ -63,6 +63,44 @@ class SolutionPlan(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class SolutionImprovement(Base):
+    """Version améliorée candidate d'une **solution existante** soumise par le CEO (Phase 3).
+
+    Fruit de l'équipe d'amélioration (Analyste de solution existante, Weakness Reviewer,
+    Improvement Architect, Differentiation Reviewer). Reste **candidate** jusqu'à validation
+    CEO ; aucune exécution n'est déclenchée, l'amélioration n'est jamais une solution finale.
+    """
+
+    __tablename__ = "solution_improvements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Entrée CEO (solution existante).
+    title: Mapped[str] = mapped_column(String, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    context: Mapped[str] = mapped_column(Text, default="")
+    improvement_goals: Mapped[str] = mapped_column(Text, default="")
+    constraints: Mapped[str] = mapped_column(Text, default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    # Sorties de l'équipe d'amélioration.
+    existing_solution_analysis: Mapped[str] = mapped_column(Text, default="")
+    identified_strengths: Mapped[str] = mapped_column(Text, default="")
+    identified_weaknesses: Mapped[str] = mapped_column(Text, default="")
+    proposed_improvements: Mapped[str] = mapped_column(Text, default="")
+    improved_solution_candidate: Mapped[str] = mapped_column(Text, default="")
+    differentiation: Mapped[str] = mapped_column(Text, default="")
+    risks: Mapped[str] = mapped_column(Text, default="")
+    expertise_needs: Mapped[str] = mapped_column(Text, default="")
+    # Statut de gouvernance : draft / candidate / approved / revision_requested.
+    status: Mapped[str] = mapped_column(String, default="candidate")
+    # Audit / diagnostic (optionnels).
+    raw_agent_outputs: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    llm_model: Mapped[str] = mapped_column(String, default="")
+    # Horodatages.
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 def make_engine(database_url: str) -> Engine:
     """Construit un moteur SQLAlchemy. `check_same_thread=False` pour SQLite + FastAPI."""
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}

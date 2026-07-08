@@ -1,4 +1,4 @@
-"""Application FastAPI du runtime produit AI-SOS (Phases 0 et 1).
+"""Application FastAPI du runtime produit AI-SOS (Phases 0 à 3).
 
 Endpoints Phase 0 (runtime) :
   * GET  /health        — statut du service.
@@ -12,8 +12,15 @@ Endpoints Phase 1 (Problème → Plan de solution par une équipe IA) :
   * POST /solutions/plans/{id}/approve           — validation CEO (statut approved).
   * POST /solutions/plans/{id}/request-revision  — demande de révision (revision_requested).
 
-Aucune décision automatique, aucune action destructive : un plan reste candidat tant que le
-CEO ne l'a pas validé, et l'approbation ne déclenche aucune exécution.
+Endpoints Phase 3 (Amélioration d'une solution existante) :
+  * POST /solutions/improvements                        — améliore une solution existante.
+  * GET  /solutions/improvements                        — liste les améliorations.
+  * GET  /solutions/improvements/{id}                   — relit une amélioration.
+  * POST /solutions/improvements/{id}/approve           — validation CEO (statut approved).
+  * POST /solutions/improvements/{id}/request-revision  — demande de révision.
+
+Aucune décision automatique, aucune action destructive : plans et améliorations restent
+candidats tant que le CEO ne les a pas validés, et l'approbation ne déclenche aucune exécution.
 """
 
 from __future__ import annotations
@@ -27,15 +34,24 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.db import LLMResult, SolutionPlan, make_engine, make_session_factory
+from app.db import (
+    LLMResult,
+    SolutionImprovement,
+    SolutionPlan,
+    make_engine,
+    make_session_factory,
+)
 from app.llm import LLMClient, build_llm_client
 from app.schemas import (
     HealthOut,
+    ImprovementCreateRequest,
+    ImprovementOut,
     LLMResultOut,
     LLMTestRequest,
     SolutionPlanCreateRequest,
     SolutionPlanOut,
 )
+from app.solution_improvements import generate_improvement, set_improvement_status
 from app.solution_plans import generate_solution_plan, set_plan_status
 
 if TYPE_CHECKING:
@@ -153,3 +169,59 @@ def request_revision_solution_plan(plan_id: int, db: DbSession) -> SolutionPlanO
     """Demande de révision CEO : passe le plan en `revision_requested`. Ne relance rien."""
     plan = _get_plan_or_404(db, plan_id)
     return SolutionPlanOut.model_validate(set_plan_status(db, plan, "revision_requested"))
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — Amélioration d'une solution existante.
+# ---------------------------------------------------------------------------
+def _get_improvement_or_404(db: Session, improvement_id: int) -> SolutionImprovement:
+    """Récupère une amélioration par id ou lève 404."""
+    improvement = db.get(SolutionImprovement, improvement_id)
+    if improvement is None:
+        raise HTTPException(status_code=404, detail="amélioration introuvable")
+    return improvement
+
+
+@app.post("/solutions/improvements", response_model=ImprovementOut, status_code=201)
+def create_improvement(
+    payload: ImprovementCreateRequest, db: DbSession, llm: LLM
+) -> ImprovementOut:
+    """Analyse une solution existante et produit une version améliorée candidate, persistée."""
+    improvement = generate_improvement(db, llm, payload, llm_model=get_settings().anthropic_model)
+    return ImprovementOut.model_validate(improvement)
+
+
+@app.get("/solutions/improvements", response_model=list[ImprovementOut])
+def list_improvements(db: DbSession) -> list[ImprovementOut]:
+    """Liste les améliorations sauvegardées, du plus récent au plus ancien (limite 100)."""
+    rows = (
+        db.execute(select(SolutionImprovement).order_by(SolutionImprovement.id.desc()).limit(100))
+        .scalars()
+        .all()
+    )
+    return [ImprovementOut.model_validate(row) for row in rows]
+
+
+@app.get("/solutions/improvements/{improvement_id}", response_model=ImprovementOut)
+def get_improvement(improvement_id: int, db: DbSession) -> ImprovementOut:
+    """Retourne une amélioration précise."""
+    return ImprovementOut.model_validate(_get_improvement_or_404(db, improvement_id))
+
+
+@app.post("/solutions/improvements/{improvement_id}/approve", response_model=ImprovementOut)
+def approve_improvement(improvement_id: int, db: DbSession) -> ImprovementOut:
+    """Validation CEO : passe l'amélioration en `approved`. Ne déclenche aucune exécution."""
+    improvement = _get_improvement_or_404(db, improvement_id)
+    return ImprovementOut.model_validate(set_improvement_status(db, improvement, "approved"))
+
+
+@app.post(
+    "/solutions/improvements/{improvement_id}/request-revision",
+    response_model=ImprovementOut,
+)
+def request_revision_improvement(improvement_id: int, db: DbSession) -> ImprovementOut:
+    """Demande de révision CEO : passe l'amélioration en `revision_requested`. Ne relance rien."""
+    improvement = _get_improvement_or_404(db, improvement_id)
+    return ImprovementOut.model_validate(
+        set_improvement_status(db, improvement, "revision_requested")
+    )

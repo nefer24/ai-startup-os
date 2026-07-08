@@ -25,6 +25,12 @@ FOUNDING_PHRASE = (
     "solution concrète."
 )
 
+IMPROVEMENT_PHRASE = (
+    "Lorsqu'une solution existe déjà, AI-SOS l'analyse, identifie ses faiblesses, propose "
+    "des améliorations et la fait évoluer afin de la rendre plus performante, plus "
+    "différenciante et plus unique."
+)
+
 INPUT_TYPES = ["problem", "idea", "objective"]
 
 STATUS_LABELS = {
@@ -176,6 +182,137 @@ def _act(action: Any, success_message: str) -> None:
     st.rerun()
 
 
+def render_improvement_submit(client: SolutionPlansAPIClient) -> None:
+    """Amélioration — soumettre une solution existante et générer une version améliorée."""
+    st.header("1. Soumettre une solution existante")
+    st.caption(IMPROVEMENT_PHRASE)
+    with st.form("submit_improvement"):
+        title = st.text_input("Titre de la solution existante")
+        description = st.text_area("Description de la solution existante")
+        context = st.text_area("Contexte / marché / utilisateurs visés")
+        improvement_goals = st.text_area("Objectifs d'amélioration")
+        constraints = st.text_area("Contraintes éventuelles")
+        notes = st.text_area("Notes libres (optionnel)")
+        submitted = st.form_submit_button("Analyser et proposer une amélioration")
+
+    if not submitted:
+        return
+    if not title.strip() or not description.strip():
+        st.error("Le titre et la description de la solution existante sont obligatoires.")
+        return
+    spinner_msg = (
+        "L'équipe d'amélioration travaille "
+        "(Analyste → Faiblesses → Améliorations → Différenciation)…"
+    )
+    with st.spinner(spinner_msg):
+        try:
+            improvement = client.create_improvement(
+                title.strip(),
+                description.strip(),
+                context.strip(),
+                improvement_goals.strip(),
+                constraints.strip(),
+                notes.strip(),
+            )
+        except APIError as exc:
+            st.error(f"Échec de l'appel API : {exc}")
+            return
+    if improvement.get("status") == "draft":
+        st.warning(
+            "Amélioration enregistrée en **brouillon** : la génération LLM a échoué "
+            f"(clé API manquante ?). Erreur : {improvement.get('error', '')}"
+        )
+    else:
+        st.success(f"Amélioration candidate #{improvement.get('id')} créée.")
+    st.session_state["selected_improvement_id"] = improvement.get("id")
+
+
+def render_improvements_list(client: SolutionPlansAPIClient) -> None:
+    """Amélioration — lister les améliorations candidates existantes."""
+    st.header("2. Améliorations candidates")
+    try:
+        improvements = client.list_improvements()
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les améliorations : {exc}")
+        return
+
+    if not improvements:
+        st.info("Aucune amélioration pour l'instant. Soumettez une solution existante ci-dessus.")
+        return
+
+    for item in improvements:
+        summary = (item.get("improved_solution_candidate") or item.get("description") or "").strip()
+        short = summary[:140] + ("…" if len(summary) > 140 else "")
+        st.markdown(
+            f"**#{item.get('id')}** · {status_badge(item.get('status', ''))} · "
+            f"{item.get('created_at', '')}\n\n**{item.get('title', '')}** — {short}"
+        )
+    ids = [int(item["id"]) for item in improvements]
+    current = st.session_state.get("selected_improvement_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox("Sélectionner une amélioration à détailler", ids, index=default_index)
+    st.session_state["selected_improvement_id"] = selected
+
+
+def render_improvement_detail(client: SolutionPlansAPIClient) -> None:
+    """Amélioration — détail complet de l'amélioration sélectionnée."""
+    st.header("3. Détail de l'amélioration sélectionnée")
+    improvement_id = st.session_state.get("selected_improvement_id")
+    if improvement_id is None:
+        st.info("Sélectionnez une amélioration dans la liste.")
+        return
+    try:
+        item = client.get_improvement(int(improvement_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer l'amélioration : {exc}")
+        return
+
+    st.subheader(f"#{item.get('id')} — {item.get('title', '')}")
+    st.write(f"**Statut :** {status_badge(item.get('status', ''))}")
+    st.write(
+        f"**Créé :** {item.get('created_at', '')} · **Mis à jour :** {item.get('updated_at', '')}"
+    )
+    if item.get("error"):
+        st.error(f"Erreur historisée : {item['error']}")
+
+    _section("Solution existante (description CEO)", item.get("description", ""))
+    _section("Contexte", item.get("context", ""))
+    _section("Objectifs d'amélioration", item.get("improvement_goals", ""))
+    _section("Analyse de la solution existante", item.get("existing_solution_analysis", ""))
+    _section("Forces identifiées", item.get("identified_strengths", ""))
+    _section("Faiblesses identifiées", item.get("identified_weaknesses", ""))
+    _section("Améliorations proposées", item.get("proposed_improvements", ""))
+    _section("Version améliorée candidate", item.get("improved_solution_candidate", ""))
+    _section("Éléments différenciants", item.get("differentiation", ""))
+    _section("Risques / hypothèses", item.get("risks", ""))
+    _section("Expertises nécessaires", item.get("expertise_needs", ""))
+
+    render_improvement_actions(client, item)
+
+
+def render_improvement_actions(client: SolutionPlansAPIClient, item: dict[str, Any]) -> None:
+    """Amélioration — actions de gouvernance CEO (approuver / demander révision)."""
+    st.header("4. Validation CEO")
+    st.caption(
+        "L'approbation change le statut. **Aucune exécution n'est déclenchée** et l'amélioration "
+        "n'est jamais présentée comme une solution finale : la mise en œuvre reste humaine."
+    )
+    improvement_id = int(item["id"])
+    col_approve, col_revision = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approuver cette amélioration"):
+            _act(
+                lambda: client.approve_improvement(improvement_id),
+                "Amélioration approuvée (aucune exécution déclenchée).",
+            )
+    with col_revision:
+        if st.button("🟠 Demander une révision", key="improvement_revision"):
+            _act(
+                lambda: client.request_improvement_revision(improvement_id),
+                "Révision demandée.",
+            )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -190,9 +327,15 @@ def main() -> None:
     except APIError:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
-    render_submit(client)
-    render_plans_list(client)
-    render_plan_detail(client)
+    tab_create, tab_improve = st.tabs(["Créer une solution", "Améliorer une solution existante"])
+    with tab_create:
+        render_submit(client)
+        render_plans_list(client)
+        render_plan_detail(client)
+    with tab_improve:
+        render_improvement_submit(client)
+        render_improvements_list(client)
+        render_improvement_detail(client)
 
 
 if __name__ == "__main__":

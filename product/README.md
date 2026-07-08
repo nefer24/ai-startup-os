@@ -172,7 +172,43 @@ statut sans **aucune exécution automatique**.
 > Installation de la dépendance Streamlit : `uv pip install --python .venv/bin/python -e ".[dev]"`
 > (ou `.venv/bin/pip install -e ".[dev]"`) réinstalle toutes les dépendances, dont `streamlit`.
 
+## Phase 3 — Amélioration d'une solution existante
+
+> « Lorsqu'une solution existe déjà, AI-SOS l'analyse, identifie ses faiblesses, propose des
+> améliorations et la fait évoluer afin de la rendre plus performante, plus différenciante et
+> plus unique. »
+
+Le CEO soumet une **solution existante** ; une **équipe IA d'amélioration réelle (4 rôles, 4 appels
+LLM)** l'analyse et produit une **version améliorée candidate** persistée en SQLite, soumise à
+validation CEO.
+
+**Équipe d'amélioration :**
+
+1. **Analyste de solution existante** — comprend la solution, sa valeur, ses forces, son contexte.
+2. **Critique / Weakness Reviewer** — faiblesses, angles morts, limites (UX, business, technique).
+3. **Improvement Architect** — améliorations concrètes priorisées + version améliorée candidate.
+4. **Differentiation Reviewer** — performance, différenciation, unicité, risques, expertises.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/solutions/improvements` | crée une amélioration candidate d'une solution existante |
+| `GET` | `/solutions/improvements` | liste les améliorations |
+| `GET` | `/solutions/improvements/{id}` | relit une amélioration |
+| `POST` | `/solutions/improvements/{id}/approve` | validation CEO → `approved` |
+| `POST` | `/solutions/improvements/{id}/request-revision` | demande de révision → `revision_requested` |
+
+**Interface :** l'onglet **« Améliorer une solution existante »** (Streamlit) reprend le même flux
+que la création de plan (formulaire → liste → détail → actions CEO), toujours **via le client HTTP**.
+
+**Démo Phase 3 :** lancer l'API + Streamlit (voir Phase 2), ouvrir l'onglet **« Améliorer une
+solution existante »**, saisir une solution, cliquer **Analyser et proposer une amélioration**, lire
+l'analyse / faiblesses / améliorations / version candidate / différenciation, puis **Approuver** ou
+**Demander une révision**. L'approbation change le statut **sans aucune exécution automatique** ;
+l'amélioration n'est jamais présentée comme une solution finale.
+
 ## Prochaine tranche
 
-**Phase 3 (proposée)** — amélioration d'une solution existante (« Lorsqu'une solution existe déjà,
-AI-SOS l'analyse, identifie ses faiblesses, propose des améliorations et la fait évoluer »).
+**Phase 4 (proposée)** — persistance/observabilité renforcées ou création d'équipes IA
+spécialisées à partir d'un plan approuvé (« fabrique d'équipes IA »), à cadrer par le CEO.
