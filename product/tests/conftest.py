@@ -6,7 +6,7 @@ Aucun appel réseau, aucune vraie clé API n'est nécessaire pour les tests auto
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from app.config import get_settings
@@ -43,7 +43,15 @@ def session_factory() -> sessionmaker[Session]:
 
 
 @pytest.fixture
-def client(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
+def llm_factory() -> Callable[[], LLMClient]:
+    """Fabrique du client LLM de test. Surchargée par module pour d'autres faux clients."""
+    return FakeLLMClient
+
+
+@pytest.fixture
+def client(
+    session_factory: sessionmaker[Session], llm_factory: Callable[[], LLMClient]
+) -> Iterator[TestClient]:
     """Client de test : DB en mémoire + LLM factice injectés via les dépendances FastAPI."""
     # Empêche le lifespan de créer un fichier SQLite ou d'exiger une clé API.
     os.environ["DATABASE_URL"] = "sqlite://"
@@ -58,7 +66,7 @@ def client(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
             session.close()
 
     def override_get_llm() -> LLMClient:
-        return FakeLLMClient()
+        return llm_factory()
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_llm] = override_get_llm
