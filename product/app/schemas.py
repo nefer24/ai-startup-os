@@ -75,3 +75,56 @@ class SolutionPlanOut(BaseModel):
     llm_model: str
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class ImprovementCreateRequest(BaseModel):
+    """Entrée CEO : une solution existante à analyser et faire évoluer (Phase 3)."""
+
+    title: str
+    description: str
+    context: str = ""
+    improvement_goals: str = ""
+    constraints: str = ""
+    notes: str = ""
+
+    @field_validator("title", "description")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Refuse une valeur vide ou faite uniquement d'espaces (titre, description)."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("context", "improvement_goals", "constraints", "notes")
+    @classmethod
+    def _strip_optional(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+
+class ImprovementOut(BaseModel):
+    """Version améliorée candidate renvoyée par l'API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    description: str
+    context: str
+    improvement_goals: str
+    constraints: str
+    notes: str
+    existing_solution_analysis: str
+    identified_strengths: str
+    identified_weaknesses: str
+    proposed_improvements: str
+    improved_solution_candidate: str
+    differentiation: str
+    risks: str
+    expertise_needs: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
