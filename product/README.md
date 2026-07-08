@@ -324,8 +324,39 @@ révision** — toujours **via le client HTTP**.
 > **Une version approuvée ne déclenche aucun déploiement, aucune livraison externe, aucune
 > modification automatique du repo. Le livrable original n'est jamais écrasé.**
 
+## Phase 7 — Consolidation d'une version en livrable de référence
+
+Le CEO choisit une **version approuvée** comme **référence officielle active** d'un livrable, pour
+qu'AI-SOS sache quelle version utiliser ensuite. C'est une **décision de gouvernance, déterministe
+et sans aucun appel LLM** : AI-SOS ne décide pas quelle version est la meilleure, **le CEO décide**.
+
+**Invariants :**
+
+- **Une seule référence active par livrable** ; définir une nouvelle référence fait passer
+  l'ancienne à `superseded` (l'historique est **conservé**, jamais écrasé).
+- La version source n'est **jamais modifiée** ; son contenu est **snapshoté** dans la référence.
+- Aucune génération, aucun déploiement, aucune livraison externe, aucune modification du repo.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/deliverable-versions/{id}/set-reference` | définit une version **approuvée** comme référence |
+| `GET` | `/deliverables/{id}/reference` | référence active (404 si aucune) |
+| `GET` | `/deliverables/{id}/reference-history` | historique des références (active + superseded) |
+
+**Règle de source :** version absente → **404** ; version non approuvée → **409**. La consultation
+d'une référence inexistante renvoie **404** (`aucune référence active`).
+
+**Interface :** onglet **« Consolider une référence »** (Streamlit) — saisir l'ID du livrable,
+choisir une **version approuvée**, saisir une raison, **Définir comme version de référence**, puis
+voir la **référence active** et l'**historique**. Toujours **via le client HTTP**.
+
+> **La référence officielle est une décision CEO. Elle ne déclenche aucun déploiement, aucune
+> livraison externe, aucune modification automatique du repo. Aucun LLM n'est appelé.**
+
 ## Prochaine tranche
 
-**Phase 7 (proposée)** — à cadrer par le CEO : observabilité renforcée (coûts LLM, historique,
-export), production de plusieurs livrables coordonnés d'une même entreprise IA, ou consolidation
-d'une version approuvée en « livrable de référence ».
+**Phase 8 (proposée)** — à cadrer par le CEO : observabilité renforcée (coûts LLM, historique,
+export), production de plusieurs livrables coordonnés d'une même entreprise IA, ou exploitation de
+la référence consolidée comme base des prochaines étapes de production.

@@ -257,3 +257,25 @@ class SolutionPlansAPIClient:
             "POST", f"/deliverable-versions/{version_id}/request-revision"
         )
         return result
+
+    # --- Phase 7 : consolidation d'une référence ----------------------------
+    def set_deliverable_reference(self, version_id: int, reason: str = "") -> dict[str, Any]:
+        """Définit une version approuvée comme référence (`POST .../set-reference`)."""
+        result: dict[str, Any] = self._request(
+            "POST",
+            f"/deliverable-versions/{version_id}/set-reference",
+            json={"reason": reason},
+        )
+        return result
+
+    def get_deliverable_reference(self, deliverable_id: int) -> dict[str, Any]:
+        """Retourne la référence active (`GET /deliverables/{id}/reference`)."""
+        result: dict[str, Any] = self._request("GET", f"/deliverables/{deliverable_id}/reference")
+        return result
+
+    def list_deliverable_reference_history(self, deliverable_id: int) -> list[dict[str, Any]]:
+        """Historique des références (`GET /deliverables/{id}/reference-history`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/deliverables/{deliverable_id}/reference-history"
+        )
+        return result

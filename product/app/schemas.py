@@ -267,3 +267,33 @@ class DeliverableVersionOut(BaseModel):
     llm_model: str
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class SetReferenceRequest(BaseModel):
+    """Entrée CEO : consolider une version approuvée en référence officielle (Phase 7)."""
+
+    reason: str = ""
+
+    @field_validator("reason")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        """Nettoie la raison (optionnelle)."""
+        return value.strip()
+
+
+class DeliverableReferenceOut(BaseModel):
+    """Référence officielle d'un livrable renvoyée par l'API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    deliverable_id: int
+    reference_version_id: int
+    reference_version_number: int
+    content_snapshot: str
+    change_summary_snapshot: str
+    set_by: str
+    reason: str
+    status: str
+    created_at: dt.datetime
+    updated_at: dt.datetime

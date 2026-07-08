@@ -41,10 +41,16 @@ Endpoints Phase 6 (Itération contrôlée sur un livrable) :
   * POST /deliverable-versions/{id}/approve      — validation CEO d'une version.
   * POST /deliverable-versions/{id}/request-revision — demande de révision d'une version.
 
+Endpoints Phase 7 (Consolidation d'une version approuvée en référence) :
+  * POST /deliverable-versions/{id}/set-reference — définit une version approuvée comme référence.
+  * GET  /deliverables/{id}/reference             — référence active du livrable.
+  * GET  /deliverables/{id}/reference-history     — historique des références.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
-du repo. L'itération est append-only : le livrable original n'est jamais écrasé.
+du repo. L'itération est append-only ; la consolidation en référence est déterministe (sans LLM),
+n'écrase ni le livrable original ni les versions, et conserve l'historique des références.
 """
 
 from __future__ import annotations
@@ -75,6 +81,13 @@ from app.db import (
     make_engine,
     make_session_factory,
 )
+from app.deliverable_references import (
+    VersionNotApprovedError,
+    VersionNotFoundError,
+    get_active_reference,
+    list_reference_history,
+    set_reference,
+)
 from app.deliverable_versions import (
     DeliverableNotFoundError,
     compare_versions,
@@ -87,6 +100,7 @@ from app.llm import LLMClient, build_llm_client
 from app.schemas import (
     DeliverableCreateRequest,
     DeliverableOut,
+    DeliverableReferenceOut,
     DeliverableVersionCreateRequest,
     DeliverableVersionOut,
     HealthOut,
@@ -94,6 +108,7 @@ from app.schemas import (
     ImprovementOut,
     LLMResultOut,
     LLMTestRequest,
+    SetReferenceRequest,
     SolutionPlanCreateRequest,
     SolutionPlanOut,
     SpecializedAICompanyCreateRequest,
@@ -489,3 +504,48 @@ def request_revision_deliverable_version(version_id: int, db: DbSession) -> Deli
     return DeliverableVersionOut.model_validate(
         set_version_status(db, version, "revision_requested")
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 — Consolidation d'une version approuvée en livrable de référence.
+# Décision de gouvernance CEO, déterministe, SANS aucun appel LLM.
+# ---------------------------------------------------------------------------
+@app.post(
+    "/deliverable-versions/{version_id}/set-reference",
+    response_model=DeliverableReferenceOut,
+    status_code=201,
+)
+def set_deliverable_reference(
+    version_id: int, payload: SetReferenceRequest, db: DbSession
+) -> DeliverableReferenceOut:
+    """Définit une version **approuvée** comme référence active. Aucun LLM, aucun déploiement."""
+    try:
+        reference = set_reference(db, version_id, reason=payload.reason)
+    except VersionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="version introuvable") from exc
+    except VersionNotApprovedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return DeliverableReferenceOut.model_validate(reference)
+
+
+@app.get("/deliverables/{deliverable_id}/reference", response_model=DeliverableReferenceOut)
+def get_deliverable_reference(deliverable_id: int, db: DbSession) -> DeliverableReferenceOut:
+    """Retourne la référence active du livrable, ou 404 si aucune n'est définie."""
+    reference = get_active_reference(db, deliverable_id)
+    if reference is None:
+        raise HTTPException(status_code=404, detail="aucune référence active")
+    return DeliverableReferenceOut.model_validate(reference)
+
+
+@app.get(
+    "/deliverables/{deliverable_id}/reference-history",
+    response_model=list[DeliverableReferenceOut],
+)
+def get_deliverable_reference_history(
+    deliverable_id: int, db: DbSession
+) -> list[DeliverableReferenceOut]:
+    """Retourne l'historique des références du livrable (active + superseded), récent d'abord."""
+    return [
+        DeliverableReferenceOut.model_validate(row)
+        for row in list_reference_history(db, deliverable_id)
+    ]
