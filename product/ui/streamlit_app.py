@@ -663,6 +663,162 @@ def render_deliverable_actions(client: SolutionPlansAPIClient, item: dict[str, A
             )
 
 
+VERSION_CANDIDATE_NOTICE = (
+    "Une version approuvée **ne déclenche aucun déploiement, aucune livraison externe, aucune "
+    "modification automatique du repo**. Le livrable original n'est jamais écrasé."
+)
+
+
+def render_version_iterate(client: SolutionPlansAPIClient) -> None:
+    """Itération — choisir un livrable et produire une nouvelle version candidate."""
+    st.header("1. Choisir un livrable et demander une révision")
+    st.caption(VERSION_CANDIDATE_NOTICE)
+    deliverable_id_input = st.number_input(
+        "ID du livrable à itérer (voir l'onglet « Produire un livrable encadré »)",
+        min_value=1,
+        step=1,
+        value=st.session_state.get("selected_deliverable_id", 1) or 1,
+    )
+    deliverable_id = int(deliverable_id_input)
+    try:
+        current = client.get_deliverable(deliverable_id)
+    except APIError as exc:
+        st.warning(f"Livrable introuvable ou API injoignable : {exc}")
+        return
+    st.markdown(f"**Livrable #{current.get('id')} — {current.get('title', '')}** (V1)")
+    _section("Contenu actuel (V1)", current.get("content", ""))
+
+    with st.form("iterate_deliverable"):
+        revision_instructions = st.text_area("Instructions de révision")
+        constraints = st.text_area(
+            "Contraintes", value="Ne pas ajouter de code complet. Garder une version MVP."
+        )
+        focus_areas = st.text_input("Focus areas", value="clarté, architecture, risques, tests")
+        submitted = st.form_submit_button("Produire une nouvelle version candidate")
+
+    if not submitted:
+        return
+    if not revision_instructions.strip():
+        st.error("Les instructions de révision sont obligatoires.")
+        return
+    with st.spinner("Itération en cours (Analyst → Producer → Comparator → Qualité)…"):
+        try:
+            version = client.create_deliverable_version(
+                deliverable_id,
+                revision_instructions.strip(),
+                constraints.strip(),
+                focus_areas.strip(),
+            )
+        except APIError as exc:
+            st.error(f"Échec de l'itération : {exc}")
+            return
+    if version.get("status") == "draft":
+        st.warning(
+            "Version enregistrée en **brouillon** : la génération a échoué "
+            f"(clé API manquante ?). Erreur : {version.get('error', '')}"
+        )
+    else:
+        st.success(
+            f"Version V{version.get('version_number')} candidate produite (#{version.get('id')})."
+        )
+    st.session_state["iterate_deliverable_id"] = deliverable_id
+    st.session_state["selected_version_id"] = version.get("id")
+
+
+def render_versions_list(client: SolutionPlansAPIClient) -> None:
+    """Itération — historique des versions + comparaison."""
+    st.header("2. Versions et comparaison")
+    deliverable_id = st.session_state.get("iterate_deliverable_id")
+    if deliverable_id is None:
+        st.info("Produisez une version ci-dessus pour voir l'historique.")
+        return
+    try:
+        comparison = client.compare_deliverable_versions(int(deliverable_id))
+        versions = client.list_deliverable_versions(int(deliverable_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les versions : {exc}")
+        return
+
+    st.markdown("**Comparaison des versions (V1 = livrable original) :**")
+    for row in comparison:
+        st.markdown(
+            f"- **V{row.get('version_number')}** · {status_badge(row.get('status', ''))}"
+            f"{' — ' + row['change_summary'] if row.get('change_summary') else ''}"
+        )
+
+    if not versions:
+        st.info("Aucune nouvelle version (le livrable original reste la V1).")
+        return
+    ids = [int(v["id"]) for v in versions]
+    current = st.session_state.get("selected_version_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox(
+        "Sélectionner une version à détailler",
+        ids,
+        index=default_index,
+        format_func=lambda i: _version_label(versions, i),
+    )
+    st.session_state["selected_version_id"] = selected
+
+
+def _version_label(versions: list[dict[str, Any]], version_id: int) -> str:
+    """Libellé lisible d'une version (#id — Vn)."""
+    number = next(v["version_number"] for v in versions if v["id"] == version_id)
+    return f"#{version_id} — V{number}"
+
+
+def render_version_detail(client: SolutionPlansAPIClient) -> None:
+    """Itération — détail complet de la version sélectionnée."""
+    st.header("3. Détail de la version sélectionnée")
+    version_id = st.session_state.get("selected_version_id")
+    if version_id is None:
+        st.info("Sélectionnez une version dans la liste.")
+        return
+    try:
+        version = client.get_deliverable_version(int(version_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer la version : {exc}")
+        return
+
+    st.subheader(f"Version V{version.get('version_number')} — #{version.get('id')}")
+    st.write(f"**Statut :** {status_badge(version.get('status', ''))}")
+    st.write(
+        f"**Livrable :** #{version.get('deliverable_id')} · "
+        f"**Source :** V{version.get('source_version_id') or 1}"
+    )
+    if version.get("error"):
+        st.error(f"Erreur historisée : {version['error']}")
+
+    _section("Contenu de la version", version.get("content", ""))
+    _section("Résumé des changements", version.get("change_summary", ""))
+    _section("Comparaison à la version précédente", version.get("comparison_to_previous", ""))
+    _section("Revue qualité", version.get("quality_review", ""))
+    _section("Risques", version.get("risks", ""))
+    _section("Notes de validation CEO", version.get("ceo_validation_notes", ""))
+
+    render_version_actions(client, version)
+
+
+def render_version_actions(client: SolutionPlansAPIClient, version: dict[str, Any]) -> None:
+    """Itération — actions de gouvernance CEO (approuver / demander révision)."""
+    st.header("4. Validation CEO")
+    st.caption(VERSION_CANDIDATE_NOTICE)
+    version_id = int(version["id"])
+    col_approve, col_revision = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approuver cette version"):
+            _act(
+                lambda: client.approve_deliverable_version(version_id),
+                "Version approuvée (aucun déploiement, aucune livraison, aucune modif repo).",
+            )
+    with col_revision:
+        if st.button("🟠 Demander une révision", key="version_revision"):
+            _act(
+                lambda: client.request_deliverable_version_revision(version_id),
+                "Révision demandée.",
+            )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -677,12 +833,13 @@ def main() -> None:
     except APIError:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
-    tab_create, tab_improve, tab_company, tab_deliverable = st.tabs(
+    tab_create, tab_improve, tab_company, tab_deliverable, tab_version = st.tabs(
         [
             "Créer une solution",
             "Améliorer une solution existante",
             "Composer une entreprise IA spécialisée",
             "Produire un livrable encadré",
+            "Itérer sur un livrable",
         ]
     )
     with tab_create:
@@ -701,6 +858,10 @@ def main() -> None:
         render_deliverable_produce(client)
         render_deliverables_list(client)
         render_deliverable_detail(client)
+    with tab_version:
+        render_version_iterate(client)
+        render_versions_list(client)
+        render_version_detail(client)
 
 
 if __name__ == "__main__":

@@ -205,3 +205,55 @@ class SolutionPlansAPIClient:
             "POST", f"/deliverables/{deliverable_id}/request-revision"
         )
         return result
+
+    # --- Phase 6 : itération contrôlée sur un livrable ----------------------
+    def create_deliverable_version(
+        self,
+        deliverable_id: int,
+        revision_instructions: str,
+        constraints: str = "",
+        focus_areas: str = "",
+    ) -> dict[str, Any]:
+        """Produit une nouvelle version candidate (`POST /deliverables/{id}/versions`)."""
+        payload = {
+            "revision_instructions": revision_instructions,
+            "constraints": constraints,
+            "focus_areas": focus_areas,
+        }
+        result: dict[str, Any] = self._request(
+            "POST", f"/deliverables/{deliverable_id}/versions", json=payload
+        )
+        return result
+
+    def list_deliverable_versions(self, deliverable_id: int) -> list[dict[str, Any]]:
+        """Liste les versions d'un livrable (`GET /deliverables/{id}/versions`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/deliverables/{deliverable_id}/versions"
+        )
+        return result
+
+    def compare_deliverable_versions(self, deliverable_id: int) -> list[dict[str, Any]]:
+        """Comparaison des versions (`GET /deliverables/{id}/versions/compare`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/deliverables/{deliverable_id}/versions/compare"
+        )
+        return result
+
+    def get_deliverable_version(self, version_id: int) -> dict[str, Any]:
+        """Retourne une version précise (`GET /deliverable-versions/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/deliverable-versions/{version_id}")
+        return result
+
+    def approve_deliverable_version(self, version_id: int) -> dict[str, Any]:
+        """Validation CEO d'une version (`POST /deliverable-versions/{id}/approve`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/deliverable-versions/{version_id}/approve"
+        )
+        return result
+
+    def request_deliverable_version_revision(self, version_id: int) -> dict[str, Any]:
+        """Demande de révision d'une version (POST /deliverable-versions/{id}/request-revision)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/deliverable-versions/{version_id}/request-revision"
+        )
+        return result
