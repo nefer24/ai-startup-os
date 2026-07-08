@@ -170,3 +170,51 @@ class SpecializedAICompanyOut(BaseModel):
     llm_model: str
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class DeliverableCreateRequest(BaseModel):
+    """Entrée CEO : produire un livrable encadré depuis une entreprise IA approuvée (Phase 5)."""
+
+    deliverable_type: str
+    title: str
+    instructions: str
+    constraints: str = ""
+
+    @field_validator("deliverable_type", "title", "instructions")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Refuse une valeur vide ou faite uniquement d'espaces."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("constraints")
+    @classmethod
+    def _strip_optional(cls, value: str) -> str:
+        """Nettoie le champ optionnel sans le rendre obligatoire."""
+        return value.strip()
+
+
+class DeliverableOut(BaseModel):
+    """Livrable candidat renvoyé par l'API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    company_id: int
+    company_name: str
+    deliverable_type: str
+    title: str
+    instructions: str
+    constraints: str
+    content: str
+    production_notes: str
+    quality_review: str
+    risks: str
+    ceo_validation_notes: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
