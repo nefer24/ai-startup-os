@@ -355,8 +355,50 @@ voir la **référence active** et l'**historique**. Toujours **via le client HTT
 > **La référence officielle est une décision CEO. Elle ne déclenche aucun déploiement, aucune
 > livraison externe, aucune modification automatique du repo. Aucun LLM n'est appelé.**
 
+## Phase 8 — Observabilité renforcée
+
+AI-SOS **s'observe lui-même** : chaque appel LLM et chaque événement produit important est
+**journalisé** pour que le CEO puisse **auditer le runtime** (quels agents ont tourné, combien
+d'appels LLM, en combien de temps, avec quels échecs). C'est une **couche d'observation en lecture
+seule** : elle **ne change aucun comportement métier**, ne crée aucun nouveau livrable, n'appelle
+aucun LLM et ne dépend d'**aucun service externe** (pas de Prometheus, Grafana ni OpenTelemetry).
+
+**Ce qui est journalisé :**
+
+- **Appels LLM** (`llm_call_logs`) — phase, agent, type d'opération, fournisseur, modèle, statut
+  (succès/erreur), durée en ms, et un **aperçu tronqué** du prompt et de la réponse. Le prompt
+  **complet n'est jamais stocké** (aperçu borné à 500 caractères) ; aucun secret n'y figure.
+  L'instrumentation est branchée au niveau **service** (wrapper `ObservedLLMClient`), donc les
+  agents restent inchangés et n'ont aucune dépendance à la base.
+- **Événements produit** (`product_event_logs`) — créations, approbations, demandes de révision et
+  consolidations de référence, avec le type d'entité et son id.
+
+**Invariants :**
+
+- **Lecture seule côté API** : les endpoints d'observabilité ne déclenchent **aucun** appel LLM,
+  aucune production, aucune écriture métier.
+- Un appel LLM qui **échoue** est journalisé (`status=error`) puis l'erreur est **relancée** :
+  le comportement existant est strictement préservé.
+- Les phases sans LLM (ex. Phase 7) **ne créent aucun** appel LLM journalisé, mais leurs
+  événements produit restent tracés.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `GET` | `/observability/llm-calls` | journal des appels LLM (filtres : `limit`, `status`, `phase`, `agent_name`, `operation_type`) |
+| `GET` | `/observability/events` | journal des événements produit (filtres : `limit`, `phase`, `entity_type`, `event_type`) |
+| `GET` | `/observability/summary` | résumé : compteurs, durée moyenne, répartitions par phase, dernière erreur |
+
+**Interface :** onglet **« Observabilité »** (Streamlit) — un **résumé** (appels LLM, succès,
+échecs, durée moyenne, répartitions par phase), le **journal des appels LLM** filtrable (avec
+aperçus tronqués) et le **journal des événements produit**. Toujours **via le client HTTP**.
+
+> **L'observabilité ne fait qu'observer : elle journalise l'exécution mais ne déclenche aucune
+> production, aucun appel LLM, aucun déploiement et ne change aucun comportement métier.**
+
 ## Prochaine tranche
 
-**Phase 8 (proposée)** — à cadrer par le CEO : observabilité renforcée (coûts LLM, historique,
-export), production de plusieurs livrables coordonnés d'une même entreprise IA, ou exploitation de
-la référence consolidée comme base des prochaines étapes de production.
+**Phase 9 (proposée)** — à cadrer par le CEO : production de plusieurs livrables coordonnés d'une
+même entreprise IA, exploitation de la référence consolidée comme base des prochaines étapes de
+production, ou export/synthèse des journaux d'observabilité.

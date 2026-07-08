@@ -251,6 +251,50 @@ class DeliverableReference(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class LLMCallLog(Base):
+    """Journal d'un appel LLM exécuté par le runtime produit (Phase 8, observabilité).
+
+    On ne stocke **jamais** le prompt complet : seulement un **preview tronqué** (500 car. max),
+    pour éviter d'exposer trop de données. Aucun secret n'y figure (la clé API n'est pas dans le
+    prompt). En lecture seule côté API.
+    """
+
+    __tablename__ = "llm_call_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phase: Mapped[str] = mapped_column(String, default="")
+    agent_name: Mapped[str] = mapped_column(String, default="")
+    operation_type: Mapped[str] = mapped_column(String, default="")
+    provider: Mapped[str] = mapped_column(String, default="anthropic")
+    model: Mapped[str] = mapped_column(String, default="unknown")
+    prompt_preview: Mapped[str] = mapped_column(Text, default="")
+    response_preview: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String, default="success")
+    error: Mapped[str] = mapped_column(Text, default="")
+    duration_ms: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+
+
+class ProductEventLog(Base):
+    """Journal d'un événement produit important (Phase 8, observabilité).
+
+    Trace les créations / approbations / demandes de révision / consolidations, avec un
+    `metadata_json` texte simple. En lecture seule côté API.
+    """
+
+    __tablename__ = "product_event_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String, default="")
+    phase: Mapped[str] = mapped_column(String, default="")
+    entity_type: Mapped[str] = mapped_column(String, default="")
+    entity_id: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(String, default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+
+
 def make_engine(database_url: str) -> Engine:
     """Construit un moteur SQLAlchemy. `check_same_thread=False` pour SQLite + FastAPI."""
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}

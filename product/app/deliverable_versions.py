@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 
 from app.db import CompanyDeliverable, DeliverableVersion
+from app.observability import observed
 from app.version_agents import (
     RevisionAnalyst,
     VersionComparator,
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
 
     from app.llm import LLMClient
     from app.schemas import DeliverableVersionCreateRequest
+
+_PHASE = "phase6"
+_OP = "iterate_version"
 
 
 class DeliverableNotFoundError(Exception):
@@ -93,10 +97,18 @@ def generate_version(
         status="candidate",
     )
     try:
-        revision_plan = RevisionAnalyst(llm).run(data)
-        content = VersionProducer(llm).run(data, revision_plan)
-        comparison = VersionComparator(llm).run(data, content)
-        quality = VersionQualityReviewer(llm).run(data, content)
+        revision_plan = RevisionAnalyst(
+            observed(llm, session, _PHASE, RevisionAnalyst.name, _OP, llm_model)
+        ).run(data)
+        content = VersionProducer(
+            observed(llm, session, _PHASE, VersionProducer.name, _OP, llm_model)
+        ).run(data, revision_plan)
+        comparison = VersionComparator(
+            observed(llm, session, _PHASE, VersionComparator.name, _OP, llm_model)
+        ).run(data, content)
+        quality = VersionQualityReviewer(
+            observed(llm, session, _PHASE, VersionQualityReviewer.name, _OP, llm_model)
+        ).run(data, content)
 
         version.content = content
         version.change_summary = comparison.change_summary

@@ -297,3 +297,38 @@ class DeliverableReferenceOut(BaseModel):
     status: str
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class LLMCallLogOut(BaseModel):
+    """Ligne du journal des appels LLM (Phase 8, lecture seule)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    phase: str
+    agent_name: str
+    operation_type: str
+    provider: str
+    model: str
+    prompt_preview: str
+    response_preview: str
+    status: str
+    error: str
+    duration_ms: int
+    created_at: dt.datetime
+
+
+class ProductEventLogOut(BaseModel):
+    """Ligne du journal des événements produit (Phase 8, lecture seule)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    event_type: str
+    phase: str
+    entity_type: str
+    entity_id: int
+    status: str
+    message: str
+    metadata_json: str
+    created_at: dt.datetime

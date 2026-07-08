@@ -46,20 +46,25 @@ Endpoints Phase 7 (Consolidation d'une version approuvée en référence) :
   * GET  /deliverables/{id}/reference             — référence active du livrable.
   * GET  /deliverables/{id}/reference-history     — historique des références.
 
+Endpoints Phase 8 (Observabilité — lecture seule) :
+  * GET  /observability/llm-calls                — journal des appels LLM.
+  * GET  /observability/events                   — journal des événements produit.
+  * GET  /observability/summary                  — résumé (compteurs, durée moyenne, répartitions).
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
-du repo. L'itération est append-only ; la consolidation en référence est déterministe (sans LLM),
-n'écrase ni le livrable original ni les versions, et conserve l'historique des références.
+du repo. L'itération est append-only ; la consolidation en référence est déterministe (sans LLM).
+L'observabilité (Phase 8) est **read-only** : elle journalise mais ne déclenche aucune production.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -97,6 +102,12 @@ from app.deliverable_versions import (
     set_version_status,
 )
 from app.llm import LLMClient, build_llm_client
+from app.observability import (
+    list_events,
+    list_llm_calls,
+    log_product_event,
+    observability_summary,
+)
 from app.schemas import (
     DeliverableCreateRequest,
     DeliverableOut,
@@ -106,8 +117,10 @@ from app.schemas import (
     HealthOut,
     ImprovementCreateRequest,
     ImprovementOut,
+    LLMCallLogOut,
     LLMResultOut,
     LLMTestRequest,
+    ProductEventLogOut,
     SetReferenceRequest,
     SolutionPlanCreateRequest,
     SolutionPlanOut,
@@ -209,6 +222,7 @@ def create_solution_plan(
 ) -> SolutionPlanOut:
     """Transforme une entrée CEO en plan candidat via l'équipe IA, puis le persiste."""
     plan = generate_solution_plan(db, llm, payload, llm_model=get_settings().anthropic_model)
+    log_product_event(db, "solution_plan_created", "phase1", "solution_plan", plan.id, plan.status)
     return SolutionPlanOut.model_validate(plan)
 
 
@@ -230,15 +244,19 @@ def get_solution_plan(plan_id: int, db: DbSession) -> SolutionPlanOut:
 @app.post("/solutions/plans/{plan_id}/approve", response_model=SolutionPlanOut)
 def approve_solution_plan(plan_id: int, db: DbSession) -> SolutionPlanOut:
     """Validation CEO : passe le plan en `approved`. Ne déclenche aucune exécution."""
-    plan = _get_plan_or_404(db, plan_id)
-    return SolutionPlanOut.model_validate(set_plan_status(db, plan, "approved"))
+    plan = set_plan_status(db, _get_plan_or_404(db, plan_id), "approved")
+    log_product_event(db, "solution_plan_approved", "phase1", "solution_plan", plan.id, plan.status)
+    return SolutionPlanOut.model_validate(plan)
 
 
 @app.post("/solutions/plans/{plan_id}/request-revision", response_model=SolutionPlanOut)
 def request_revision_solution_plan(plan_id: int, db: DbSession) -> SolutionPlanOut:
     """Demande de révision CEO : passe le plan en `revision_requested`. Ne relance rien."""
-    plan = _get_plan_or_404(db, plan_id)
-    return SolutionPlanOut.model_validate(set_plan_status(db, plan, "revision_requested"))
+    plan = set_plan_status(db, _get_plan_or_404(db, plan_id), "revision_requested")
+    log_product_event(
+        db, "solution_plan_revision_requested", "phase1", "solution_plan", plan.id, plan.status
+    )
+    return SolutionPlanOut.model_validate(plan)
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +276,9 @@ def create_improvement(
 ) -> ImprovementOut:
     """Analyse une solution existante et produit une version améliorée candidate, persistée."""
     improvement = generate_improvement(db, llm, payload, llm_model=get_settings().anthropic_model)
+    log_product_event(
+        db, "improvement_created", "phase3", "improvement", improvement.id, improvement.status
+    )
     return ImprovementOut.model_validate(improvement)
 
 
@@ -281,8 +302,13 @@ def get_improvement(improvement_id: int, db: DbSession) -> ImprovementOut:
 @app.post("/solutions/improvements/{improvement_id}/approve", response_model=ImprovementOut)
 def approve_improvement(improvement_id: int, db: DbSession) -> ImprovementOut:
     """Validation CEO : passe l'amélioration en `approved`. Ne déclenche aucune exécution."""
-    improvement = _get_improvement_or_404(db, improvement_id)
-    return ImprovementOut.model_validate(set_improvement_status(db, improvement, "approved"))
+    improvement = set_improvement_status(
+        db, _get_improvement_or_404(db, improvement_id), "approved"
+    )
+    log_product_event(
+        db, "improvement_approved", "phase3", "improvement", improvement.id, improvement.status
+    )
+    return ImprovementOut.model_validate(improvement)
 
 
 @app.post(
@@ -291,10 +317,18 @@ def approve_improvement(improvement_id: int, db: DbSession) -> ImprovementOut:
 )
 def request_revision_improvement(improvement_id: int, db: DbSession) -> ImprovementOut:
     """Demande de révision CEO : passe l'amélioration en `revision_requested`. Ne relance rien."""
-    improvement = _get_improvement_or_404(db, improvement_id)
-    return ImprovementOut.model_validate(
-        set_improvement_status(db, improvement, "revision_requested")
+    improvement = set_improvement_status(
+        db, _get_improvement_or_404(db, improvement_id), "revision_requested"
     )
+    log_product_event(
+        db,
+        "improvement_revision_requested",
+        "phase3",
+        "improvement",
+        improvement.id,
+        improvement.status,
+    )
+    return ImprovementOut.model_validate(improvement)
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +354,7 @@ def create_specialized_company(
     except SourceNotApprovedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     company = generate_specialized_company(db, llm, info, llm_model=get_settings().anthropic_model)
+    log_product_event(db, "company_created", "phase4b-r", "company", company.id, company.status)
     return SpecializedAICompanyOut.model_validate(company)
 
 
@@ -343,8 +378,9 @@ def get_specialized_company(company_id: int, db: DbSession) -> SpecializedAIComp
 @app.post("/companies/specialized/{company_id}/approve", response_model=SpecializedAICompanyOut)
 def approve_specialized_company(company_id: int, db: DbSession) -> SpecializedAICompanyOut:
     """Validation CEO : passe l'entreprise en `approved`. Ne déclenche aucune exécution."""
-    company = _get_company_or_404(db, company_id)
-    return SpecializedAICompanyOut.model_validate(set_company_status(db, company, "approved"))
+    company = set_company_status(db, _get_company_or_404(db, company_id), "approved")
+    log_product_event(db, "company_approved", "phase4b-r", "company", company.id, company.status)
+    return SpecializedAICompanyOut.model_validate(company)
 
 
 @app.post(
@@ -353,10 +389,11 @@ def approve_specialized_company(company_id: int, db: DbSession) -> SpecializedAI
 )
 def request_revision_specialized_company(company_id: int, db: DbSession) -> SpecializedAICompanyOut:
     """Demande de révision CEO : passe l'entreprise en `revision_requested`. Ne relance rien."""
-    company = _get_company_or_404(db, company_id)
-    return SpecializedAICompanyOut.model_validate(
-        set_company_status(db, company, "revision_requested")
+    company = set_company_status(db, _get_company_or_404(db, company_id), "revision_requested")
+    log_product_event(
+        db, "company_revision_requested", "phase4b-r", "company", company.id, company.status
     )
+    return SpecializedAICompanyOut.model_validate(company)
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +425,9 @@ def create_company_deliverable(
     deliverable = generate_deliverable(
         db, llm, company, payload, llm_model=get_settings().anthropic_model
     )
+    log_product_event(
+        db, "deliverable_created", "phase5", "deliverable", deliverable.id, deliverable.status
+    )
     return DeliverableOut.model_validate(deliverable)
 
 
@@ -416,17 +456,30 @@ def get_deliverable(deliverable_id: int, db: DbSession) -> DeliverableOut:
 @app.post("/deliverables/{deliverable_id}/approve", response_model=DeliverableOut)
 def approve_deliverable(deliverable_id: int, db: DbSession) -> DeliverableOut:
     """Validation CEO : passe le livrable en `approved`. Aucun déploiement, aucune livraison."""
-    deliverable = _get_deliverable_or_404(db, deliverable_id)
-    return DeliverableOut.model_validate(set_deliverable_status(db, deliverable, "approved"))
+    deliverable = set_deliverable_status(
+        db, _get_deliverable_or_404(db, deliverable_id), "approved"
+    )
+    log_product_event(
+        db, "deliverable_approved", "phase5", "deliverable", deliverable.id, deliverable.status
+    )
+    return DeliverableOut.model_validate(deliverable)
 
 
 @app.post("/deliverables/{deliverable_id}/request-revision", response_model=DeliverableOut)
 def request_revision_deliverable(deliverable_id: int, db: DbSession) -> DeliverableOut:
     """Demande de révision CEO : passe le livrable en `revision_requested`. Ne relance rien."""
-    deliverable = _get_deliverable_or_404(db, deliverable_id)
-    return DeliverableOut.model_validate(
-        set_deliverable_status(db, deliverable, "revision_requested")
+    deliverable = set_deliverable_status(
+        db, _get_deliverable_or_404(db, deliverable_id), "revision_requested"
     )
+    log_product_event(
+        db,
+        "deliverable_revision_requested",
+        "phase5",
+        "deliverable",
+        deliverable.id,
+        deliverable.status,
+    )
+    return DeliverableOut.model_validate(deliverable)
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +509,7 @@ def create_deliverable_version(
     version = generate_version(
         db, llm, deliverable, payload, llm_model=get_settings().anthropic_model
     )
+    log_product_event(db, "version_created", "phase6", "version", version.id, version.status)
     return DeliverableVersionOut.model_validate(version)
 
 
@@ -490,8 +544,9 @@ def get_deliverable_version(version_id: int, db: DbSession) -> DeliverableVersio
 )
 def approve_deliverable_version(version_id: int, db: DbSession) -> DeliverableVersionOut:
     """Validation CEO d'une version : passe en `approved`. Aucun déploiement, aucune livraison."""
-    version = _get_version_or_404(db, version_id)
-    return DeliverableVersionOut.model_validate(set_version_status(db, version, "approved"))
+    version = set_version_status(db, _get_version_or_404(db, version_id), "approved")
+    log_product_event(db, "version_approved", "phase6", "version", version.id, version.status)
+    return DeliverableVersionOut.model_validate(version)
 
 
 @app.post(
@@ -500,10 +555,11 @@ def approve_deliverable_version(version_id: int, db: DbSession) -> DeliverableVe
 )
 def request_revision_deliverable_version(version_id: int, db: DbSession) -> DeliverableVersionOut:
     """Demande de révision d'une version : passe en `revision_requested`. Ne relance rien."""
-    version = _get_version_or_404(db, version_id)
-    return DeliverableVersionOut.model_validate(
-        set_version_status(db, version, "revision_requested")
+    version = set_version_status(db, _get_version_or_404(db, version_id), "revision_requested")
+    log_product_event(
+        db, "version_revision_requested", "phase6", "version", version.id, version.status
     )
+    return DeliverableVersionOut.model_validate(version)
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +581,7 @@ def set_deliverable_reference(
         raise HTTPException(status_code=404, detail="version introuvable") from exc
     except VersionNotApprovedError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    log_product_event(db, "reference_set", "phase7", "reference", reference.id, reference.status)
     return DeliverableReferenceOut.model_validate(reference)
 
 
@@ -549,3 +606,54 @@ def get_deliverable_reference_history(
         DeliverableReferenceOut.model_validate(row)
         for row in list_reference_history(db, deliverable_id)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — Observabilité renforcée (lecture seule).
+# Ces endpoints n'exécutent aucune production et ne déclenchent aucun appel LLM :
+# ils relisent uniquement les journaux d'appels LLM et d'événements produit.
+# ---------------------------------------------------------------------------
+@app.get("/observability/llm-calls", response_model=list[LLMCallLogOut])
+def observability_llm_calls(
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    status: Annotated[str | None, Query()] = None,
+    phase: Annotated[str | None, Query()] = None,
+    agent_name: Annotated[str | None, Query()] = None,
+    operation_type: Annotated[str | None, Query()] = None,
+) -> list[LLMCallLogOut]:
+    """Journal des appels LLM (récent d'abord), filtrable. Lecture seule, aucun appel LLM."""
+    rows = list_llm_calls(
+        db,
+        limit=limit,
+        status=status,
+        phase=phase,
+        agent_name=agent_name,
+        operation_type=operation_type,
+    )
+    return [LLMCallLogOut.model_validate(row) for row in rows]
+
+
+@app.get("/observability/events", response_model=list[ProductEventLogOut])
+def observability_events(
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    phase: Annotated[str | None, Query()] = None,
+    entity_type: Annotated[str | None, Query()] = None,
+    event_type: Annotated[str | None, Query()] = None,
+) -> list[ProductEventLogOut]:
+    """Journal des événements produit (récent d'abord), filtrable. Lecture seule."""
+    rows = list_events(
+        db,
+        limit=limit,
+        phase=phase,
+        entity_type=entity_type,
+        event_type=event_type,
+    )
+    return [ProductEventLogOut.model_validate(row) for row in rows]
+
+
+@app.get("/observability/summary")
+def observability_summary_endpoint(db: DbSession) -> dict[str, Any]:
+    """Résumé d'observabilité : compteurs, durée moyenne, répartitions, dernière erreur."""
+    return observability_summary(db)
