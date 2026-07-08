@@ -1,0 +1,51 @@
+# CI SCOPÉE au produit (product/). Indépendante du job `quality` (qui couvre src/aisos).
+# Ne se déclenche que si product/ change, et ne teste QUE product/.
+name: product-ci
+
+on:
+  pull_request:
+    paths:
+      - "product/**"
+      - ".github/workflows/product-ci.yml"
+  push:
+    branches: [develop, main, product/mvp]
+    paths:
+      - "product/**"
+      - ".github/workflows/product-ci.yml"
+
+concurrency:
+  group: product-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  product:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: product
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install product (dev)
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Type check (mypy)
+        run: mypy
+
+      - name: Tests (pytest)
+        # Les tests n'exigent AUCUNE vraie clé API (client LLM factice, base en mémoire).
+        run: pytest
