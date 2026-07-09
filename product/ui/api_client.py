@@ -418,6 +418,58 @@ class SolutionPlansAPIClient:
         )
         return result
 
+    # --- Phase 11 : validation item par item d'un lot coordonné -------------
+    def approve_coordinated_deliverable_item(
+        self, item_id: int, reason: str = "", ceo_notes: str = ""
+    ) -> dict[str, Any]:
+        """Décision CEO : approuve un item (`POST /coordinated-deliverable-items/{id}/approve`)."""
+        payload = {"reason": reason, "ceo_notes": ceo_notes}
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-deliverable-items/{item_id}/approve", json=payload
+        )
+        return result
+
+    def reject_coordinated_deliverable_item(
+        self, item_id: int, reason: str = "", ceo_notes: str = ""
+    ) -> dict[str, Any]:
+        """Décision CEO : refuse un item (`POST /coordinated-deliverable-items/{id}/reject`)."""
+        payload = {"reason": reason, "ceo_notes": ceo_notes}
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-deliverable-items/{item_id}/reject", json=payload
+        )
+        return result
+
+    def request_coordinated_deliverable_item_revision(
+        self, item_id: int, reason: str = "", ceo_notes: str = ""
+    ) -> dict[str, Any]:
+        """Décision CEO : révision d'un item (`POST .../request-revision`). Ne régénère rien."""
+        payload = {"reason": reason, "ceo_notes": ceo_notes}
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-deliverable-items/{item_id}/request-revision", json=payload
+        )
+        return result
+
+    def list_coordinated_deliverable_item_decisions(self, item_id: int) -> list[dict[str, Any]]:
+        """Historique des décisions d'un item (`GET .../coordinated-deliverable-items/{id}/...`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/coordinated-deliverable-items/{item_id}/decisions"
+        )
+        return result
+
+    def get_coordinated_batch_item_validation_summary(self, batch_id: int) -> dict[str, Any]:
+        """Résumé de validation item par item (`GET .../item-validation-summary`)."""
+        result: dict[str, Any] = self._request(
+            "GET", f"/coordinated-deliverable-batches/{batch_id}/item-validation-summary"
+        )
+        return result
+
+    def list_coordinated_batch_item_decisions(self, batch_id: int) -> list[dict[str, Any]]:
+        """Toutes les décisions des items d'un lot (`GET .../item-decisions`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/coordinated-deliverable-batches/{batch_id}/item-decisions"
+        )
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,
