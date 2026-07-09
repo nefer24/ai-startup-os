@@ -298,6 +298,75 @@ class ReferenceExploitation(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class CoordinatedDeliverableBatch(Base):
+    """Lot de **livrables coordonnés** produit depuis une exploitation approuvée (Phase 10).
+
+    À partir d'une `ReferenceExploitation` **approuvée** (Phase 9), AI-SOS produit un **petit
+    ensemble** (2 à 5) de livrables candidats **cohérents entre eux**. La provenance (exploitation,
+    livrable, référence, version) est **snapshotée** sur le lot.
+
+    Cette phase **coordonne seulement** : elle ne produit pas de livraison finale, ne déploie rien,
+    ne modifie pas le repo, ne change pas la référence. Le lot reste **candidat** jusqu'à validation
+    CEO (au niveau du lot, pas item par item dans cette phase).
+    """
+
+    __tablename__ = "coordinated_deliverable_batches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Provenance : exploitation approuvée + référence utilisée (snapshot figé).
+    exploitation_id: Mapped[int] = mapped_column(default=0)
+    deliverable_id: Mapped[int] = mapped_column(default=0)
+    reference_id: Mapped[int] = mapped_column(default=0)
+    reference_version_id: Mapped[int] = mapped_column(default=0)
+    reference_version_number: Mapped[int] = mapped_column(default=0)
+    # Demande CEO.
+    title: Mapped[str] = mapped_column(String, default="")
+    objective: Mapped[str] = mapped_column(Text, default="")
+    requested_deliverables_json: Mapped[str] = mapped_column(Text, default="")
+    coordination_instructions: Mapped[str] = mapped_column(Text, default="")
+    constraints: Mapped[str] = mapped_column(Text, default="")
+    acceptance_focus: Mapped[str] = mapped_column(Text, default="")
+    # Coordination.
+    coordination_plan: Mapped[str] = mapped_column(Text, default="")
+    coherence_review: Mapped[str] = mapped_column(Text, default="")
+    risks: Mapped[str] = mapped_column(Text, default="")
+    ceo_validation_notes: Mapped[str] = mapped_column(Text, default="")
+    provenance_notes: Mapped[str] = mapped_column(Text, default="")
+    # Statut de gouvernance : draft / candidate / approved / revision_requested.
+    status: Mapped[str] = mapped_column(String, default="candidate")
+    # Audit / diagnostic (optionnels).
+    raw_agent_outputs: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    llm_model: Mapped[str] = mapped_column(String, default="")
+    # Horodatages.
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class CoordinatedDeliverableItem(Base):
+    """Livrable individuel d'un lot coordonné (Phase 10).
+
+    Chaque item appartient à un `CoordinatedDeliverableBatch` et reste **candidat** ; il n'est pas
+    approuvé item par item dans cette phase (la validation CEO porte sur le lot).
+    """
+
+    __tablename__ = "coordinated_deliverable_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[int] = mapped_column(default=0)
+    exploitation_id: Mapped[int] = mapped_column(default=0)
+    item_type: Mapped[str] = mapped_column(String, default="")
+    title: Mapped[str] = mapped_column(String, default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    dependencies: Mapped[str] = mapped_column(Text, default="")
+    consistency_notes: Mapped[str] = mapped_column(Text, default="")
+    validation_notes: Mapped[str] = mapped_column(Text, default="")
+    order_index: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(String, default="candidate")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class LLMCallLog(Base):
     """Journal d'un appel LLM exécuté par le runtime produit (Phase 8, observabilité).
 

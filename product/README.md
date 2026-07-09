@@ -442,8 +442,55 @@ afficher sa **référence active** (id, version, snapshots), saisir `next_step_t
 > **AI-SOS utilise uniquement la référence officielle active choisie par le CEO. Cette action ne
 > change pas la référence, ne déploie rien, ne livre rien et ne modifie pas le repo.**
 
+## Phase 10 — Livrables coordonnés depuis une exploitation approuvée
+
+À partir d'une **exploitation approuvée** (Phase 9), AI-SOS produit un **petit lot (2 à 5) de
+livrables candidats cohérents entre eux** : par exemple backlog MVP + plan d'implémentation + plan
+de tests, ou spécification API + plan de tests API + checklist de validation. **Le CEO choisit les
+types de livrables ; AI-SOS organise et coordonne, sans sélection automatique cachée.**
+
+**Cette phase coordonne seulement :** elle ne produit **pas** de livraison finale, ne déploie rien,
+ne livre rien à un tiers, ne modifie pas le repo, ne change pas la référence, n'approuve **rien**
+automatiquement (ni le lot, ni item par item) et n'implémente aucun multi-LLM.
+
+**Objet & provenance :** un `CoordinatedDeliverableBatch` (le lot) porte la **provenance snapshotée**
+(exploitation, livrable, référence, version) et des `CoordinatedDeliverableItem` (les livrables
+individuels, ordonnés par `order_index`, avec `dependencies` et `consistency_notes`). La validation
+CEO porte sur **le lot**, pas item par item dans cette phase.
+
+**Processus (5 vrais appels LLM, mockés en test) :** Exploitation Context Reader → Deliverable Set
+Planner → Coordinated Deliverable Producer → Cross-Deliverable Consistency Reviewer → Quality &
+Governance Reviewer. Sorties : `coordination_plan`, items, `coherence_review`, `risks`,
+`ceo_validation_notes`, `provenance_notes`.
+
+**Gouvernance :** le lot reste **candidat** jusqu'à validation CEO ; l'approbation ne déclenche
+aucun déploiement, aucune livraison externe, aucune modification du repo ; échec d'un agent →
+`draft` avec erreur historisée. Appels LLM et événements (`coordinated_batch_*`) **journalisés** par
+l'observabilité Phase 8 (`phase10`, opération `coordinate_deliverables`).
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/reference-exploitations/{id}/coordinated-deliverables` | produit un lot (404 exploitation absente ; 409 non approuvée ; 422 hors 2..5) |
+| `GET` | `/reference-exploitations/{id}/coordinated-deliverables` | liste les lots d'une exploitation |
+| `GET` | `/coordinated-deliverable-batches/{id}` | relit un lot |
+| `GET` | `/coordinated-deliverable-batches/{id}/items` | items du lot (ordonnés) |
+| `GET` | `/coordinated-deliverable-batches/{id}/provenance` | provenance du lot |
+| `GET` | `/coordinated-deliverable-items/{id}` | relit un item |
+| `POST` | `/coordinated-deliverable-batches/{id}/approve` | validation CEO du lot |
+| `POST` | `/coordinated-deliverable-batches/{id}/request-revision` | demande de révision du lot |
+
+**Interface :** onglet **« Livrables coordonnés »** (Streamlit) — sélectionner une exploitation
+(avertissement si non `approved`), afficher sa provenance, saisir `title`, `objective`,
+`requested_deliverables` (2 à 5), `coordination_instructions`, `constraints`, `acceptance_focus`,
+**produire le lot**, voir le plan de coordination, la revue de cohérence, les **items** (dépendances
++ notes) et **approuver / demander révision du lot**. Toujours **via le client HTTP**.
+
+> **Ces livrables sont candidats et coordonnés. Ils ne déclenchent aucun déploiement, aucune
+> livraison externe et aucune modification automatique du repo. Le CEO valide le lot.**
+
 ## Prochaine tranche
 
-**Phase 10 (proposée)** — à cadrer par le CEO : production de plusieurs livrables coordonnés d'une
-même entreprise IA, chaînage de plusieurs exploitations successives, ou export/synthèse des
-journaux d'observabilité.
+**Phase 11 (proposée)** — à cadrer par le CEO : chaînage de plusieurs lots coordonnés, validation
+item par item, ou export/synthèse des livrables et des journaux d'observabilité.

@@ -367,6 +367,104 @@ class ReferenceExploitationProvenanceOut(BaseModel):
     created_at: dt.datetime
 
 
+class CoordinatedDeliverableBatchCreateRequest(BaseModel):
+    """Entrée CEO : coordonner un petit lot de livrables depuis une exploitation approuvée (P10)."""
+
+    title: str
+    objective: str
+    requested_deliverables: list[str]
+    coordination_instructions: str = ""
+    constraints: str = ""
+    acceptance_focus: str = ""
+
+    @field_validator("title", "objective")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Refuse une valeur vide ou faite uniquement d'espaces."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("coordination_instructions", "constraints", "acceptance_focus")
+    @classmethod
+    def _strip_optional(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+    @field_validator("requested_deliverables")
+    @classmethod
+    def _validate_requested(cls, value: list[str]) -> list[str]:
+        """Exige un petit ensemble : 2 à 5 livrables non vides."""
+        cleaned = [item.strip() for item in value if item and item.strip()]
+        if not 2 <= len(cleaned) <= 5:
+            raise ValueError("il faut entre 2 et 5 livrables demandés")
+        return cleaned
+
+
+class CoordinatedDeliverableItemOut(BaseModel):
+    """Livrable individuel d'un lot coordonné renvoyé par l'API (Phase 10)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    batch_id: int
+    exploitation_id: int
+    item_type: str
+    title: str
+    content: str
+    dependencies: str
+    consistency_notes: str
+    validation_notes: str
+    order_index: int
+    status: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class CoordinatedDeliverableBatchOut(BaseModel):
+    """Lot de livrables coordonnés renvoyé par l'API (Phase 10)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    exploitation_id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    title: str
+    objective: str
+    requested_deliverables_json: str
+    coordination_instructions: str
+    constraints: str
+    acceptance_focus: str
+    coordination_plan: str
+    coherence_review: str
+    risks: str
+    ceo_validation_notes: str
+    provenance_notes: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class CoordinatedDeliverableBatchProvenanceOut(BaseModel):
+    """Provenance d'un lot coordonné (Phase 10, lecture seule)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    exploitation_id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    created_at: dt.datetime
+
+
 class LLMCallLogOut(BaseModel):
     """Ligne du journal des appels LLM (Phase 8, lecture seule)."""
 

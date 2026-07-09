@@ -344,6 +344,80 @@ class SolutionPlansAPIClient:
         )
         return result
 
+    # --- Phase 10 : livrables coordonnés depuis une exploitation approuvée ---
+    def create_coordinated_deliverable_batch(
+        self,
+        exploitation_id: int,
+        title: str,
+        objective: str,
+        requested_deliverables: list[str],
+        coordination_instructions: str = "",
+        constraints: str = "",
+        acceptance_focus: str = "",
+    ) -> dict[str, Any]:
+        """Produit un lot coordonné (`POST .../coordinated-deliverables`)."""
+        payload = {
+            "title": title,
+            "objective": objective,
+            "requested_deliverables": requested_deliverables,
+            "coordination_instructions": coordination_instructions,
+            "constraints": constraints,
+            "acceptance_focus": acceptance_focus,
+        }
+        result: dict[str, Any] = self._request(
+            "POST",
+            f"/reference-exploitations/{exploitation_id}/coordinated-deliverables",
+            json=payload,
+        )
+        return result
+
+    def list_coordinated_deliverable_batches(self, exploitation_id: int) -> list[dict[str, Any]]:
+        """Liste les lots d'une exploitation (`GET .../coordinated-deliverables`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/reference-exploitations/{exploitation_id}/coordinated-deliverables"
+        )
+        return result
+
+    def get_coordinated_deliverable_batch(self, batch_id: int) -> dict[str, Any]:
+        """Retourne un lot précis (`GET /coordinated-deliverable-batches/{id}`)."""
+        result: dict[str, Any] = self._request(
+            "GET", f"/coordinated-deliverable-batches/{batch_id}"
+        )
+        return result
+
+    def list_coordinated_deliverable_items(self, batch_id: int) -> list[dict[str, Any]]:
+        """Retourne les items d'un lot (`GET /coordinated-deliverable-batches/{id}/items`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/coordinated-deliverable-batches/{batch_id}/items"
+        )
+        return result
+
+    def get_coordinated_deliverable_item(self, item_id: int) -> dict[str, Any]:
+        """Retourne un item précis (`GET /coordinated-deliverable-items/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/coordinated-deliverable-items/{item_id}")
+        return result
+
+    def get_coordinated_deliverable_batch_provenance(self, batch_id: int) -> dict[str, Any]:
+        """Provenance d'un lot (`GET /coordinated-deliverable-batches/{id}/provenance`)."""
+        result: dict[str, Any] = self._request(
+            "GET", f"/coordinated-deliverable-batches/{batch_id}/provenance"
+        )
+        return result
+
+    def approve_coordinated_deliverable_batch(self, batch_id: int) -> dict[str, Any]:
+        """Validation CEO du lot (`POST /coordinated-deliverable-batches/{id}/approve`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-deliverable-batches/{batch_id}/approve"
+        )
+        return result
+
+    def request_coordinated_deliverable_batch_revision(self, batch_id: int) -> dict[str, Any]:
+        """Demande de révision du lot (`POST .../request-revision`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-deliverable-batches/{batch_id}/request-revision"
+        )
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,
