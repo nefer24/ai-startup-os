@@ -59,6 +59,16 @@ Endpoints Phase 9 (Exploitation de la référence consolidée) :
   * POST /reference-exploitations/{id}/approve            — validation CEO (statut approved).
   * POST /reference-exploitations/{id}/request-revision   — demande de révision.
 
+Endpoints Phase 10 (Livrables coordonnés depuis une exploitation approuvée) :
+  * POST /reference-exploitations/{id}/coordinated-deliverables — produit un lot coordonné.
+  * GET  /reference-exploitations/{id}/coordinated-deliverables — liste les lots.
+  * GET  /coordinated-deliverable-batches/{id}                  — relit un lot.
+  * GET  /coordinated-deliverable-batches/{id}/items           — items du lot.
+  * GET  /coordinated-deliverable-batches/{id}/provenance      — provenance du lot.
+  * GET  /coordinated-deliverable-items/{id}                   — relit un item.
+  * POST /coordinated-deliverable-batches/{id}/approve         — validation CEO du lot.
+  * POST /coordinated-deliverable-batches/{id}/request-revision — demande de révision du lot.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -84,8 +94,20 @@ from app.company_deliverables import (
     set_deliverable_status,
 )
 from app.config import get_settings
+from app.coordinated_deliverables import (
+    ExploitationNotApprovedError,
+    ExploitationNotFoundError,
+    InvalidBatchRequestError,
+    generate_batch,
+    list_batches,
+    list_items,
+    load_approved_exploitation,
+    set_batch_status,
+)
 from app.db import (
     CompanyDeliverable,
+    CoordinatedDeliverableBatch,
+    CoordinatedDeliverableItem,
     DeliverableVersion,
     LLMResult,
     ReferenceExploitation,
@@ -131,6 +153,10 @@ from app.reference_exploitations import (
     load_deliverable as load_exploitation_deliverable,
 )
 from app.schemas import (
+    CoordinatedDeliverableBatchCreateRequest,
+    CoordinatedDeliverableBatchOut,
+    CoordinatedDeliverableBatchProvenanceOut,
+    CoordinatedDeliverableItemOut,
     DeliverableCreateRequest,
     DeliverableOut,
     DeliverableReferenceOut,
@@ -811,3 +837,152 @@ def request_revision_reference_exploitation(
         exploitation.status,
     )
     return ReferenceExploitationOut.model_validate(exploitation)
+
+
+# ---------------------------------------------------------------------------
+# Phase 10 — Livrables coordonnés depuis une exploitation approuvée.
+# Coordonne un PETIT lot (2 à 5) de livrables candidats cohérents ; ne produit
+# aucune livraison finale, ne déploie rien, ne modifie pas le repo, ne change
+# pas la référence, n'approuve rien automatiquement.
+# ---------------------------------------------------------------------------
+def _get_batch_or_404(db: Session, batch_id: int) -> CoordinatedDeliverableBatch:
+    """Récupère un lot coordonné par id ou lève 404."""
+    batch = db.get(CoordinatedDeliverableBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="lot introuvable")
+    return batch
+
+
+@app.post(
+    "/reference-exploitations/{exploitation_id}/coordinated-deliverables",
+    response_model=CoordinatedDeliverableBatchOut,
+    status_code=201,
+)
+def create_coordinated_deliverable_batch(
+    exploitation_id: int,
+    payload: CoordinatedDeliverableBatchCreateRequest,
+    db: DbSession,
+    llm: LLM,
+) -> CoordinatedDeliverableBatchOut:
+    """Produit un lot de livrables coordonnés depuis une exploitation **approuvée**. N'exécute rien.
+
+    Exploitation absente → 404 ; non approuvée → 409 ; demande invalide (hors 2..5) → 422.
+    """
+    try:
+        exploitation = load_approved_exploitation(db, exploitation_id)
+    except ExploitationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="exploitation introuvable") from exc
+    except ExploitationNotApprovedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        batch = generate_batch(
+            db, llm, exploitation, payload, llm_model=get_settings().anthropic_model
+        )
+    except InvalidBatchRequestError as exc:
+        raise HTTPException(
+            status_code=422, detail="il faut entre 2 et 5 livrables demandés"
+        ) from exc
+    log_product_event(
+        db,
+        "coordinated_batch_created",
+        "phase10",
+        "coordinated_batch",
+        batch.id,
+        batch.status,
+    )
+    return CoordinatedDeliverableBatchOut.model_validate(batch)
+
+
+@app.get(
+    "/reference-exploitations/{exploitation_id}/coordinated-deliverables",
+    response_model=list[CoordinatedDeliverableBatchOut],
+)
+def list_coordinated_deliverable_batches(
+    exploitation_id: int, db: DbSession
+) -> list[CoordinatedDeliverableBatchOut]:
+    """Liste les lots coordonnés d'une exploitation, du plus récent au plus ancien."""
+    return [
+        CoordinatedDeliverableBatchOut.model_validate(row)
+        for row in list_batches(db, exploitation_id)
+    ]
+
+
+@app.get(
+    "/coordinated-deliverable-batches/{batch_id}",
+    response_model=CoordinatedDeliverableBatchOut,
+)
+def get_coordinated_deliverable_batch(
+    batch_id: int, db: DbSession
+) -> CoordinatedDeliverableBatchOut:
+    """Retourne un lot coordonné précis."""
+    return CoordinatedDeliverableBatchOut.model_validate(_get_batch_or_404(db, batch_id))
+
+
+@app.get(
+    "/coordinated-deliverable-batches/{batch_id}/items",
+    response_model=list[CoordinatedDeliverableItemOut],
+)
+def get_coordinated_deliverable_batch_items(
+    batch_id: int, db: DbSession
+) -> list[CoordinatedDeliverableItemOut]:
+    """Retourne les items d'un lot, dans l'ordre de coordination."""
+    _get_batch_or_404(db, batch_id)
+    return [CoordinatedDeliverableItemOut.model_validate(row) for row in list_items(db, batch_id)]
+
+
+@app.get(
+    "/coordinated-deliverable-batches/{batch_id}/provenance",
+    response_model=CoordinatedDeliverableBatchProvenanceOut,
+)
+def get_coordinated_deliverable_batch_provenance(
+    batch_id: int, db: DbSession
+) -> CoordinatedDeliverableBatchProvenanceOut:
+    """Retourne la provenance d'un lot : exploitation, livrable, référence, version."""
+    return CoordinatedDeliverableBatchProvenanceOut.model_validate(_get_batch_or_404(db, batch_id))
+
+
+@app.get(
+    "/coordinated-deliverable-items/{item_id}",
+    response_model=CoordinatedDeliverableItemOut,
+)
+def get_coordinated_deliverable_item(item_id: int, db: DbSession) -> CoordinatedDeliverableItemOut:
+    """Retourne un item individuel d'un lot coordonné."""
+    item = db.get(CoordinatedDeliverableItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="item introuvable")
+    return CoordinatedDeliverableItemOut.model_validate(item)
+
+
+@app.post(
+    "/coordinated-deliverable-batches/{batch_id}/approve",
+    response_model=CoordinatedDeliverableBatchOut,
+)
+def approve_coordinated_deliverable_batch(
+    batch_id: int, db: DbSession
+) -> CoordinatedDeliverableBatchOut:
+    """Validation CEO du lot : passe en `approved`. Aucun déploiement, aucune livraison externe."""
+    batch = set_batch_status(db, _get_batch_or_404(db, batch_id), "approved")
+    log_product_event(
+        db, "coordinated_batch_approved", "phase10", "coordinated_batch", batch.id, batch.status
+    )
+    return CoordinatedDeliverableBatchOut.model_validate(batch)
+
+
+@app.post(
+    "/coordinated-deliverable-batches/{batch_id}/request-revision",
+    response_model=CoordinatedDeliverableBatchOut,
+)
+def request_revision_coordinated_deliverable_batch(
+    batch_id: int, db: DbSession
+) -> CoordinatedDeliverableBatchOut:
+    """Demande de révision du lot : passe en `revision_requested`. Ne relance rien."""
+    batch = set_batch_status(db, _get_batch_or_404(db, batch_id), "revision_requested")
+    log_product_event(
+        db,
+        "coordinated_batch_revision_requested",
+        "phase10",
+        "coordinated_batch",
+        batch.id,
+        batch.status,
+    )
+    return CoordinatedDeliverableBatchOut.model_validate(batch)

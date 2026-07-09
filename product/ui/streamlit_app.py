@@ -1091,6 +1091,204 @@ def render_exploitation_actions(client: SolutionPlansAPIClient, item: dict[str, 
             )
 
 
+COORDINATED_NOTICE = (
+    "Ces livrables sont **candidats et coordonnés**. Ils ne déclenchent aucun déploiement, aucune "
+    "livraison externe et aucune modification automatique du repo. **Le CEO valide le lot.**"
+)
+
+COORDINATED_DELIVERABLE_TYPES = [
+    "mvp_backlog",
+    "technical_implementation_plan",
+    "test_plan",
+    "api_spec",
+    "api_test_plan",
+    "validation_checklist",
+    "technical_spec",
+    "text_architecture",
+    "technical_risks",
+    "user_documentation",
+    "operator_guide",
+    "delivery_checklist",
+    "system_prompt",
+    "evaluation_plan",
+    "product_plan",
+    "short_roadmap",
+]
+
+
+def render_coordinated_create(client: SolutionPlansAPIClient) -> None:
+    """Coordonnés — choisir une exploitation approuvée et produire un lot cohérent."""
+    st.header("1. Coordonner un lot depuis une exploitation approuvée")
+    st.caption(COORDINATED_NOTICE)
+    exploitation_id_input = st.number_input(
+        "ID de l'exploitation",
+        min_value=1,
+        step=1,
+        value=st.session_state.get("selected_exploitation_id", 1) or 1,
+        key="coordinated_exploitation_id",
+    )
+    exploitation_id = int(exploitation_id_input)
+
+    try:
+        exploitation = client.get_reference_exploitation(exploitation_id)
+    except APIError as exc:
+        st.warning(f"Impossible de récupérer l'exploitation : {exc}")
+        return
+
+    st.write(f"**Statut de l'exploitation :** {status_badge(exploitation.get('status', ''))}")
+    st.write(
+        f"**Provenance :** livrable #{exploitation.get('deliverable_id')} · "
+        f"référence #{exploitation.get('reference_id')} · "
+        f"version #{exploitation.get('reference_version_id')} · "
+        f"V{exploitation.get('reference_version_number')}"
+    )
+    if exploitation.get("status") != "approved":
+        st.info(
+            "L'exploitation doit être **approuvée** avant de coordonner un lot. Approuvez-la "
+            "d'abord (onglet « Exploiter une référence »)."
+        )
+        return
+
+    with st.form("submit_coordinated"):
+        title = st.text_input("Titre du lot")
+        objective = st.text_area("Objectif du lot")
+        requested = st.multiselect("Livrables demandés (2 à 5)", COORDINATED_DELIVERABLE_TYPES)
+        coordination_instructions = st.text_area(
+            "Instructions de coordination",
+            value="Les livrables doivent être cohérents entre eux et éviter les contradictions.",
+        )
+        constraints = st.text_area(
+            "Contraintes",
+            value="Ne pas écrire le code complet. Ne pas modifier le repo. Ne pas déployer.",
+        )
+        acceptance_focus = st.text_input("Critères d'acceptation à privilégier")
+        submitted = st.form_submit_button("Produire un lot de livrables coordonnés")
+
+    if not submitted:
+        return
+    if not title.strip() or not objective.strip():
+        st.error("Le titre et l'objectif sont obligatoires.")
+        return
+    if not 2 <= len(requested) <= 5:
+        st.error("Sélectionnez entre 2 et 5 livrables.")
+        return
+    with st.spinner("AI-SOS coordonne le lot (Reader → Planner → Producer → Cohérence → Qualité)…"):
+        try:
+            batch = client.create_coordinated_deliverable_batch(
+                exploitation_id,
+                title.strip(),
+                objective.strip(),
+                requested,
+                coordination_instructions.strip(),
+                constraints.strip(),
+                acceptance_focus.strip(),
+            )
+        except APIError as exc:
+            st.error(f"Coordination impossible : {exc}")
+            return
+    if batch.get("status") == "draft":
+        st.warning(
+            "Lot enregistré en **brouillon** : la génération LLM a échoué "
+            f"(clé API manquante ?). Erreur : {batch.get('error', '')}"
+        )
+    else:
+        st.success(f"Lot coordonné #{batch.get('id')} créé depuis l'exploitation.")
+    st.session_state["coordinated_exploitation_id_active"] = exploitation_id
+    st.session_state["selected_batch_id"] = batch.get("id")
+
+
+def render_coordinated_list(client: SolutionPlansAPIClient) -> None:
+    """Coordonnés — lister les lots d'une exploitation et en sélectionner un."""
+    st.header("2. Lots coordonnés de l'exploitation")
+    exploitation_id = st.session_state.get("coordinated_exploitation_id_active") or int(
+        st.session_state.get("coordinated_exploitation_id", 0) or 0
+    )
+    if not exploitation_id:
+        st.info("Produisez un lot ci-dessus pour le retrouver ici.")
+        return
+    try:
+        batches = client.list_coordinated_deliverable_batches(int(exploitation_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les lots : {exc}")
+        return
+    if not batches:
+        st.info("Aucun lot pour cette exploitation.")
+        return
+    for batch in batches:
+        st.markdown(
+            f"- **#{batch.get('id')}** · {status_badge(batch.get('status', ''))} · "
+            f"{batch.get('title', '')}"
+        )
+    ids = [int(batch["id"]) for batch in batches]
+    current = st.session_state.get("selected_batch_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox("Sélectionner un lot à détailler", ids, index=default_index)
+    st.session_state["selected_batch_id"] = selected
+
+
+def render_coordinated_detail(client: SolutionPlansAPIClient) -> None:
+    """Coordonnés — détail du lot, items et actions CEO."""
+    st.header("3. Détail du lot sélectionné")
+    batch_id = st.session_state.get("selected_batch_id")
+    if batch_id is None:
+        st.info("Sélectionnez un lot dans la liste.")
+        return
+    try:
+        batch = client.get_coordinated_deliverable_batch(int(batch_id))
+        items = client.list_coordinated_deliverable_items(int(batch_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer le lot : {exc}")
+        return
+
+    st.subheader(f"#{batch.get('id')} — {batch.get('title', '')}")
+    st.write(f"**Statut :** {status_badge(batch.get('status', ''))}")
+    st.write(
+        f"**Provenance :** exploitation #{batch.get('exploitation_id')} · "
+        f"livrable #{batch.get('deliverable_id')} · référence #{batch.get('reference_id')} · "
+        f"V{batch.get('reference_version_number')}"
+    )
+    if batch.get("error"):
+        st.error(f"Erreur historisée : {batch['error']}")
+
+    _section("Plan de coordination", batch.get("coordination_plan", ""))
+    _section("Revue de cohérence inter-livrables", batch.get("coherence_review", ""))
+    _section("Risques", batch.get("risks", ""))
+    _section("Notes de validation CEO", batch.get("ceo_validation_notes", ""))
+    _section("Notes de provenance", batch.get("provenance_notes", ""))
+
+    st.markdown(f"**Items du lot ({len(items)})**")
+    for item in items:
+        with st.expander(
+            f"[{item.get('order_index')}] {item.get('item_type')} — {item.get('title', '')}"
+        ):
+            _section("Contenu", item.get("content", ""))
+            _section("Dépendances", item.get("dependencies", ""))
+            _section("Notes de cohérence", item.get("consistency_notes", ""))
+            _section("Notes de validation", item.get("validation_notes", ""))
+
+    render_coordinated_actions(client, batch)
+
+
+def render_coordinated_actions(client: SolutionPlansAPIClient, batch: dict[str, Any]) -> None:
+    """Coordonnés — actions de gouvernance CEO (approuver / demander révision du lot)."""
+    st.markdown("**Validation CEO du lot**")
+    st.caption(COORDINATED_NOTICE)
+    batch_id = int(batch["id"])
+    col_approve, col_revision = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approuver le lot"):
+            _act(
+                lambda: client.approve_coordinated_deliverable_batch(batch_id),
+                "Lot approuvé (aucune exécution déclenchée).",
+            )
+    with col_revision:
+        if st.button("🟠 Demander une révision du lot", key="coordinated_revision"):
+            _act(
+                lambda: client.request_coordinated_deliverable_batch_revision(batch_id),
+                "Révision du lot demandée.",
+            )
+
+
 def render_observability_summary(client: SolutionPlansAPIClient) -> None:
     """Observabilité — résumé (compteurs, durée moyenne, répartitions)."""
     st.header("1. Résumé")
@@ -1207,6 +1405,7 @@ def main() -> None:
         tab_version,
         tab_reference,
         tab_exploitation,
+        tab_coordinated,
         tab_observability,
     ) = st.tabs(
         [
@@ -1217,6 +1416,7 @@ def main() -> None:
             "Itérer sur un livrable",
             "Consolider une référence",
             "Exploiter une référence",
+            "Livrables coordonnés",
             "Observabilité",
         ]
     )
@@ -1248,6 +1448,10 @@ def main() -> None:
         render_exploitation_create(client)
         render_exploitations_list(client)
         render_exploitation_detail(client)
+    with tab_coordinated:
+        render_coordinated_create(client)
+        render_coordinated_list(client)
+        render_coordinated_detail(client)
     with tab_observability:
         render_observability_summary(client)
         render_observability_llm_calls(client)
