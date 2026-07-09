@@ -288,6 +288,62 @@ class SolutionPlansAPIClient:
         )
         return result
 
+    # --- Phase 9 : exploitation de la référence consolidée ------------------
+    def create_reference_exploitation(
+        self,
+        deliverable_id: int,
+        next_step_type: str,
+        title: str,
+        instructions: str,
+        constraints: str = "",
+        acceptance_focus: str = "",
+    ) -> dict[str, Any]:
+        """Exploite la référence active (`POST /deliverables/{id}/reference-exploitations`)."""
+        payload = {
+            "next_step_type": next_step_type,
+            "title": title,
+            "instructions": instructions,
+            "constraints": constraints,
+            "acceptance_focus": acceptance_focus,
+        }
+        result: dict[str, Any] = self._request(
+            "POST", f"/deliverables/{deliverable_id}/reference-exploitations", json=payload
+        )
+        return result
+
+    def list_reference_exploitations(self, deliverable_id: int) -> list[dict[str, Any]]:
+        """Liste les exploitations d'un livrable (`GET .../reference-exploitations`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/deliverables/{deliverable_id}/reference-exploitations"
+        )
+        return result
+
+    def get_reference_exploitation(self, exploitation_id: int) -> dict[str, Any]:
+        """Retourne une exploitation précise (`GET /reference-exploitations/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/reference-exploitations/{exploitation_id}")
+        return result
+
+    def get_reference_exploitation_provenance(self, exploitation_id: int) -> dict[str, Any]:
+        """Provenance de la référence utilisée (`GET /reference-exploitations/{id}/provenance`)."""
+        result: dict[str, Any] = self._request(
+            "GET", f"/reference-exploitations/{exploitation_id}/provenance"
+        )
+        return result
+
+    def approve_reference_exploitation(self, exploitation_id: int) -> dict[str, Any]:
+        """Validation CEO (`POST /reference-exploitations/{id}/approve`). Aucune exécution."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/reference-exploitations/{exploitation_id}/approve"
+        )
+        return result
+
+    def request_reference_exploitation_revision(self, exploitation_id: int) -> dict[str, Any]:
+        """Demande de révision (`POST /reference-exploitations/{id}/request-revision`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/reference-exploitations/{exploitation_id}/request-revision"
+        )
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,

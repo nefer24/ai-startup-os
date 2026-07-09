@@ -251,6 +251,53 @@ class DeliverableReference(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
 
 
+class ReferenceExploitation(Base):
+    """Exploitation candidate d'une **référence officielle** d'un livrable (Phase 9).
+
+    À partir de la **référence active** consolidée par le CEO (Phase 7), AI-SOS prépare une
+    **prochaine étape contrôlée** (plan d'implémentation, cahier dérivé, plan de tests, backlog,
+    spécification, documentation…). La **référence utilisée est snapshotée** au moment de la
+    création : si la référence active change plus tard, l'exploitation reste liée à celle utilisée.
+
+    Cette phase **exploite seulement** : elle ne choisit pas la meilleure version, ne change pas la
+    référence, ne produit pas plusieurs livrables coordonnés, ne déploie rien, ne livre rien et ne
+    modifie pas le repo. Reste **candidate** jusqu'à validation CEO ; jamais présentée comme finale.
+    """
+
+    __tablename__ = "reference_exploitations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Provenance : référence officielle utilisée (snapshot figé au moment de la création).
+    deliverable_id: Mapped[int] = mapped_column(default=0)
+    reference_id: Mapped[int] = mapped_column(default=0)
+    reference_version_id: Mapped[int] = mapped_column(default=0)
+    reference_version_number: Mapped[int] = mapped_column(default=0)
+    reference_content_snapshot: Mapped[str] = mapped_column(Text, default="")
+    reference_change_summary_snapshot: Mapped[str] = mapped_column(Text, default="")
+    # Demande CEO (prochaine étape choisie par le CEO, jamais automatiquement).
+    next_step_type: Mapped[str] = mapped_column(String, default="")
+    title: Mapped[str] = mapped_column(String, default="")
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    constraints: Mapped[str] = mapped_column(Text, default="")
+    acceptance_focus: Mapped[str] = mapped_column(Text, default="")
+    # Production contrôlée.
+    exploitation_plan: Mapped[str] = mapped_column(Text, default="")
+    candidate_output: Mapped[str] = mapped_column(Text, default="")
+    quality_review: Mapped[str] = mapped_column(Text, default="")
+    risks: Mapped[str] = mapped_column(Text, default="")
+    ceo_validation_notes: Mapped[str] = mapped_column(Text, default="")
+    provenance_notes: Mapped[str] = mapped_column(Text, default="")
+    # Statut de gouvernance : draft / candidate / approved / revision_requested.
+    status: Mapped[str] = mapped_column(String, default="candidate")
+    # Audit / diagnostic (optionnels).
+    raw_agent_outputs: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    llm_model: Mapped[str] = mapped_column(String, default="")
+    # Horodatages.
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class LLMCallLog(Base):
     """Journal d'un appel LLM exécuté par le runtime produit (Phase 8, observabilité).
 
