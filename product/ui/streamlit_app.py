@@ -921,6 +921,100 @@ def render_reference_history(client: SolutionPlansAPIClient) -> None:
         )
 
 
+def render_observability_summary(client: SolutionPlansAPIClient) -> None:
+    """Observabilité — résumé (compteurs, durée moyenne, répartitions)."""
+    st.header("1. Résumé")
+    st.caption(
+        "Lecture seule : ces vues journalisent l'exécution du runtime "
+        "(appels LLM et événements produit) sans rien déclencher."
+    )
+    try:
+        summary = client.get_observability_summary()
+    except APIError as exc:
+        st.error(f"Impossible de récupérer le résumé : {exc}")
+        return
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Appels LLM", summary.get("total_llm_calls", 0))
+    col2.metric("Succès", summary.get("successful_llm_calls", 0))
+    col3.metric("Échecs", summary.get("failed_llm_calls", 0))
+    col4.metric("Durée moy. (ms)", summary.get("average_duration_ms", 0))
+
+    st.metric("Événements produit", summary.get("total_events", 0))
+    calls_by_phase = summary.get("llm_calls_by_phase", {})
+    events_by_phase = summary.get("events_by_phase", {})
+    if calls_by_phase:
+        st.write("**Appels LLM par phase :** ", calls_by_phase)
+    if events_by_phase:
+        st.write("**Événements par phase :** ", events_by_phase)
+    latest_error = summary.get("latest_error")
+    if latest_error:
+        st.warning(f"Dernière erreur LLM : {latest_error}")
+
+
+def render_observability_llm_calls(client: SolutionPlansAPIClient) -> None:
+    """Observabilité — journal des appels LLM (récent d'abord), filtrable."""
+    st.header("2. Journal des appels LLM")
+    col_status, col_phase = st.columns(2)
+    status = col_status.text_input(
+        "Filtrer par statut (success / error)", key="obs_llm_status"
+    ).strip()
+    phase = col_phase.text_input("Filtrer par phase (ex. phase1)", key="obs_llm_phase").strip()
+    limit = int(
+        st.number_input("Limite", min_value=1, max_value=500, value=50, key="obs_llm_limit")
+    )
+    try:
+        calls = client.list_llm_call_logs(limit=limit, status=status, phase=phase)
+    except APIError as exc:
+        st.error(f"Impossible de récupérer le journal LLM : {exc}")
+        return
+    if not calls:
+        st.info("Aucun appel LLM journalisé (avec ces filtres).")
+        return
+    for call in calls:
+        marker = "✅" if call.get("status") == "success" else "❌"
+        with st.expander(
+            f"{marker} #{call.get('id')} · {call.get('phase')} · {call.get('agent_name')} "
+            f"· {call.get('operation_type')} · {call.get('duration_ms')} ms"
+        ):
+            st.write(
+                f"**Fournisseur :** {call.get('provider')} · **Modèle :** {call.get('model')} "
+                f"· **Statut :** {status_badge(call.get('status', ''))}"
+            )
+            st.caption(f"Horodatage : {call.get('created_at', '')}")
+            _section("Prompt (aperçu tronqué)", call.get("prompt_preview", ""))
+            _section("Réponse (aperçu tronqué)", call.get("response_preview", ""))
+            if call.get("error"):
+                _section("Erreur", call.get("error", ""))
+
+
+def render_observability_events(client: SolutionPlansAPIClient) -> None:
+    """Observabilité — journal des événements produit (récent d'abord), filtrable."""
+    st.header("3. Journal des événements produit")
+    col_phase, col_entity = st.columns(2)
+    phase = col_phase.text_input("Filtrer par phase", key="obs_evt_phase").strip()
+    entity_type = col_entity.text_input(
+        "Filtrer par type d'entité (ex. solution_plan)", key="obs_evt_entity"
+    ).strip()
+    limit = int(
+        st.number_input("Limite", min_value=1, max_value=500, value=50, key="obs_evt_limit")
+    )
+    try:
+        events = client.list_product_event_logs(limit=limit, phase=phase, entity_type=entity_type)
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les événements : {exc}")
+        return
+    if not events:
+        st.info("Aucun événement produit journalisé (avec ces filtres).")
+        return
+    for event in events:
+        st.markdown(
+            f"- **{event.get('event_type')}** · {event.get('phase')} · "
+            f"{event.get('entity_type')} #{event.get('entity_id')} · "
+            f"{status_badge(event.get('status', ''))} · {event.get('created_at', '')}"
+        )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -942,6 +1036,7 @@ def main() -> None:
         tab_deliverable,
         tab_version,
         tab_reference,
+        tab_observability,
     ) = st.tabs(
         [
             "Créer une solution",
@@ -950,6 +1045,7 @@ def main() -> None:
             "Produire un livrable encadré",
             "Itérer sur un livrable",
             "Consolider une référence",
+            "Observabilité",
         ]
     )
     with tab_create:
@@ -976,6 +1072,10 @@ def main() -> None:
         render_reference_consolidate(client)
         render_reference_active(client)
         render_reference_history(client)
+    with tab_observability:
+        render_observability_summary(client)
+        render_observability_llm_calls(client)
+        render_observability_events(client)
 
 
 if __name__ == "__main__":

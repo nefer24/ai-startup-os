@@ -26,11 +26,15 @@ from app.company_agents import (
     build_expert_cells,
 )
 from app.db import SolutionImprovement, SolutionPlan, SpecializedAICompany
+from app.observability import observed
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from app.llm import LLMClient
+
+_PHASE = "phase4b-r"
+_OP = "compose_company"
 
 
 class SourceNotFoundError(Exception):
@@ -132,11 +136,19 @@ def generate_specialized_company(
         status="candidate",
     )
     try:
-        design = AICompanyArchitect(llm).run(data)
-        specialties = DepartmentSpecialtyDesigner(llm).run(data, design.departments)
+        design = AICompanyArchitect(
+            observed(llm, session, _PHASE, AICompanyArchitect.name, _OP, llm_model)
+        ).run(data)
+        specialties = DepartmentSpecialtyDesigner(
+            observed(llm, session, _PHASE, DepartmentSpecialtyDesigner.name, _OP, llm_model)
+        ).run(data, design.departments)
         expert_cells = build_expert_cells(specialties)
-        debate = DebateProtocolArchitect(llm).run(data)
-        delivery = DeliveryGovernanceReviewer(llm).run(data, design.company_goal)
+        debate = DebateProtocolArchitect(
+            observed(llm, session, _PHASE, DebateProtocolArchitect.name, _OP, llm_model)
+        ).run(data)
+        delivery = DeliveryGovernanceReviewer(
+            observed(llm, session, _PHASE, DeliveryGovernanceReviewer.name, _OP, llm_model)
+        ).run(data, design.company_goal)
 
         company.ai_company_name = design.ai_company_name
         company.company_mission = design.company_mission

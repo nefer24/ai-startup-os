@@ -40,10 +40,18 @@ class SolutionPlansAPIClient:
         """URL de base de l'API (sans slash final)."""
         return self._base_url
 
-    def _request(self, method: str, path: str, json: dict[str, Any] | None = None) -> Any:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         """Effectue un appel HTTP et retourne le corps JSON, ou lève `APIError`."""
+        # N'envoie que les paramètres réellement fournis (filtres optionnels).
+        clean_params = {k: v for k, v in (params or {}).items() if v not in (None, "")}
         try:
-            response = self._client.request(method, path, json=json)
+            response = self._client.request(method, path, json=json, params=clean_params)
         except httpx.HTTPError as exc:
             raise APIError(
                 f"Impossible de joindre l'API ({self._base_url}). "
@@ -278,4 +286,48 @@ class SolutionPlansAPIClient:
         result: list[dict[str, Any]] = self._request(
             "GET", f"/deliverables/{deliverable_id}/reference-history"
         )
+        return result
+
+    # --- Phase 8 : observabilité (lecture seule) ----------------------------
+    def list_llm_call_logs(
+        self,
+        limit: int = 50,
+        status: str = "",
+        phase: str = "",
+        agent_name: str = "",
+        operation_type: str = "",
+    ) -> list[dict[str, Any]]:
+        """Journal des appels LLM (`GET /observability/llm-calls`), filtres optionnels."""
+        params = {
+            "limit": limit,
+            "status": status,
+            "phase": phase,
+            "agent_name": agent_name,
+            "operation_type": operation_type,
+        }
+        result: list[dict[str, Any]] = self._request(
+            "GET", "/observability/llm-calls", params=params
+        )
+        return result
+
+    def list_product_event_logs(
+        self,
+        limit: int = 50,
+        phase: str = "",
+        entity_type: str = "",
+        event_type: str = "",
+    ) -> list[dict[str, Any]]:
+        """Journal des événements produit (`GET /observability/events`), filtres optionnels."""
+        params = {
+            "limit": limit,
+            "phase": phase,
+            "entity_type": entity_type,
+            "event_type": event_type,
+        }
+        result: list[dict[str, Any]] = self._request("GET", "/observability/events", params=params)
+        return result
+
+    def get_observability_summary(self) -> dict[str, Any]:
+        """Résumé d'observabilité (`GET /observability/summary`)."""
+        result: dict[str, Any] = self._request("GET", "/observability/summary")
         return result

@@ -22,12 +22,16 @@ from app.deliverable_agents import (
     ExpertCellSynthesizer,
     QualityGovernanceReviewer,
 )
+from app.observability import observed
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from app.llm import LLMClient
     from app.schemas import DeliverableCreateRequest
+
+_PHASE = "phase5"
+_OP = "produce_deliverable"
 
 
 class CompanyNotFoundError(Exception):
@@ -104,10 +108,18 @@ def generate_deliverable(
         status="candidate",
     )
     try:
-        plan = DeliverablePlanner(llm).run(data)
-        synthesis = ExpertCellSynthesizer(llm).run(data, plan.structure)
-        content = DeliverableProducer(llm).run(data, plan.structure, synthesis)
-        quality = QualityGovernanceReviewer(llm).run(data, content)
+        plan = DeliverablePlanner(
+            observed(llm, session, _PHASE, DeliverablePlanner.name, _OP, llm_model)
+        ).run(data)
+        synthesis = ExpertCellSynthesizer(
+            observed(llm, session, _PHASE, ExpertCellSynthesizer.name, _OP, llm_model)
+        ).run(data, plan.structure)
+        content = DeliverableProducer(
+            observed(llm, session, _PHASE, DeliverableProducer.name, _OP, llm_model)
+        ).run(data, plan.structure, synthesis)
+        quality = QualityGovernanceReviewer(
+            observed(llm, session, _PHASE, QualityGovernanceReviewer.name, _OP, llm_model)
+        ).run(data, content)
 
         deliverable.content = content
         deliverable.production_notes = plan.production_notes

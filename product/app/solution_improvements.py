@@ -19,12 +19,16 @@ from app.improvement_agents import (
     ImprovementInput,
     WeaknessReviewer,
 )
+from app.observability import observed
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from app.llm import LLMClient
     from app.schemas import ImprovementCreateRequest
+
+_PHASE = "phase3"
+_OP = "create_improvement"
 
 
 def generate_improvement(
@@ -57,12 +61,18 @@ def generate_improvement(
         status="candidate",
     )
     try:
-        analysis = ExistingSolutionAnalyst(llm).run(data)
-        weaknesses = WeaknessReviewer(llm).run(data, analysis.analysis)
-        proposal = ImprovementArchitect(llm).run(data, analysis.analysis, weaknesses)
-        differentiation = DifferentiationReviewer(llm).run(
-            data, proposal.improved_solution_candidate
-        )
+        analysis = ExistingSolutionAnalyst(
+            observed(llm, session, _PHASE, ExistingSolutionAnalyst.name, _OP, llm_model)
+        ).run(data)
+        weaknesses = WeaknessReviewer(
+            observed(llm, session, _PHASE, WeaknessReviewer.name, _OP, llm_model)
+        ).run(data, analysis.analysis)
+        proposal = ImprovementArchitect(
+            observed(llm, session, _PHASE, ImprovementArchitect.name, _OP, llm_model)
+        ).run(data, analysis.analysis, weaknesses)
+        differentiation = DifferentiationReviewer(
+            observed(llm, session, _PHASE, DifferentiationReviewer.name, _OP, llm_model)
+        ).run(data, proposal.improved_solution_candidate)
 
         improvement.existing_solution_analysis = analysis.analysis
         improvement.identified_strengths = analysis.strengths

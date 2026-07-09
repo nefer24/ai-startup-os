@@ -12,12 +12,16 @@ from typing import TYPE_CHECKING
 
 from app.agents import AgentInput, Analyst, RiskReviewer, SolutionArchitect
 from app.db import SolutionPlan
+from app.observability import observed
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from app.llm import LLMClient
     from app.schemas import SolutionPlanCreateRequest
+
+_PHASE = "phase1"
+_OP = "create_plan"
 
 
 def generate_solution_plan(
@@ -44,9 +48,13 @@ def generate_solution_plan(
         status="candidate",
     )
     try:
-        analysis = Analyst(llm).run(data)
-        candidate_plan = SolutionArchitect(llm).run(data, analysis)
-        review = RiskReviewer(llm).run(data, analysis, candidate_plan)
+        analysis = Analyst(observed(llm, session, _PHASE, Analyst.name, _OP, llm_model)).run(data)
+        candidate_plan = SolutionArchitect(
+            observed(llm, session, _PHASE, SolutionArchitect.name, _OP, llm_model)
+        ).run(data, analysis)
+        review = RiskReviewer(
+            observed(llm, session, _PHASE, RiskReviewer.name, _OP, llm_model)
+        ).run(data, analysis, candidate_plan)
 
         plan.analysis = analysis
         plan.candidate_plan = candidate_plan
