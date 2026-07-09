@@ -51,6 +51,14 @@ Endpoints Phase 8 (Observabilité — lecture seule) :
   * GET  /observability/events                   — journal des événements produit.
   * GET  /observability/summary                  — résumé (compteurs, durée moyenne, répartitions).
 
+Endpoints Phase 9 (Exploitation de la référence consolidée) :
+  * POST /deliverables/{id}/reference-exploitations       — exploite la référence active.
+  * GET  /deliverables/{id}/reference-exploitations       — liste les exploitations du livrable.
+  * GET  /reference-exploitations/{id}                    — relit une exploitation.
+  * GET  /reference-exploitations/{id}/provenance         — référence utilisée (provenance).
+  * POST /reference-exploitations/{id}/approve            — validation CEO (statut approved).
+  * POST /reference-exploitations/{id}/request-revision   — demande de révision.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -80,6 +88,7 @@ from app.db import (
     CompanyDeliverable,
     DeliverableVersion,
     LLMResult,
+    ReferenceExploitation,
     SolutionImprovement,
     SolutionPlan,
     SpecializedAICompany,
@@ -108,6 +117,19 @@ from app.observability import (
     log_product_event,
     observability_summary,
 )
+from app.reference_exploitations import (
+    DeliverableNotFoundError as ExploitationDeliverableNotFoundError,
+)
+from app.reference_exploitations import (
+    NoActiveReferenceError,
+    generate_exploitation,
+    list_exploitations,
+    load_active_reference,
+    set_exploitation_status,
+)
+from app.reference_exploitations import (
+    load_deliverable as load_exploitation_deliverable,
+)
 from app.schemas import (
     DeliverableCreateRequest,
     DeliverableOut,
@@ -121,6 +143,9 @@ from app.schemas import (
     LLMResultOut,
     LLMTestRequest,
     ProductEventLogOut,
+    ReferenceExploitationCreateRequest,
+    ReferenceExploitationOut,
+    ReferenceExploitationProvenanceOut,
     SetReferenceRequest,
     SolutionPlanCreateRequest,
     SolutionPlanOut,
@@ -657,3 +682,132 @@ def observability_events(
 def observability_summary_endpoint(db: DbSession) -> dict[str, Any]:
     """Résumé d'observabilité : compteurs, durée moyenne, répartitions, dernière erreur."""
     return observability_summary(db)
+
+
+# ---------------------------------------------------------------------------
+# Phase 9 — Exploitation contrôlée de la référence officielle consolidée.
+# Utilise UNIQUEMENT la référence active choisie par le CEO ; ne la change jamais,
+# ne choisit pas une autre version, ne déploie rien, ne modifie pas le repo.
+# ---------------------------------------------------------------------------
+def _get_exploitation_or_404(db: Session, exploitation_id: int) -> ReferenceExploitation:
+    """Récupère une exploitation par id ou lève 404."""
+    exploitation = db.get(ReferenceExploitation, exploitation_id)
+    if exploitation is None:
+        raise HTTPException(status_code=404, detail="exploitation introuvable")
+    return exploitation
+
+
+@app.post(
+    "/deliverables/{deliverable_id}/reference-exploitations",
+    response_model=ReferenceExploitationOut,
+    status_code=201,
+)
+def create_reference_exploitation(
+    deliverable_id: int,
+    payload: ReferenceExploitationCreateRequest,
+    db: DbSession,
+    llm: LLM,
+) -> ReferenceExploitationOut:
+    """Exploite la **référence active** d'un livrable comme base d'une prochaine étape candidate.
+
+    N'exécute rien d'autre : ne change pas la référence, ne choisit pas une autre version, ne
+    déploie rien, ne modifie pas le repo. Livrable absent → 404 ; aucune référence active → 409.
+    """
+    try:
+        deliverable = load_exploitation_deliverable(db, deliverable_id)
+    except ExploitationDeliverableNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="livrable introuvable") from exc
+    try:
+        reference = load_active_reference(db, deliverable_id)
+    except NoActiveReferenceError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="aucune référence active — consolidez d'abord une version (Phase 7)",
+        ) from exc
+    exploitation = generate_exploitation(
+        db, llm, deliverable, reference, payload, llm_model=get_settings().anthropic_model
+    )
+    log_product_event(
+        db,
+        "reference_exploitation_created",
+        "phase9",
+        "reference_exploitation",
+        exploitation.id,
+        exploitation.status,
+    )
+    return ReferenceExploitationOut.model_validate(exploitation)
+
+
+@app.get(
+    "/deliverables/{deliverable_id}/reference-exploitations",
+    response_model=list[ReferenceExploitationOut],
+)
+def list_reference_exploitations(
+    deliverable_id: int, db: DbSession
+) -> list[ReferenceExploitationOut]:
+    """Liste les exploitations d'un livrable, de la plus récente à la plus ancienne."""
+    return [
+        ReferenceExploitationOut.model_validate(row)
+        for row in list_exploitations(db, deliverable_id)
+    ]
+
+
+@app.get("/reference-exploitations/{exploitation_id}", response_model=ReferenceExploitationOut)
+def get_reference_exploitation(exploitation_id: int, db: DbSession) -> ReferenceExploitationOut:
+    """Retourne une exploitation précise."""
+    return ReferenceExploitationOut.model_validate(_get_exploitation_or_404(db, exploitation_id))
+
+
+@app.get(
+    "/reference-exploitations/{exploitation_id}/provenance",
+    response_model=ReferenceExploitationProvenanceOut,
+)
+def get_reference_exploitation_provenance(
+    exploitation_id: int, db: DbSession
+) -> ReferenceExploitationProvenanceOut:
+    """Retourne la provenance : la référence officielle utilisée par cette exploitation."""
+    return ReferenceExploitationProvenanceOut.model_validate(
+        _get_exploitation_or_404(db, exploitation_id)
+    )
+
+
+@app.post(
+    "/reference-exploitations/{exploitation_id}/approve",
+    response_model=ReferenceExploitationOut,
+)
+def approve_reference_exploitation(exploitation_id: int, db: DbSession) -> ReferenceExploitationOut:
+    """Validation CEO : passe l'exploitation en `approved`. Aucun déploiement, aucune livraison."""
+    exploitation = set_exploitation_status(
+        db, _get_exploitation_or_404(db, exploitation_id), "approved"
+    )
+    log_product_event(
+        db,
+        "reference_exploitation_approved",
+        "phase9",
+        "reference_exploitation",
+        exploitation.id,
+        exploitation.status,
+    )
+    return ReferenceExploitationOut.model_validate(exploitation)
+
+
+@app.post(
+    "/reference-exploitations/{exploitation_id}/request-revision",
+    response_model=ReferenceExploitationOut,
+)
+def request_revision_reference_exploitation(
+    exploitation_id: int, db: DbSession
+) -> ReferenceExploitationOut:
+    """Demande de révision CEO : passe l'exploitation en `revision_requested`. Ne relance rien."""
+    exploitation = set_exploitation_status(
+        db, _get_exploitation_or_404(db, exploitation_id), "revision_requested"
+    )
+    log_product_event(
+        db,
+        "reference_exploitation_revision_requested",
+        "phase9",
+        "reference_exploitation",
+        exploitation.id,
+        exploitation.status,
+    )
+    return ReferenceExploitationOut.model_validate(exploitation)

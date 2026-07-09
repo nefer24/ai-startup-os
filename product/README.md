@@ -397,8 +397,53 @@ aperçus tronqués) et le **journal des événements produit**. Toujours **via l
 > **L'observabilité ne fait qu'observer : elle journalise l'exécution mais ne déclenche aucune
 > production, aucun appel LLM, aucun déploiement et ne change aucun comportement métier.**
 
+## Phase 9 — Exploitation de la référence consolidée
+
+AI-SOS **exploite** la **référence officielle active** d'un livrable (consolidée par le CEO en
+Phase 7) comme **base contrôlée** d'une **prochaine étape candidate** : plan d'implémentation,
+cahier technique dérivé, plan de tests, checklist de production, backlog MVP, spécification API,
+plan de validation utilisateur, documentation dérivée, stratégie de livraison, prompt système…
+**Le CEO choisit le type de prochaine étape ; AI-SOS ne choisit jamais à sa place.**
+
+**Cette phase exploite seulement :** elle **ne choisit pas** la meilleure version, **ne change
+pas** la référence, ne produit **pas** plusieurs livrables coordonnés, ne déploie rien, ne livre
+rien, ne modifie pas le repo et n'implémente aucun multi-LLM.
+
+**Provenance & snapshot :** l'exploitation **snapshote** la référence utilisée (`reference_id`,
+`reference_version_id`, `reference_version_number`, contenu et résumé de changement). Si la
+référence active **change plus tard**, l'exploitation existante **reste liée** à celle utilisée à
+sa création.
+
+**Processus (4 vrais appels LLM, mockés en test) :** Reference Context Analyst → Next Step Planner
+→ Reference-Based Producer → Quality & Governance Reviewer. Sorties : `exploitation_plan`,
+`candidate_output`, `quality_review`, `risks`, `ceo_validation_notes`, `provenance_notes`.
+
+**Gouvernance :** l'exploitation reste **candidate** jusqu'à validation CEO ; l'approbation ne
+déclenche aucun déploiement, aucune livraison externe, aucune modification du repo ; échec d'un
+agent → `draft` avec erreur historisée. Les appels LLM et événements (`reference_exploitation_*`)
+sont **journalisés** par l'observabilité Phase 8 (`phase9`, opération `exploit_reference`).
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/deliverables/{id}/reference-exploitations` | exploite la référence active (404 livrable absent ; 409 aucune référence active) |
+| `GET` | `/deliverables/{id}/reference-exploitations` | liste les exploitations du livrable |
+| `GET` | `/reference-exploitations/{id}` | relit une exploitation |
+| `GET` | `/reference-exploitations/{id}/provenance` | référence utilisée (provenance) |
+| `POST` | `/reference-exploitations/{id}/approve` | validation CEO (statut `approved`) |
+| `POST` | `/reference-exploitations/{id}/request-revision` | demande de révision |
+
+**Interface :** onglet **« Exploiter une référence »** (Streamlit) — saisir l'ID du livrable,
+afficher sa **référence active** (id, version, snapshots), saisir `next_step_type`, `title`,
+`instructions`, `constraints`, `acceptance_focus`, **produire une exploitation candidate**, voir la
+**provenance**, le **détail** et **approuver / demander révision**. Toujours **via le client HTTP**.
+
+> **AI-SOS utilise uniquement la référence officielle active choisie par le CEO. Cette action ne
+> change pas la référence, ne déploie rien, ne livre rien et ne modifie pas le repo.**
+
 ## Prochaine tranche
 
-**Phase 9 (proposée)** — à cadrer par le CEO : production de plusieurs livrables coordonnés d'une
-même entreprise IA, exploitation de la référence consolidée comme base des prochaines étapes de
-production, ou export/synthèse des journaux d'observabilité.
+**Phase 10 (proposée)** — à cadrer par le CEO : production de plusieurs livrables coordonnés d'une
+même entreprise IA, chaînage de plusieurs exploitations successives, ou export/synthèse des
+journaux d'observabilité.

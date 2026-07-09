@@ -921,6 +921,176 @@ def render_reference_history(client: SolutionPlansAPIClient) -> None:
         )
 
 
+EXPLOITATION_NOTICE = (
+    "AI-SOS utilise **uniquement la référence officielle active** choisie par le CEO. Cette "
+    "action **ne change pas la référence**, ne déploie rien, ne livre rien et ne modifie pas "
+    "le repo. La sortie reste **candidate** jusqu'à validation CEO."
+)
+
+EXPLOITATION_NEXT_STEP_TYPES = [
+    "implementation_plan",
+    "technical_spec",
+    "test_plan",
+    "production_checklist",
+    "mvp_backlog",
+    "api_spec",
+    "user_validation_plan",
+    "derived_documentation",
+    "delivery_strategy",
+    "system_prompt",
+]
+
+
+def render_exploitation_create(client: SolutionPlansAPIClient) -> None:
+    """Exploitation — choisir un livrable, afficher sa référence active et produire une suite."""
+    st.header("1. Exploiter la référence officielle d'un livrable")
+    st.caption(EXPLOITATION_NOTICE)
+    deliverable_id_input = st.number_input(
+        "ID du livrable",
+        min_value=1,
+        step=1,
+        value=st.session_state.get("exploitation_deliverable_id", 1) or 1,
+        key="exploitation_deliverable_id",
+    )
+    deliverable_id = int(deliverable_id_input)
+
+    try:
+        reference = client.get_deliverable_reference(deliverable_id)
+    except APIError:
+        st.info(
+            "Aucune référence active pour ce livrable. Consolidez d'abord une version approuvée "
+            "(onglet « Consolider une référence »)."
+        )
+        return
+
+    st.subheader(
+        f"Référence active — V{reference.get('reference_version_number')} "
+        f"(reference_id #{reference.get('id')}, version #{reference.get('reference_version_id')})"
+    )
+    _section("Contenu de référence (snapshot)", reference.get("content_snapshot", ""))
+    _section("Résumé des changements (snapshot)", reference.get("change_summary_snapshot", ""))
+
+    with st.form("submit_exploitation"):
+        next_step_type = st.selectbox("Type de prochaine étape", EXPLOITATION_NEXT_STEP_TYPES)
+        title = st.text_input("Titre de la prochaine étape")
+        instructions = st.text_area("Instructions")
+        constraints = st.text_area("Contraintes", value="Ne pas modifier le repo. Ne pas déployer.")
+        acceptance_focus = st.text_input("Critères d'acceptation à privilégier")
+        submitted = st.form_submit_button("Produire une exploitation candidate depuis la référence")
+
+    if not submitted:
+        return
+    if not title.strip() or not instructions.strip():
+        st.error("Le titre et les instructions sont obligatoires.")
+        return
+    with st.spinner("AI-SOS exploite la référence (Analyst → Planner → Producer → Reviewer)…"):
+        try:
+            exploitation = client.create_reference_exploitation(
+                deliverable_id,
+                next_step_type,
+                title.strip(),
+                instructions.strip(),
+                constraints.strip(),
+                acceptance_focus.strip(),
+            )
+        except APIError as exc:
+            st.error(f"Exploitation impossible : {exc}")
+            return
+    if exploitation.get("status") == "draft":
+        st.warning(
+            "Exploitation enregistrée en **brouillon** : la génération LLM a échoué "
+            f"(clé API manquante ?). Erreur : {exploitation.get('error', '')}"
+        )
+    else:
+        st.success(f"Exploitation candidate #{exploitation.get('id')} créée depuis la référence.")
+    st.session_state["exploitation_deliverable_id_active"] = deliverable_id
+    st.session_state["selected_exploitation_id"] = exploitation.get("id")
+
+
+def render_exploitations_list(client: SolutionPlansAPIClient) -> None:
+    """Exploitation — lister les exploitations du livrable et en sélectionner une."""
+    st.header("2. Exploitations du livrable")
+    deliverable_id = st.session_state.get("exploitation_deliverable_id_active") or int(
+        st.session_state.get("exploitation_deliverable_id", 0) or 0
+    )
+    if not deliverable_id:
+        st.info("Produisez une exploitation ci-dessus pour la retrouver ici.")
+        return
+    try:
+        exploitations = client.list_reference_exploitations(int(deliverable_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les exploitations : {exc}")
+        return
+    if not exploitations:
+        st.info("Aucune exploitation pour ce livrable.")
+        return
+    for item in exploitations:
+        st.markdown(
+            f"- **#{item.get('id')}** · `{item.get('next_step_type')}` · "
+            f"{status_badge(item.get('status', ''))} · V{item.get('reference_version_number')} "
+            f"· {item.get('title', '')}"
+        )
+    ids = [int(item["id"]) for item in exploitations]
+    current = st.session_state.get("selected_exploitation_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox("Sélectionner une exploitation à détailler", ids, index=default_index)
+    st.session_state["selected_exploitation_id"] = selected
+
+
+def render_exploitation_detail(client: SolutionPlansAPIClient) -> None:
+    """Exploitation — détail complet + provenance + actions CEO."""
+    st.header("3. Détail de l'exploitation sélectionnée")
+    exploitation_id = st.session_state.get("selected_exploitation_id")
+    if exploitation_id is None:
+        st.info("Sélectionnez une exploitation dans la liste.")
+        return
+    try:
+        item = client.get_reference_exploitation(int(exploitation_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer l'exploitation : {exc}")
+        return
+
+    st.subheader(f"#{item.get('id')} — {item.get('title', '')}")
+    st.write(f"**Statut :** {status_badge(item.get('status', ''))}")
+    st.write(
+        f"**Provenance :** référence #{item.get('reference_id')} · "
+        f"version #{item.get('reference_version_id')} · "
+        f"V{item.get('reference_version_number')} · type `{item.get('next_step_type')}`"
+    )
+    if item.get("error"):
+        st.error(f"Erreur historisée : {item['error']}")
+
+    _section("Plan d'exploitation", item.get("exploitation_plan", ""))
+    _section("Candidat de sortie", item.get("candidate_output", ""))
+    _section("Revue qualité", item.get("quality_review", ""))
+    _section("Risques", item.get("risks", ""))
+    _section("Notes de validation CEO", item.get("ceo_validation_notes", ""))
+    _section("Notes de provenance", item.get("provenance_notes", ""))
+    _section("Contenu de référence utilisé (snapshot)", item.get("reference_content_snapshot", ""))
+
+    render_exploitation_actions(client, item)
+
+
+def render_exploitation_actions(client: SolutionPlansAPIClient, item: dict[str, Any]) -> None:
+    """Exploitation — actions de gouvernance CEO (approuver / demander révision)."""
+    st.markdown("**Validation CEO**")
+    st.caption(EXPLOITATION_NOTICE)
+    exploitation_id = int(item["id"])
+    col_approve, col_revision = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approuver cette exploitation"):
+            _act(
+                lambda: client.approve_reference_exploitation(exploitation_id),
+                "Exploitation approuvée (aucune exécution déclenchée).",
+            )
+    with col_revision:
+        if st.button("🟠 Demander une révision", key="exploitation_revision"):
+            _act(
+                lambda: client.request_reference_exploitation_revision(exploitation_id),
+                "Révision demandée.",
+            )
+
+
 def render_observability_summary(client: SolutionPlansAPIClient) -> None:
     """Observabilité — résumé (compteurs, durée moyenne, répartitions)."""
     st.header("1. Résumé")
@@ -1036,6 +1206,7 @@ def main() -> None:
         tab_deliverable,
         tab_version,
         tab_reference,
+        tab_exploitation,
         tab_observability,
     ) = st.tabs(
         [
@@ -1045,6 +1216,7 @@ def main() -> None:
             "Produire un livrable encadré",
             "Itérer sur un livrable",
             "Consolider une référence",
+            "Exploiter une référence",
             "Observabilité",
         ]
     )
@@ -1072,6 +1244,10 @@ def main() -> None:
         render_reference_consolidate(client)
         render_reference_active(client)
         render_reference_history(client)
+    with tab_exploitation:
+        render_exploitation_create(client)
+        render_exploitations_list(client)
+        render_exploitation_detail(client)
     with tab_observability:
         render_observability_summary(client)
         render_observability_llm_calls(client)

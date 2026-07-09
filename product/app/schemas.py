@@ -299,6 +299,74 @@ class DeliverableReferenceOut(BaseModel):
     updated_at: dt.datetime
 
 
+class ReferenceExploitationCreateRequest(BaseModel):
+    """Entrée CEO : exploiter la référence active d'un livrable comme base contrôlée (Phase 9)."""
+
+    next_step_type: str
+    title: str
+    instructions: str
+    constraints: str = ""
+    acceptance_focus: str = ""
+
+    @field_validator("next_step_type", "title", "instructions")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Refuse une valeur vide ou faite uniquement d'espaces."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("constraints", "acceptance_focus")
+    @classmethod
+    def _strip_optional(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+
+class ReferenceExploitationOut(BaseModel):
+    """Exploitation candidate d'une référence officielle renvoyée par l'API (Phase 9)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    reference_content_snapshot: str
+    reference_change_summary_snapshot: str
+    next_step_type: str
+    title: str
+    instructions: str
+    constraints: str
+    acceptance_focus: str
+    exploitation_plan: str
+    candidate_output: str
+    quality_review: str
+    risks: str
+    ceo_validation_notes: str
+    provenance_notes: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class ReferenceExploitationProvenanceOut(BaseModel):
+    """Provenance de la référence utilisée par une exploitation (Phase 9, lecture seule)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    created_at: dt.datetime
+
+
 class LLMCallLogOut(BaseModel):
     """Ligne du journal des appels LLM (Phase 8, lecture seule)."""
 
