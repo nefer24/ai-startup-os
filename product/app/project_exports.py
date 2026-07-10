@@ -230,7 +230,10 @@ def build_project_export(
             "progress": dashboard["progress"],
             "counts": dashboard["counts"],
         },
-        "linked_objects_summary": linked_objects if include_details else [],
+        # Toujours la liste complète ici : le Markdown est rendu ci-dessous à partir de cet
+        # export et doit rester une synthèse finale complète. L'allègement `include_details`
+        # ne touche que la réponse JSON structurée, appliqué APRÈS le rendu Markdown.
+        "linked_objects_summary": linked_objects,
         "approved_outputs": approved_outputs,
         "active_references": active_references,
         "coordinated_batches": batches_and_items,
@@ -241,7 +244,11 @@ def build_project_export(
         "next_actions": next_actions,
         "final_note": final_note,
     }
+    # Le Markdown reste complet (objets liés inclus) quelle que soit l'option `include_details`.
     export["markdown"] = render_project_export_markdown(export)
+    # Allègement de la seule réponse JSON structurée : n'altère jamais le Markdown déjà rendu.
+    if not include_details:
+        export["linked_objects_summary"] = []
     return export
 
 

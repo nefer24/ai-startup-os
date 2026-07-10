@@ -326,3 +326,42 @@ def test_export_include_details_false_omits_linked_objects(
     assert export["linked_objects_summary"] == []
     # Le Markdown reste complet malgré l'absence du détail structuré.
     assert "## 5. Livrables / versions / références" in export["markdown"]
+
+
+def test_export_include_details_false_markdown_not_misleading(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """`include_details=false` allège le JSON mais ne rend JAMAIS le Markdown trompeur.
+
+    Le projet possède réellement des objets liés : la section « Objets liés au projet » ne doit
+    pas afficher « Aucun objet rattaché » et doit lister les objets réels.
+    """
+    pid, ids = _seed_and_link_all(client, session_factory)
+    export = client.get(f"/projects/{pid}/export", params={"include_details": "false"}).json()
+    markdown = export["markdown"]
+    # Le JSON structuré est allégé (au choix du client)...
+    assert export["linked_objects_summary"] == []
+    # ...mais le Markdown reste une synthèse finale complète et honnête.
+    assert "Aucun objet rattaché" not in markdown
+    assert f"coordinated_deliverable_batch** #{ids['batch']}" in markdown
+    # Cohérence avec le mode complet : même section « Objets liés » rendue.
+    full = client.get(f"/projects/{pid}/export", params={"include_details": "true"}).json()
+    assert "## 4. Objets liés au projet" in markdown
+    assert markdown == full["markdown"]
+
+
+def test_export_include_details_false_is_read_only_no_llm(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    pid, _ = _seed_and_link_all(client, session_factory)
+    project_before = client.get(f"/projects/{pid}").json()
+    links_before = client.get(f"/projects/{pid}/links").json()
+    events_before = len(client.get("/observability/events").json())
+
+    client.get(f"/projects/{pid}/export", params={"include_details": "false"})
+
+    assert client.get(f"/projects/{pid}").json() == project_before
+    assert client.get(f"/projects/{pid}/links").json() == links_before
+    assert client.get("/observability/events", params={"phase": "phase16"}).json() == []
+    assert client.get("/observability/llm-calls", params={"phase": "phase16"}).json() == []
+    assert len(client.get("/observability/events").json()) == events_before
