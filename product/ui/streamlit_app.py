@@ -1289,6 +1289,96 @@ def render_coordinated_actions(client: SolutionPlansAPIClient, batch: dict[str, 
             )
 
 
+ITEM_VALIDATION_NOTICE = (
+    "La validation item par item **ne valide pas automatiquement le lot**. Elle ne déclenche "
+    "aucune régénération, aucun déploiement, aucune livraison externe et aucune modification "
+    "automatique du repo."
+)
+
+
+def render_coordinated_item_validation(client: SolutionPlansAPIClient) -> None:
+    """Coordonnés — validation CEO item par item (Phase 11) + résumé + historique des décisions."""
+    st.header("4. Validation item par item")
+    st.caption(ITEM_VALIDATION_NOTICE)
+    batch_id = st.session_state.get("selected_batch_id")
+    if batch_id is None:
+        st.info("Sélectionnez un lot ci-dessus pour valider ses items.")
+        return
+    try:
+        summary = client.get_coordinated_batch_item_validation_summary(int(batch_id))
+        items = client.list_coordinated_deliverable_items(int(batch_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer la validation : {exc}")
+        return
+
+    st.write(
+        f"**Statut du lot :** {status_badge(summary.get('batch_status', ''))} "
+        "(inchangé par la validation item par item)"
+    )
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("Total", summary.get("total_items", 0))
+    col2.metric("Approuvés", summary.get("approved_items", 0))
+    col3.metric("Refusés", summary.get("rejected_items", 0))
+    col4.metric("Révision", summary.get("revision_requested_items", 0))
+    col5.metric("Candidats", summary.get("candidate_items", 0))
+    if summary.get("all_items_approved"):
+        st.info("Tous les items sont approuvés — le lot **reste inchangé** (décision CEO séparée).")
+
+    for item in items:
+        item_id = int(item["id"])
+        with st.expander(
+            f"[{item.get('order_index')}] {item.get('item_type')} — "
+            f"{item.get('title', '')} · {status_badge(item.get('status', ''))}"
+        ):
+            _section("Contenu", item.get("content", ""))
+            _section("Dépendances", item.get("dependencies", ""))
+            _section("Notes de cohérence", item.get("consistency_notes", ""))
+            _section("Notes de validation", item.get("validation_notes", ""))
+
+            reason = st.text_input("Raison", key=f"item_reason_{item_id}")
+            ceo_notes = st.text_input("Notes CEO", key=f"item_notes_{item_id}")
+            col_a, col_r, col_v = st.columns(3)
+            with col_a:
+                if st.button("✅ Approuver", key=f"item_approve_{item_id}"):
+                    _act(
+                        lambda i=item_id, r=reason, n=ceo_notes: (
+                            client.approve_coordinated_deliverable_item(i, r, n)
+                        ),
+                        "Item approuvé (lot inchangé).",
+                    )
+            with col_r:
+                if st.button("⛔ Refuser", key=f"item_reject_{item_id}"):
+                    _act(
+                        lambda i=item_id, r=reason, n=ceo_notes: (
+                            client.reject_coordinated_deliverable_item(i, r, n)
+                        ),
+                        "Item refusé (lot inchangé).",
+                    )
+            with col_v:
+                if st.button("🟠 Révision", key=f"item_revision_{item_id}"):
+                    _act(
+                        lambda i=item_id, r=reason, n=ceo_notes: (
+                            client.request_coordinated_deliverable_item_revision(i, r, n)
+                        ),
+                        "Révision d'item demandée (aucune régénération).",
+                    )
+
+            try:
+                decisions = client.list_coordinated_deliverable_item_decisions(item_id)
+            except APIError as exc:
+                st.warning(f"Historique indisponible : {exc}")
+                decisions = []
+            if decisions:
+                st.markdown("**Historique des décisions (récent d'abord)**")
+                for decision in decisions:
+                    st.markdown(
+                        f"- {status_badge(decision.get('new_status', ''))} "
+                        f"(← {decision.get('previous_status', '')}) · "
+                        f"{decision.get('decided_by', '')} · {decision.get('created_at', '')}"
+                        f"{' — ' + decision['reason'] if decision.get('reason') else ''}"
+                    )
+
+
 def render_observability_summary(client: SolutionPlansAPIClient) -> None:
     """Observabilité — résumé (compteurs, durée moyenne, répartitions)."""
     st.header("1. Résumé")
@@ -1452,6 +1542,7 @@ def main() -> None:
         render_coordinated_create(client)
         render_coordinated_list(client)
         render_coordinated_detail(client)
+        render_coordinated_item_validation(client)
     with tab_observability:
         render_observability_summary(client)
         render_observability_llm_calls(client)

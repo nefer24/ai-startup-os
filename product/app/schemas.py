@@ -465,6 +465,36 @@ class CoordinatedDeliverableBatchProvenanceOut(BaseModel):
     created_at: dt.datetime
 
 
+class CoordinatedItemDecisionRequest(BaseModel):
+    """Entrée CEO : décision item par item (raison + notes, Phase 11)."""
+
+    reason: str = ""
+    ceo_notes: str = ""
+
+    @field_validator("reason", "ceo_notes")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+
+class CoordinatedItemDecisionOut(BaseModel):
+    """Décision CEO sur un item coordonné renvoyée par l'API (Phase 11, historique append-only)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    item_id: int
+    batch_id: int
+    decision_type: str
+    previous_status: str
+    new_status: str
+    reason: str
+    ceo_notes: str
+    decided_by: str
+    created_at: dt.datetime
+
+
 class LLMCallLogOut(BaseModel):
     """Ligne du journal des appels LLM (Phase 8, lecture seule)."""
 

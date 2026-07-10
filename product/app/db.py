@@ -362,9 +362,35 @@ class CoordinatedDeliverableItem(Base):
     consistency_notes: Mapped[str] = mapped_column(Text, default="")
     validation_notes: Mapped[str] = mapped_column(Text, default="")
     order_index: Mapped[int] = mapped_column(default=0)
+    # Statut de gouvernance (Phase 11) : candidate / approved / rejected / revision_requested.
     status: Mapped[str] = mapped_column(String, default="candidate")
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class CoordinatedDeliverableItemDecision(Base):
+    """Décision CEO **item par item** sur un livrable d'un lot coordonné (Phase 11).
+
+    Historique **append-only** des décisions humaines (approve / reject / request_revision) sur un
+    `CoordinatedDeliverableItem`. La **dernière décision** définit le statut courant de l'item ;
+    aucune décision n'est jamais supprimée. Cette phase est **déterministe, sans aucun appel LLM** :
+    le CEO décide, AI-SOS n'interprète ni ne régénère rien, et le statut du **lot** n'est jamais
+    modifié automatiquement.
+    """
+
+    __tablename__ = "coordinated_deliverable_item_decisions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    item_id: Mapped[int] = mapped_column(default=0)
+    batch_id: Mapped[int] = mapped_column(default=0)
+    # decision_type : approved / rejected / revision_requested.
+    decision_type: Mapped[str] = mapped_column(String, default="")
+    previous_status: Mapped[str] = mapped_column(String, default="")
+    new_status: Mapped[str] = mapped_column(String, default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    ceo_notes: Mapped[str] = mapped_column(Text, default="")
+    decided_by: Mapped[str] = mapped_column(String, default="CEO")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
 
 class LLMCallLog(Base):

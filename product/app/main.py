@@ -69,6 +69,14 @@ Endpoints Phase 10 (Livrables coordonnés depuis une exploitation approuvée) :
   * POST /coordinated-deliverable-batches/{id}/approve         — validation CEO du lot.
   * POST /coordinated-deliverable-batches/{id}/request-revision — demande de révision du lot.
 
+Endpoints Phase 11 (Validation item par item d'un lot coordonné — déterministe, sans LLM) :
+  * POST /coordinated-deliverable-items/{id}/approve           — décision CEO : item approuvé.
+  * POST /coordinated-deliverable-items/{id}/reject            — décision CEO : item refusé.
+  * POST /coordinated-deliverable-items/{id}/request-revision  — décision CEO : révision item.
+  * GET  /coordinated-deliverable-items/{id}/decisions         — historique des décisions (item).
+  * GET  /coordinated-deliverable-batches/{id}/item-validation-summary — résumé (lecture seule).
+  * GET  /coordinated-deliverable-batches/{id}/item-decisions  — toutes les décisions du lot.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -103,6 +111,14 @@ from app.coordinated_deliverables import (
     list_items,
     load_approved_exploitation,
     set_batch_status,
+)
+from app.coordinated_item_decisions import (
+    ItemNotFoundError,
+    batch_item_validation_summary,
+    decide_item,
+    list_batch_item_decisions,
+    list_item_decisions,
+    load_item,
 )
 from app.db import (
     CompanyDeliverable,
@@ -157,6 +173,8 @@ from app.schemas import (
     CoordinatedDeliverableBatchOut,
     CoordinatedDeliverableBatchProvenanceOut,
     CoordinatedDeliverableItemOut,
+    CoordinatedItemDecisionOut,
+    CoordinatedItemDecisionRequest,
     DeliverableCreateRequest,
     DeliverableOut,
     DeliverableReferenceOut,
@@ -986,3 +1004,117 @@ def request_revision_coordinated_deliverable_batch(
         batch.status,
     )
     return CoordinatedDeliverableBatchOut.model_validate(batch)
+
+
+# ---------------------------------------------------------------------------
+# Phase 11 — Validation item par item d'un lot coordonné.
+# Gouvernance CEO déterministe, SANS aucun appel LLM : décision humaine par item,
+# historique append-only. Ne régénère aucun item, ne change JAMAIS le statut du lot
+# automatiquement, ne déploie rien, ne modifie pas le repo.
+# ---------------------------------------------------------------------------
+_ITEM_DECISION_EVENTS = {
+    "approve": "coordinated_item_approved",
+    "reject": "coordinated_item_rejected",
+    "request_revision": "coordinated_item_revision_requested",
+}
+
+
+def _decide_coordinated_item(
+    item_id: int, action: str, payload: CoordinatedItemDecisionRequest, db: Session
+) -> CoordinatedItemDecisionOut:
+    """Applique une décision CEO sur un item (approve/reject/request_revision) et la journalise."""
+    try:
+        item = load_item(db, item_id)
+    except ItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="item introuvable") from exc
+    decision = decide_item(db, item, action, reason=payload.reason, ceo_notes=payload.ceo_notes)
+    log_product_event(
+        db,
+        _ITEM_DECISION_EVENTS[action],
+        "phase11",
+        "coordinated_item",
+        decision.item_id,
+        decision.new_status,
+        metadata={
+            "batch_id": decision.batch_id,
+            "decision_id": decision.id,
+            "previous_status": decision.previous_status,
+            "new_status": decision.new_status,
+        },
+    )
+    return CoordinatedItemDecisionOut.model_validate(decision)
+
+
+@app.post(
+    "/coordinated-deliverable-items/{item_id}/approve",
+    response_model=CoordinatedItemDecisionOut,
+    status_code=201,
+)
+def approve_coordinated_deliverable_item(
+    item_id: int, payload: CoordinatedItemDecisionRequest, db: DbSession
+) -> CoordinatedItemDecisionOut:
+    """Décision CEO : **approuve** un item. Ne change pas le lot, ne régénère rien, aucun LLM."""
+    return _decide_coordinated_item(item_id, "approve", payload, db)
+
+
+@app.post(
+    "/coordinated-deliverable-items/{item_id}/reject",
+    response_model=CoordinatedItemDecisionOut,
+    status_code=201,
+)
+def reject_coordinated_deliverable_item(
+    item_id: int, payload: CoordinatedItemDecisionRequest, db: DbSession
+) -> CoordinatedItemDecisionOut:
+    """Décision CEO : **refuse** un item. Ne change pas le lot, ne régénère rien, aucun LLM."""
+    return _decide_coordinated_item(item_id, "reject", payload, db)
+
+
+@app.post(
+    "/coordinated-deliverable-items/{item_id}/request-revision",
+    response_model=CoordinatedItemDecisionOut,
+    status_code=201,
+)
+def request_revision_coordinated_deliverable_item(
+    item_id: int, payload: CoordinatedItemDecisionRequest, db: DbSession
+) -> CoordinatedItemDecisionOut:
+    """Décision CEO : **demande une révision** d'un item. Ne régénère PAS l'item, aucun LLM."""
+    return _decide_coordinated_item(item_id, "request_revision", payload, db)
+
+
+@app.get(
+    "/coordinated-deliverable-items/{item_id}/decisions",
+    response_model=list[CoordinatedItemDecisionOut],
+)
+def get_coordinated_deliverable_item_decisions(
+    item_id: int, db: DbSession
+) -> list[CoordinatedItemDecisionOut]:
+    """Historique des décisions d'un item, du plus récent au plus ancien (append-only)."""
+    try:
+        load_item(db, item_id)
+    except ItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="item introuvable") from exc
+    return [
+        CoordinatedItemDecisionOut.model_validate(row) for row in list_item_decisions(db, item_id)
+    ]
+
+
+@app.get("/coordinated-deliverable-batches/{batch_id}/item-validation-summary")
+def get_coordinated_batch_item_validation_summary(batch_id: int, db: DbSession) -> dict[str, Any]:
+    """Résumé **lecture seule** de la validation item par item. Ne change pas le statut du lot."""
+    batch = _get_batch_or_404(db, batch_id)
+    return batch_item_validation_summary(db, batch_id, batch.status)
+
+
+@app.get(
+    "/coordinated-deliverable-batches/{batch_id}/item-decisions",
+    response_model=list[CoordinatedItemDecisionOut],
+)
+def get_coordinated_batch_item_decisions(
+    batch_id: int, db: DbSession
+) -> list[CoordinatedItemDecisionOut]:
+    """Toutes les décisions des items d'un lot, du plus récent au plus ancien."""
+    _get_batch_or_404(db, batch_id)
+    return [
+        CoordinatedItemDecisionOut.model_validate(row)
+        for row in list_batch_item_decisions(db, batch_id)
+    ]

@@ -490,7 +490,56 @@ l'observabilité Phase 8 (`phase10`, opération `coordinate_deliverables`).
 > **Ces livrables sont candidats et coordonnés. Ils ne déclenchent aucun déploiement, aucune
 > livraison externe et aucune modification automatique du repo. Le CEO valide le lot.**
 
+## Phase 11 — Validation item par item d'un lot coordonné
+
+Le CEO peut **valider, refuser ou demander une révision pour chaque livrable individuel** d'un lot
+coordonné (Phase 10), sans valider automatiquement tout le lot. C'est une **phase de gouvernance
+déterministe, SANS aucun appel LLM** : AI-SOS n'interprète, ne régénère et ne produit rien —
+demander une révision **ne relance aucune génération**.
+
+**Décisions & historique :** chaque décision (`approve` / `reject` / `request_revision`) crée une
+ligne dans un **historique append-only** (`coordinated_deliverable_item_decisions`) et met à jour le
+statut de l'item (`approved` / `rejected` / `revision_requested`). La **dernière décision** définit
+le statut courant ; aucune décision n'est jamais supprimée. Un item peut repasser de
+`revision_requested` à `approved` par une nouvelle décision.
+
+**Invariants :**
+
+- Le statut du **lot** n'est **jamais** modifié automatiquement — même si `all_items_approved` est
+  vrai, le lot reste inchangé (l'approbation du lot reste une décision CEO séparée, Phase 10).
+- Le **contenu** des items n'est jamais modifié ; l'exploitation, la référence, les versions et le
+  livrable original ne sont jamais touchés.
+- **Aucun appel LLM** n'est fait ni journalisé pour la Phase 11 ; aucun nouveau livrable produit.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/coordinated-deliverable-items/{id}/approve` | décision CEO : item approuvé |
+| `POST` | `/coordinated-deliverable-items/{id}/reject` | décision CEO : item refusé |
+| `POST` | `/coordinated-deliverable-items/{id}/request-revision` | décision CEO : révision (sans régénération) |
+| `GET` | `/coordinated-deliverable-items/{id}/decisions` | historique des décisions d'un item |
+| `GET` | `/coordinated-deliverable-batches/{id}/item-validation-summary` | résumé (lecture seule) |
+| `GET` | `/coordinated-deliverable-batches/{id}/item-decisions` | toutes les décisions du lot |
+
+Item absent → **404**. Le résumé expose `total_items`, `approved_items`, `rejected_items`,
+`revision_requested_items`, `candidate_items`, `all_items_approved`, `has_rejected_items`,
+`has_revision_requested_items`, `item_statuses` — **sans** changer le statut du lot.
+
+**Observabilité :** événements `coordinated_item_approved` / `_rejected` / `_revision_requested`
+(`phase11`, `entity_type = coordinated_item`, métadonnées `batch_id` / `decision_id` /
+`previous_status` / `new_status`). Aucun appel LLM Phase 11.
+
+**Interface :** section **« Validation item par item »** de l'onglet « Livrables coordonnés »
+(Streamlit) — résumé des statuts, chaque item avec son contenu, `reason` / `ceo_notes`, boutons
+**approuver / refuser / demander révision** et l'**historique des décisions**. Le statut du lot
+reste visible et un lot peut mélanger des items `approved` / `rejected` / `revision_requested` /
+`candidate`. Toujours **via le client HTTP**.
+
+> **La validation item par item ne valide pas automatiquement le lot. Elle ne déclenche aucune
+> régénération, aucun déploiement, aucune livraison externe et aucune modification du repo.**
+
 ## Prochaine tranche
 
-**Phase 11 (proposée)** — à cadrer par le CEO : chaînage de plusieurs lots coordonnés, validation
-item par item, ou export/synthèse des livrables et des journaux d'observabilité.
+**Phase 12 (proposée)** — à cadrer par le CEO : chaînage de plusieurs lots coordonnés, régénération
+guidée d'un item en révision, ou export/synthèse des livrables et des journaux d'observabilité.
