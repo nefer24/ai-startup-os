@@ -715,7 +715,51 @@ priorité. Toujours **via le client HTTP**.
 > **Le tableau de bord est une vue de lecture. Il ne modifie aucun objet et ne déclenche aucune
 > action automatique.**
 
+## Phase 16 — Export / synthèse finale d'un projet (lecture seule, déterministe, sans LLM)
+
+**Responsabilité unique : synthétiser.** La Phase 16 transforme l'**état actuel** d'un `Project` en
+une **synthèse finale exploitable** par le CEO — un document consolidé qu'il peut lire, copier,
+partager ou utiliser comme base de décision. Elle **réutilise le tableau de bord Phase 15**
+(`build_project_dashboard`) et les liens Phase 14 (`list_project_links`) : c'est une **couche de
+lecture seule** qui **n'invente aucun contenu**, **n'appelle aucun LLM**, **ne modifie aucun objet**,
+**ne crée aucun objet métier**, **n'écrit aucun fichier**, **ne produit aucun PDF** et **n'écrit
+aucun événement** (les lectures d'export ne polluent pas l'observabilité).
+
+**Ce qu'elle assemble (déterministe) :** résumé exécutif (titre, type, statut, santé, progression,
+liens, décisions en attente, points ouverts), entrée initiale, état actuel, snapshot du dashboard,
+objets liés, **outputs validés** (`approved` / `active` + adoptions), références actives, lots &
+items coordonnés, décisions CEO, régénérations (+ marqueur `adopted`), adoptions, **points ouverts**
+(décisions en attente, items en révision, régénérations approuvées non adoptées, lots candidats,
+items rejetés, **liens cassés**), **prochaines actions** (reprises du dashboard, triées high →
+medium → low) et une **conclusion déterministe** (jamais un jugement libre : « Le projet nécessite
+attention car X items en révision… » vs « prêt pour revue : aucun point ouvert »).
+
+**Champ `markdown` :** une **synthèse Markdown déterministe** en 11 sections (résumé exécutif →
+conclusion), lisible, courte mais complète, générée à partir des seules données existantes. Robuste
+aux **liens cassés** : les objets introuvables sont listés dans « Liens à vérifier » sans faire
+échouer l'export.
+
+**API (read-only) :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `GET` | `/projects/{id}/export` | synthèse finale structurée + Markdown (`?include_details=`) |
+| `GET` | `/projects/{id}/export/markdown` | synthèse Markdown seule (`{project_id, markdown}`) |
+
+Projet absent → 404 ; projet sans lien → export **valide** avec la note « aucun objet rattaché ».
+Aucune mutation, aucune création métier, aucun événement, aucun LLM.
+
+**Interface :** section **« Export / synthèse finale »** de l'onglet « Projets » (Streamlit) —
+bouton *Générer la synthèse*, métriques (liens, progression, en attente, points ouverts), listes
+repliables (décisions, révisions, régénérations non adoptées, liens à vérifier), prochaines actions,
+**Markdown copiable** et **bouton de téléchargement `.md`** (`project_{id}_summary.md`, généré côté
+UI depuis la réponse API — aucun fichier créé dans le repo, aucun PDF, aucun envoi externe).
+
+> **Cette synthèse est générée en lecture seule depuis les données du projet. Elle ne modifie aucun
+> objet, ne déclenche aucune action et n'appelle aucun LLM.**
+
 ## Prochaine tranche
 
-**Phase 16 (proposée)** — à cadrer par le CEO : **export / synthèse finale d'un projet** (document
-consolidé entrée → référence → livrables approuvés → décisions), 3ᵉ pièce de la consolidation MVP.
+**Phase 17 (proposée)** — à cadrer par le CEO : **sauvegarde / rechargement d'un projet**
+(persistance/restauration d'un espace projet et de ses liens), 4ᵉ pièce de la consolidation MVP ;
+puis Phase 18 (stabilisation / QA finale).

@@ -746,6 +746,13 @@ class ProjectLinkOut(BaseModel):
     created_at: dt.datetime
 
 
+class ProjectExportMarkdownOut(BaseModel):
+    """Synthèse Markdown seule d'un projet (Phase 16, lecture seule)."""
+
+    project_id: int
+    markdown: str
+
+
 class LLMCallLogOut(BaseModel):
     """Ligne du journal des appels LLM (Phase 8, lecture seule)."""
 
