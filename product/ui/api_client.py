@@ -659,6 +659,24 @@ class SolutionPlansAPIClient:
         result: dict[str, Any] = self._request("GET", f"/projects/{project_id}/overview")
         return result
 
+    # --- Phase 15 : tableau de bord projet global (lecture seule) -----------
+    def get_project_dashboard(self, project_id: int) -> dict[str, Any]:
+        """Tableau de bord global d'un projet (`GET /projects/{id}/dashboard`)."""
+        result: dict[str, Any] = self._request("GET", f"/projects/{project_id}/dashboard")
+        return result
+
+    def get_project_next_actions(self, project_id: int) -> list[dict[str, Any]]:
+        """Prochaines actions déterministes (`GET /projects/{id}/next-actions`)."""
+        result: list[dict[str, Any]] = self._request("GET", f"/projects/{project_id}/next-actions")
+        return result
+
+    def get_project_pending_decisions(self, project_id: int) -> list[dict[str, Any]]:
+        """Décisions en attente (`GET /projects/{id}/pending-decisions`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/projects/{project_id}/pending-decisions"
+        )
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,

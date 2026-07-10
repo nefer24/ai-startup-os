@@ -103,6 +103,11 @@ Endpoints Phase 14 (Espace projet unifié — déterministe, sans LLM) :
   * DELETE /projects/{id}/links/{link_id}  — supprime le lien (jamais l'objet source).
   * GET    /projects/{id}/overview         — overview léger (compteurs + entités liées).
 
+Endpoints Phase 15 (Tableau de bord projet global — lecture seule, déterministe, sans LLM) :
+  * GET  /projects/{id}/dashboard          — tableau de bord global (synthèse + prochaines actions).
+  * GET  /projects/{id}/next-actions       — prochaines actions déterministes uniquement.
+  * GET  /projects/{id}/pending-decisions  — décisions en attente uniquement.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -208,6 +213,11 @@ from app.observability import (
     list_llm_calls,
     log_product_event,
     observability_summary,
+)
+from app.project_dashboard import (
+    build_next_actions_only,
+    build_pending_decisions_only,
+    build_project_dashboard,
 )
 from app.projects import (
     DuplicateProjectLinkError,
@@ -1586,3 +1596,34 @@ def get_project_overview_endpoint(project_id: int, db: DbSession) -> dict[str, A
     """Overview **léger** du projet (compteurs + entités liées). Le dashboard riche = Phase 15."""
     project = _get_project_or_404(db, project_id)
     return get_project_overview(db, project)
+
+
+# ---------------------------------------------------------------------------
+# Phase 15 — Tableau de bord projet global.
+# Couche de LECTURE SEULE : agrège les liens du projet, calcule compteurs et
+# prochaines actions DÉTERMINISTES (aucun LLM). Ne modifie rien, ne journalise
+# pas les lectures (pour ne pas polluer l'observabilité).
+# ---------------------------------------------------------------------------
+@app.get("/projects/{project_id}/dashboard")
+def get_project_dashboard_endpoint(project_id: int, db: DbSession) -> dict[str, Any]:
+    """Tableau de bord global du projet : synthèse, compteurs, décisions et prochaines actions.
+
+    Lecture seule : ne modifie aucun objet, ne crée aucun objet métier, n'appelle aucun LLM.
+    Projet absent → 404 ; projet sans lien → dashboard vide mais valide.
+    """
+    project = _get_project_or_404(db, project_id)
+    return build_project_dashboard(db, project)
+
+
+@app.get("/projects/{project_id}/next-actions")
+def get_project_next_actions_endpoint(project_id: int, db: DbSession) -> list[dict[str, Any]]:
+    """Prochaines actions déterministes du projet (lecture seule)."""
+    project = _get_project_or_404(db, project_id)
+    return build_next_actions_only(db, project)
+
+
+@app.get("/projects/{project_id}/pending-decisions")
+def get_project_pending_decisions_endpoint(project_id: int, db: DbSession) -> list[dict[str, Any]]:
+    """Décisions en attente du projet (lecture seule)."""
+    project = _get_project_or_404(db, project_id)
+    return build_pending_decisions_only(db, project)

@@ -1882,6 +1882,97 @@ def _render_project_overview(client: SolutionPlansAPIClient, project_id: int) ->
         st.write("**Par rôle :** ", by_role)
 
 
+DASHBOARD_NOTICE = (
+    "Le tableau de bord est une **vue de lecture**. Il ne modifie aucun objet et ne déclenche "
+    "aucune action automatique."
+)
+
+_PRIORITY_BADGE = {"high": "🔴 haute", "medium": "🟠 moyenne", "low": "🟢 basse"}
+
+
+def render_project_dashboard(client: SolutionPlansAPIClient) -> None:
+    """Projets — tableau de bord global (lecture seule, Phase 15)."""
+    st.header("4. Tableau de bord du projet")
+    st.caption(DASHBOARD_NOTICE)
+    project_id = st.session_state.get("selected_project_id")
+    if project_id is None:
+        st.info("Sélectionnez un projet pour afficher son tableau de bord.")
+        return
+    try:
+        dashboard = client.get_project_dashboard(int(project_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer le tableau de bord : {exc}")
+        return
+
+    summary = dashboard.get("summary", {})
+    progress = dashboard.get("progress", {})
+    st.subheader(f"{summary.get('title', '')} — santé : {summary.get('health_label', '')}")
+    st.caption(summary.get("completion_hint", ""))
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Liens", summary.get("total_links", 0))
+    col2.metric("Approuvés", progress.get("approved_count", 0))
+    col3.metric("En attente", progress.get("pending_decision_count", 0))
+    col4.metric("Progression", f"{progress.get('progress_score', 0)} %")
+
+    counts = dashboard.get("counts", {})
+    if counts.get("by_entity_type"):
+        st.write("**Par type d'entité :** ", counts["by_entity_type"])
+    if counts.get("by_role"):
+        st.write("**Par rôle :** ", counts["by_role"])
+    if counts.get("by_status"):
+        st.write("**Par statut :** ", counts["by_status"])
+
+    _dashboard_list(
+        "Décisions en attente",
+        dashboard.get("pending_decisions", []),
+        lambda d: f"{d.get('entity_type')} #{d.get('entity_id')} — {d.get('suggested_action')}",
+    )
+    _dashboard_list(
+        "Items en révision",
+        dashboard.get("revision_items", []),
+        lambda d: f"{d.get('entity_type')} #{d.get('entity_id')} — {d.get('title')}",
+    )
+    _dashboard_list(
+        "Régénérations approuvées non adoptées",
+        dashboard.get("approved_regenerations_not_adopted", []),
+        lambda d: f"régénération #{d.get('entity_id')} — {d.get('title')}",
+    )
+    _dashboard_list(
+        "Lots candidats",
+        dashboard.get("candidate_batches", []),
+        lambda d: f"lot #{d.get('entity_id')} — {d.get('title')}",
+    )
+    _dashboard_list(
+        "Références actives",
+        dashboard.get("active_references", []),
+        lambda d: f"référence #{d.get('entity_id')} — {d.get('title')}",
+    )
+    _dashboard_list(
+        "Liens cassés (objets introuvables)",
+        dashboard.get("blocked_items", []),
+        lambda d: f"{d.get('entity_type')} #{d.get('entity_id')} (lien #{d.get('link_id')})",
+    )
+
+    actions = dashboard.get("next_actions", [])
+    st.markdown("**Prochaines actions recommandées**")
+    if not actions:
+        st.info("Aucune action recommandée pour l'instant.")
+    for action in actions:
+        st.markdown(
+            f"- {_PRIORITY_BADGE.get(action.get('priority'), action.get('priority'))} · "
+            f"**{action.get('label')}** — {action.get('explanation')}"
+        )
+
+
+def _dashboard_list(title: str, rows: list[dict[str, Any]], fmt: Any) -> None:
+    """Affiche une liste du dashboard (titre + éléments formatés), masquée si vide."""
+    if not rows:
+        return
+    with st.expander(f"{title} ({len(rows)})"):
+        for row in rows:
+            st.markdown(f"- {fmt(row)}")
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -1924,6 +2015,7 @@ def main() -> None:
     with tab_project:
         render_project_create(client)
         render_project_detail(client)
+        render_project_dashboard(client)
     with tab_create:
         render_submit(client)
         render_plans_list(client)
