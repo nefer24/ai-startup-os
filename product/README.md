@@ -539,7 +539,54 @@ reste visible et un lot peut mélanger des items `approved` / `rejected` / `revi
 > **La validation item par item ne valide pas automatiquement le lot. Elle ne déclenche aucune
 > régénération, aucun déploiement, aucune livraison externe et aucune modification du repo.**
 
+## Phase 12 — Régénération guidée d'un item en révision
+
+Le CEO peut **relancer une production contrôlée uniquement pour un item marqué `revision_requested`**
+(Phase 11), à partir de son contenu original et de ses décisions précédentes, en gardant l'item
+original, l'historique et la provenance du lot — **sans modifier le lot ni les autres items**.
+
+**Objet séparé :** la régénération (`CoordinatedDeliverableItemRegeneration`) est un **candidat
+distinct** ; elle **ne remplace jamais** l'item original dans cette phase. Son approbation ne
+remplace pas l'item, ne change pas le statut du lot et ne touche pas aux autres items (l'adoption
+d'une régénération comme nouvelle version officielle est une phase future).
+
+**Snapshot & provenance :** la régénération snapshote le contenu original de l'item, ses
+`dependencies` / `consistency_notes` / `validation_notes`, son statut à la création, ses **décisions
+CEO précédentes** (`prior_decisions_snapshot_json`) et la provenance du lot (batch, exploitation,
+référence, version).
+
+**Processus (4 vrais appels LLM, mockés en test) :** Item Revision Context Analyst → Item
+Regeneration Planner → Item Regeneration Producer → Item Regeneration Quality Reviewer. Sorties :
+`regeneration_plan`, `regenerated_content`, `quality_review`, `risks`, `ceo_validation_notes`,
+`provenance_notes`.
+
+**Gouvernance :** la régénération reste **candidate** jusqu'à validation CEO (`approve` / `reject` /
+`request_revision`) ; échec d'un agent → `draft` avec erreur historisée. Appels LLM et événements
+(`coordinated_item_regeneration_*`) **journalisés** par l'observabilité Phase 8 (`phase12`, opération
+`regenerate_coordinated_item`).
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/coordinated-deliverable-items/{id}/regenerations` | régénère un item `revision_requested` (404 absent ; 409 non en révision) |
+| `GET` | `/coordinated-deliverable-items/{id}/regenerations` | liste les régénérations d'un item |
+| `GET` | `/coordinated-item-regenerations/{id}` | relit une régénération |
+| `GET` | `/coordinated-item-regenerations/{id}/provenance` | provenance de la régénération |
+| `POST` | `/coordinated-item-regenerations/{id}/approve` | validation CEO (statut `approved`) |
+| `POST` | `/coordinated-item-regenerations/{id}/reject` | refus CEO (statut `rejected`) |
+| `POST` | `/coordinated-item-regenerations/{id}/request-revision` | demande de révision |
+
+**Interface :** section **« Régénération guidée d'un item »** de l'onglet « Livrables coordonnés »
+(Streamlit) — items `revision_requested`, contenu original + historique des décisions, formulaire
+`revision_instructions` / `constraints` / `acceptance_focus`, **« Régénérer uniquement cet item »**,
+puis le contenu régénéré, la provenance et les actions CEO. Toujours **via le client HTTP**.
+
+> **Cette régénération ne remplace pas l'item original. Elle ne modifie pas le lot, ne touche pas
+> aux autres items, ne déploie rien, ne livre rien et ne modifie pas le repo.**
+
 ## Prochaine tranche
 
-**Phase 12 (proposée)** — à cadrer par le CEO : chaînage de plusieurs lots coordonnés, régénération
-guidée d'un item en révision, ou export/synthèse des livrables et des journaux d'observabilité.
+**Phase 13 (proposée)** — à cadrer par le CEO : adoption d'une régénération approuvée comme nouvelle
+version officielle d'un item, chaînage de plusieurs lots coordonnés, ou export/synthèse des
+livrables et des journaux d'observabilité.

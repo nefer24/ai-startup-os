@@ -495,6 +495,83 @@ class CoordinatedItemDecisionOut(BaseModel):
     created_at: dt.datetime
 
 
+class CoordinatedItemRegenerationCreateRequest(BaseModel):
+    """Entrée CEO : régénérer un item coordonné marqué `revision_requested` (Phase 12)."""
+
+    revision_instructions: str
+    constraints: str = ""
+    acceptance_focus: str = ""
+
+    @field_validator("revision_instructions")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Refuse une valeur vide ou faite uniquement d'espaces."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("constraints", "acceptance_focus")
+    @classmethod
+    def _strip_optional(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+
+class CoordinatedItemRegenerationOut(BaseModel):
+    """Régénération candidate d'un item coordonné renvoyée par l'API (Phase 12)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    item_id: int
+    batch_id: int
+    exploitation_id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    source_item_type: str
+    source_item_title: str
+    source_item_content_snapshot: str
+    source_item_dependencies_snapshot: str
+    source_item_consistency_notes_snapshot: str
+    source_item_validation_notes_snapshot: str
+    source_item_status_at_creation: str
+    prior_decisions_snapshot_json: str
+    revision_instructions: str
+    constraints: str
+    acceptance_focus: str
+    regeneration_plan: str
+    regenerated_content: str
+    quality_review: str
+    risks: str
+    ceo_validation_notes: str
+    provenance_notes: str
+    status: str
+    error: str
+    llm_model: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class CoordinatedItemRegenerationProvenanceOut(BaseModel):
+    """Provenance d'une régénération d'item coordonné (Phase 12, lecture seule)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    item_id: int
+    batch_id: int
+    exploitation_id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    source_item_status_at_creation: str
+    created_at: dt.datetime
+
+
 class LLMCallLogOut(BaseModel):
     """Ligne du journal des appels LLM (Phase 8, lecture seule)."""
 

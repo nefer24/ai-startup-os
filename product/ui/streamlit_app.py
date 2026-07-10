@@ -1379,6 +1379,136 @@ def render_coordinated_item_validation(client: SolutionPlansAPIClient) -> None:
                     )
 
 
+REGENERATION_NOTICE = (
+    "Cette régénération **ne remplace pas l'item original**. Elle ne modifie pas le lot, ne touche "
+    "pas aux autres items, ne déploie rien, ne livre rien et ne modifie pas le repo."
+)
+
+
+def render_coordinated_item_regeneration(client: SolutionPlansAPIClient) -> None:
+    """Coordonnés — régénération guidée d'un item `revision_requested` (Phase 12)."""
+    st.header("5. Régénération guidée d'un item")
+    st.caption(REGENERATION_NOTICE)
+    batch_id = st.session_state.get("selected_batch_id")
+    if batch_id is None:
+        st.info("Sélectionnez un lot ci-dessus pour régénérer un item en révision.")
+        return
+    try:
+        items = client.list_coordinated_deliverable_items(int(batch_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les items : {exc}")
+        return
+    in_revision = [it for it in items if it.get("status") == "revision_requested"]
+    if not in_revision:
+        st.info(
+            "Aucun item au statut `revision_requested`. Demandez une révision d'item "
+            "(section « Validation item par item ») pour en régénérer un."
+        )
+        return
+
+    labels = {
+        int(it["id"]): f"#{it['id']} — {it.get('item_type')} ({it.get('title')})"
+        for it in in_revision
+    }
+    item_id = st.selectbox(
+        "Item en révision à régénérer", list(labels.keys()), format_func=lambda i: labels[i]
+    )
+    selected = next(it for it in in_revision if int(it["id"]) == int(item_id))
+    _section("Contenu original", selected.get("content", ""))
+    _section("Dépendances", selected.get("dependencies", ""))
+    _section("Notes de cohérence", selected.get("consistency_notes", ""))
+    _section("Notes de validation", selected.get("validation_notes", ""))
+
+    try:
+        history = client.list_coordinated_deliverable_item_decisions(int(item_id))
+    except APIError:
+        history = []
+    if history:
+        st.markdown("**Historique des décisions**")
+        for decision in history:
+            st.markdown(
+                f"- {status_badge(decision.get('new_status', ''))} · "
+                f"{decision.get('created_at', '')}"
+                f"{' — ' + decision['reason'] if decision.get('reason') else ''}"
+            )
+
+    with st.form(f"regenerate_item_{item_id}"):
+        revision_instructions = st.text_area("Instructions de révision")
+        constraints = st.text_area(
+            "Contraintes",
+            value="Ne pas changer le périmètre MVP. Ne pas modifier le repo. Ne pas déployer.",
+        )
+        acceptance_focus = st.text_input("Critères d'acceptation à privilégier")
+        submitted = st.form_submit_button("Régénérer uniquement cet item")
+
+    if submitted:
+        if not revision_instructions.strip():
+            st.error("Les instructions de révision sont obligatoires.")
+        else:
+            with st.spinner("AI-SOS régénère l'item (Analyst → Planner → Producer → Quality)…"):
+                try:
+                    regeneration = client.create_coordinated_item_regeneration(
+                        int(item_id),
+                        revision_instructions.strip(),
+                        constraints.strip(),
+                        acceptance_focus.strip(),
+                    )
+                except APIError as exc:
+                    st.error(f"Régénération impossible : {exc}")
+                    regeneration = None
+            if regeneration is not None:
+                if regeneration.get("status") == "draft":
+                    st.warning(
+                        "Régénération en **brouillon** : génération LLM en échec "
+                        f"(clé API ?). Erreur : {regeneration.get('error', '')}"
+                    )
+                else:
+                    st.success(f"Régénération candidate #{regeneration.get('id')} créée.")
+
+    _render_regeneration_list(client, int(item_id))
+
+
+def _render_regeneration_list(client: SolutionPlansAPIClient, item_id: int) -> None:
+    """Affiche les régénérations d'un item + actions CEO."""
+    try:
+        regenerations = client.list_coordinated_item_regenerations(item_id)
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les régénérations : {exc}")
+        return
+    if not regenerations:
+        return
+    st.markdown(f"**Régénérations de l'item ({len(regenerations)})**")
+    for regen in regenerations:
+        regen_id = int(regen["id"])
+        with st.expander(f"Régénération #{regen_id} · {status_badge(regen.get('status', ''))}"):
+            _section("Contenu régénéré", regen.get("regenerated_content", ""))
+            _section("Plan de régénération", regen.get("regeneration_plan", ""))
+            _section("Revue qualité", regen.get("quality_review", ""))
+            _section("Risques", regen.get("risks", ""))
+            _section("Notes de validation CEO", regen.get("ceo_validation_notes", ""))
+            _section("Notes de provenance", regen.get("provenance_notes", ""))
+            _section("Contenu original snapshoté", regen.get("source_item_content_snapshot", ""))
+            col_a, col_r, col_v = st.columns(3)
+            with col_a:
+                if st.button("✅ Approuver", key=f"regen_approve_{regen_id}"):
+                    _act(
+                        lambda i=regen_id: client.approve_coordinated_item_regeneration(i),
+                        "Régénération approuvée (item original inchangé).",
+                    )
+            with col_r:
+                if st.button("⛔ Refuser", key=f"regen_reject_{regen_id}"):
+                    _act(
+                        lambda i=regen_id: client.reject_coordinated_item_regeneration(i),
+                        "Régénération refusée.",
+                    )
+            with col_v:
+                if st.button("🟠 Révision", key=f"regen_revision_{regen_id}"):
+                    _act(
+                        lambda i=regen_id: client.request_coordinated_item_regeneration_revision(i),
+                        "Révision de la régénération demandée.",
+                    )
+
+
 def render_observability_summary(client: SolutionPlansAPIClient) -> None:
     """Observabilité — résumé (compteurs, durée moyenne, répartitions)."""
     st.header("1. Résumé")
@@ -1543,6 +1673,7 @@ def main() -> None:
         render_coordinated_list(client)
         render_coordinated_detail(client)
         render_coordinated_item_validation(client)
+        render_coordinated_item_regeneration(client)
     with tab_observability:
         render_observability_summary(client)
         render_observability_llm_calls(client)
