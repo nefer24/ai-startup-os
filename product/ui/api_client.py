@@ -691,6 +691,30 @@ class SolutionPlansAPIClient:
         result: dict[str, Any] = self._request("GET", f"/projects/{project_id}/export/markdown")
         return result
 
+    # --- Phase 17 : sauvegarde / rechargement d'un projet -------------------
+    def get_project_snapshot(self, project_id: int) -> dict[str, Any]:
+        """Snapshot JSON d'un projet (`GET /projects/{id}/snapshot`)."""
+        result: dict[str, Any] = self._request("GET", f"/projects/{project_id}/snapshot")
+        return result
+
+    def import_project_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        title_suffix: str | None = None,
+        restore_links: bool = True,
+        skip_missing_entities: bool = True,
+    ) -> dict[str, Any]:
+        """Recharge un snapshot en nouveau projet (`POST /projects/snapshot/import`)."""
+        payload: dict[str, Any] = {
+            "snapshot": snapshot,
+            "import_mode": "create_new_project",
+            "title_suffix": title_suffix,
+            "restore_links": restore_links,
+            "skip_missing_entities": skip_missing_entities,
+        }
+        result: dict[str, Any] = self._request("POST", "/projects/snapshot/import", json=payload)
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,

@@ -112,6 +112,10 @@ Endpoints Phase 16 (Export / synthèse finale d'un projet — lecture seule, dé
   * GET  /projects/{id}/export             — synthèse finale structurée + Markdown.
   * GET  /projects/{id}/export/markdown    — synthèse Markdown seule.
 
+Endpoints Phase 17 (Sauvegarde / rechargement simple des projets — déterministe, sans LLM) :
+  * GET  /projects/{id}/snapshot           — snapshot JSON (métadonnées, liens, dashboard, export).
+  * POST /projects/snapshot/import         — recharge un snapshot en NOUVEAU projet draft + liens.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -227,6 +231,13 @@ from app.project_exports import (
     build_project_export,
     build_project_export_markdown,
 )
+from app.project_snapshots import (
+    InvalidSnapshotError,
+    MissingLinkedEntityError,
+    UnknownSnapshotVersionError,
+    build_project_snapshot,
+    import_project_snapshot,
+)
 from app.projects import (
     DuplicateProjectLinkError,
     InvalidEntityTypeError,
@@ -286,6 +297,8 @@ from app.schemas import (
     ProjectLinkCreateRequest,
     ProjectLinkOut,
     ProjectOut,
+    ProjectSnapshotImportRequest,
+    ProjectSnapshotImportResultOut,
     ProjectUpdateRequest,
     ReferenceExploitationCreateRequest,
     ReferenceExploitationOut,
@@ -1667,3 +1680,66 @@ def get_project_export_markdown_endpoint(
     project = _get_project_or_404(db, project_id)
     markdown = build_project_export_markdown(db, project)
     return ProjectExportMarkdownOut(project_id=project.id, markdown=markdown)
+
+
+# ---------------------------------------------------------------------------
+# Phase 17 — Sauvegarde / rechargement simple des projets.
+# GET /snapshot : LECTURE SEULE (métadonnées + liens + dashboard + synthèse).
+# POST /snapshot/import : crée UNIQUEMENT un nouveau Project (draft) + des
+# ProjectLink vers des objets EXISTANTS. Ne recrée ni ne modifie aucun objet
+# métier source. Aucun LLM, aucun fichier serveur, aucun service externe.
+# ---------------------------------------------------------------------------
+@app.get("/projects/{project_id}/snapshot")
+def get_project_snapshot_endpoint(project_id: int, db: DbSession) -> dict[str, Any]:
+    """Snapshot JSON du projet (lecture seule) : métadonnées, liens, dashboard, synthèse.
+
+    Projet absent → 404 ; projet sans lien → snapshot valide. Aucune mutation, aucun LLM.
+    """
+    project = _get_project_or_404(db, project_id)
+    return build_project_snapshot(db, project)
+
+
+@app.post(
+    "/projects/snapshot/import",
+    response_model=ProjectSnapshotImportResultOut,
+    status_code=201,
+)
+def import_project_snapshot_endpoint(
+    payload: ProjectSnapshotImportRequest, db: DbSession
+) -> ProjectSnapshotImportResultOut:
+    """Recharge un snapshot en **nouveau** projet `draft` + liens restaurés vers objets existants.
+
+    Ne recrée ni ne modifie aucun objet métier source. Snapshot invalide → 422 ; version inconnue
+    → 400 ; objet lié absent avec `skip_missing_entities=false` → 422.
+    """
+    try:
+        result = import_project_snapshot(db, payload)
+    except UnknownSnapshotVersionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InvalidSnapshotError as exc:
+        raise HTTPException(status_code=422, detail=f"snapshot invalide : {exc}") from exc
+    except MissingLinkedEntityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    project = result["project"]
+    log_product_event(
+        db,
+        "project_snapshot_imported",
+        "phase17",
+        "project",
+        project.id,
+        project.status,
+        metadata={
+            "links_requested": result["links_requested"],
+            "links_restored": result["links_restored"],
+            "links_skipped": result["links_skipped"],
+        },
+    )
+    return ProjectSnapshotImportResultOut(
+        imported_project=ProjectOut.model_validate(project),
+        created_project_id=result["created_project_id"],
+        links_requested=result["links_requested"],
+        links_restored=result["links_restored"],
+        links_skipped=result["links_skipped"],
+        skipped_links=result["skipped_links"],
+        warnings=result["warnings"],
+    )
