@@ -677,6 +677,20 @@ class SolutionPlansAPIClient:
         )
         return result
 
+    # --- Phase 16 : export / synthèse finale (lecture seule) ----------------
+    def get_project_export(self, project_id: int, include_details: bool = True) -> dict[str, Any]:
+        """Synthèse finale structurée + Markdown (`GET /projects/{id}/export`)."""
+        params = {"include_details": str(include_details).lower()}
+        result: dict[str, Any] = self._request(
+            "GET", f"/projects/{project_id}/export", params=params
+        )
+        return result
+
+    def get_project_export_markdown(self, project_id: int) -> dict[str, Any]:
+        """Synthèse Markdown seule (`GET /projects/{id}/export/markdown`)."""
+        result: dict[str, Any] = self._request("GET", f"/projects/{project_id}/export/markdown")
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,

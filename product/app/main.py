@@ -108,6 +108,10 @@ Endpoints Phase 15 (Tableau de bord projet global — lecture seule, déterminis
   * GET  /projects/{id}/next-actions       — prochaines actions déterministes uniquement.
   * GET  /projects/{id}/pending-decisions  — décisions en attente uniquement.
 
+Endpoints Phase 16 (Export / synthèse finale d'un projet — lecture seule, déterministe, sans LLM) :
+  * GET  /projects/{id}/export             — synthèse finale structurée + Markdown.
+  * GET  /projects/{id}/export/markdown    — synthèse Markdown seule.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -219,6 +223,10 @@ from app.project_dashboard import (
     build_pending_decisions_only,
     build_project_dashboard,
 )
+from app.project_exports import (
+    build_project_export,
+    build_project_export_markdown,
+)
 from app.projects import (
     DuplicateProjectLinkError,
     InvalidEntityTypeError,
@@ -274,6 +282,7 @@ from app.schemas import (
     LLMTestRequest,
     ProductEventLogOut,
     ProjectCreateRequest,
+    ProjectExportMarkdownOut,
     ProjectLinkCreateRequest,
     ProjectLinkOut,
     ProjectOut,
@@ -1627,3 +1636,34 @@ def get_project_pending_decisions_endpoint(project_id: int, db: DbSession) -> li
     """Décisions en attente du projet (lecture seule)."""
     project = _get_project_or_404(db, project_id)
     return build_pending_decisions_only(db, project)
+
+
+# ---------------------------------------------------------------------------
+# Phase 16 — Export / synthèse finale d'un projet.
+# Couche de LECTURE SEULE : assemble l'état du projet (dashboard Phase 15 + liens
+# Phase 14) en une synthèse structurée + Markdown DÉTERMINISTE. N'invente aucun
+# contenu, n'appelle aucun LLM, ne modifie rien, ne journalise pas les lectures.
+# ---------------------------------------------------------------------------
+@app.get("/projects/{project_id}/export")
+def get_project_export_endpoint(
+    project_id: int,
+    db: DbSession,
+    include_details: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    """Synthèse finale structurée du projet (+ Markdown), en lecture seule.
+
+    Projet absent → 404 ; projet sans lien → export valide avec note « aucun objet rattaché ».
+    Ne modifie aucun objet, ne crée aucun objet métier, n'appelle aucun LLM.
+    """
+    project = _get_project_or_404(db, project_id)
+    return build_project_export(db, project, include_details=include_details)
+
+
+@app.get("/projects/{project_id}/export/markdown", response_model=ProjectExportMarkdownOut)
+def get_project_export_markdown_endpoint(
+    project_id: int, db: DbSession
+) -> ProjectExportMarkdownOut:
+    """Synthèse **Markdown seule** du projet (lecture seule, déterministe, sans LLM)."""
+    project = _get_project_or_404(db, project_id)
+    markdown = build_project_export_markdown(db, project)
+    return ProjectExportMarkdownOut(project_id=project.id, markdown=markdown)

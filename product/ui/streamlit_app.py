@@ -1973,6 +1973,79 @@ def _dashboard_list(title: str, rows: list[dict[str, Any]], fmt: Any) -> None:
             st.markdown(f"- {fmt(row)}")
 
 
+EXPORT_NOTICE = (
+    "Cette synthèse est générée en **lecture seule** depuis les données du projet. Elle ne modifie "
+    "aucun objet, ne déclenche aucune action et n'appelle aucun LLM."
+)
+
+
+def render_project_export(client: SolutionPlansAPIClient) -> None:
+    """Projets — export / synthèse finale du projet (lecture seule, Phase 16)."""
+    st.header("5. Export / synthèse finale")
+    st.caption(EXPORT_NOTICE)
+    project_id = st.session_state.get("selected_project_id")
+    if project_id is None:
+        st.info("Sélectionnez un projet pour générer sa synthèse.")
+        return
+    if not st.button("🧾 Générer la synthèse"):
+        return
+    try:
+        export = client.get_project_export(int(project_id))
+    except APIError as exc:
+        st.error(f"Impossible de générer la synthèse : {exc}")
+        return
+
+    summary = export.get("executive_summary", {})
+    st.subheader(f"{summary.get('title', '')} — {export.get('final_note', '')}")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Liens", summary.get("total_links", 0))
+    col2.metric("Progression", f"{summary.get('progress_score', 0)} %")
+    col3.metric("En attente", summary.get("pending_decision_count", 0))
+    col4.metric("Points ouverts", summary.get("open_points_count", 0))
+
+    open_points = export.get("open_points", {})
+    _dashboard_list(
+        "Décisions en attente",
+        open_points.get("pending_decisions", []),
+        lambda d: f"{d.get('entity_type')} #{d.get('entity_id')} — {d.get('suggested_action')}",
+    )
+    _dashboard_list(
+        "Items en révision",
+        open_points.get("revision_items", []),
+        lambda d: f"{d.get('entity_type')} #{d.get('entity_id')} — {d.get('title')}",
+    )
+    _dashboard_list(
+        "Régénérations approuvées non adoptées",
+        open_points.get("approved_regenerations_not_adopted", []),
+        lambda d: f"régénération #{d.get('entity_id')} — {d.get('title')}",
+    )
+    _dashboard_list(
+        "Liens à vérifier (objets introuvables)",
+        open_points.get("broken_links", []),
+        lambda d: f"{d.get('entity_type')} #{d.get('entity_id')} (lien #{d.get('link_id')})",
+    )
+
+    actions = export.get("next_actions", [])
+    st.markdown("**Prochaines actions recommandées**")
+    if not actions:
+        st.info("Aucune action recommandée.")
+    for action in actions:
+        st.markdown(
+            f"- {_PRIORITY_BADGE.get(action.get('priority'), action.get('priority'))} · "
+            f"**{action.get('label')}** — {action.get('explanation')}"
+        )
+
+    markdown = export.get("markdown", "")
+    st.markdown("**Synthèse Markdown (copiable)**")
+    st.text_area("Markdown", value=markdown, height=360, key="export_markdown")
+    st.download_button(
+        "⬇️ Télécharger la synthèse (.md)",
+        data=markdown,
+        file_name=f"project_{project_id}_summary.md",
+        mime="text/markdown",
+    )
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -2016,6 +2089,7 @@ def main() -> None:
         render_project_create(client)
         render_project_detail(client)
         render_project_dashboard(client)
+        render_project_export(client)
     with tab_create:
         render_submit(client)
         render_plans_list(client)
