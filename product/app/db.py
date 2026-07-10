@@ -393,6 +393,58 @@ class CoordinatedDeliverableItemDecision(Base):
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
 
+class CoordinatedDeliverableItemRegeneration(Base):
+    """Régénération candidate d'un item coordonné marqué `revision_requested` (Phase 12).
+
+    Nouvelle proposition candidate produite pour un item **en révision**, à partir de son contenu
+    original **snapshoté** et des décisions CEO précédentes. Objet **séparé** : il ne remplace
+    **jamais** l'item original, ne modifie ni le lot, ni les autres items, ni aucune source amont.
+    Reste **candidate** jusqu'à validation CEO ; son approbation ne remplace pas l'item ni ne change
+    le lot dans cette phase.
+    """
+
+    __tablename__ = "coordinated_deliverable_item_regenerations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Provenance (snapshot figé au moment de la création).
+    item_id: Mapped[int] = mapped_column(default=0)
+    batch_id: Mapped[int] = mapped_column(default=0)
+    exploitation_id: Mapped[int] = mapped_column(default=0)
+    deliverable_id: Mapped[int] = mapped_column(default=0)
+    reference_id: Mapped[int] = mapped_column(default=0)
+    reference_version_id: Mapped[int] = mapped_column(default=0)
+    reference_version_number: Mapped[int] = mapped_column(default=0)
+    # Snapshot de l'item source.
+    source_item_type: Mapped[str] = mapped_column(String, default="")
+    source_item_title: Mapped[str] = mapped_column(String, default="")
+    source_item_content_snapshot: Mapped[str] = mapped_column(Text, default="")
+    source_item_dependencies_snapshot: Mapped[str] = mapped_column(Text, default="")
+    source_item_consistency_notes_snapshot: Mapped[str] = mapped_column(Text, default="")
+    source_item_validation_notes_snapshot: Mapped[str] = mapped_column(Text, default="")
+    source_item_status_at_creation: Mapped[str] = mapped_column(String, default="")
+    prior_decisions_snapshot_json: Mapped[str] = mapped_column(Text, default="")
+    # Demande CEO.
+    revision_instructions: Mapped[str] = mapped_column(Text, default="")
+    constraints: Mapped[str] = mapped_column(Text, default="")
+    acceptance_focus: Mapped[str] = mapped_column(Text, default="")
+    # Production régénérée.
+    regeneration_plan: Mapped[str] = mapped_column(Text, default="")
+    regenerated_content: Mapped[str] = mapped_column(Text, default="")
+    quality_review: Mapped[str] = mapped_column(Text, default="")
+    risks: Mapped[str] = mapped_column(Text, default="")
+    ceo_validation_notes: Mapped[str] = mapped_column(Text, default="")
+    provenance_notes: Mapped[str] = mapped_column(Text, default="")
+    # Statut : draft / candidate / approved / rejected / revision_requested.
+    status: Mapped[str] = mapped_column(String, default="candidate")
+    # Audit / diagnostic (optionnels).
+    raw_agent_outputs: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    llm_model: Mapped[str] = mapped_column(String, default="")
+    # Horodatages.
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
 class LLMCallLog(Base):
     """Journal d'un appel LLM exécuté par le runtime produit (Phase 8, observabilité).
 

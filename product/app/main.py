@@ -77,6 +77,15 @@ Endpoints Phase 11 (Validation item par item d'un lot coordonné — déterminis
   * GET  /coordinated-deliverable-batches/{id}/item-validation-summary — résumé (lecture seule).
   * GET  /coordinated-deliverable-batches/{id}/item-decisions  — toutes les décisions du lot.
 
+Endpoints Phase 12 (Régénération guidée d'un item en révision) :
+  * POST /coordinated-deliverable-items/{id}/regenerations     — régénère un item en révision.
+  * GET  /coordinated-deliverable-items/{id}/regenerations     — liste les régénérations d'un item.
+  * GET  /coordinated-item-regenerations/{id}                  — relit une régénération.
+  * GET  /coordinated-item-regenerations/{id}/provenance       — provenance de la régénération.
+  * POST /coordinated-item-regenerations/{id}/approve          — validation CEO (statut approved).
+  * POST /coordinated-item-regenerations/{id}/reject           — refus CEO (statut rejected).
+  * POST /coordinated-item-regenerations/{id}/request-revision — demande de révision.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -120,10 +129,22 @@ from app.coordinated_item_decisions import (
     list_item_decisions,
     load_item,
 )
+from app.coordinated_item_regenerations import (
+    BatchNotFoundError,
+    ItemNotInRevisionError,
+    generate_regeneration,
+    list_regenerations,
+    load_item_in_revision,
+    set_regeneration_status,
+)
+from app.coordinated_item_regenerations import (
+    ItemNotFoundError as RegenItemNotFoundError,
+)
 from app.db import (
     CompanyDeliverable,
     CoordinatedDeliverableBatch,
     CoordinatedDeliverableItem,
+    CoordinatedDeliverableItemRegeneration,
     DeliverableVersion,
     LLMResult,
     ReferenceExploitation,
@@ -175,6 +196,9 @@ from app.schemas import (
     CoordinatedDeliverableItemOut,
     CoordinatedItemDecisionOut,
     CoordinatedItemDecisionRequest,
+    CoordinatedItemRegenerationCreateRequest,
+    CoordinatedItemRegenerationOut,
+    CoordinatedItemRegenerationProvenanceOut,
     DeliverableCreateRequest,
     DeliverableOut,
     DeliverableReferenceOut,
@@ -1118,3 +1142,163 @@ def get_coordinated_batch_item_decisions(
         CoordinatedItemDecisionOut.model_validate(row)
         for row in list_batch_item_decisions(db, batch_id)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 12 — Régénération guidée d'un item en révision.
+# Production LLM limitée à UN item marqué `revision_requested` : ne remplace pas
+# l'item original, ne change pas le lot, ne touche pas aux autres items, ne
+# déploie rien, ne modifie pas le repo. La régénération est un candidat séparé.
+# ---------------------------------------------------------------------------
+def _get_regeneration_or_404(
+    db: Session, regeneration_id: int
+) -> CoordinatedDeliverableItemRegeneration:
+    """Récupère une régénération par id ou lève 404."""
+    regeneration = db.get(CoordinatedDeliverableItemRegeneration, regeneration_id)
+    if regeneration is None:
+        raise HTTPException(status_code=404, detail="régénération introuvable")
+    return regeneration
+
+
+@app.post(
+    "/coordinated-deliverable-items/{item_id}/regenerations",
+    response_model=CoordinatedItemRegenerationOut,
+    status_code=201,
+)
+def create_coordinated_item_regeneration(
+    item_id: int,
+    payload: CoordinatedItemRegenerationCreateRequest,
+    db: DbSession,
+    llm: LLM,
+) -> CoordinatedItemRegenerationOut:
+    """Régénère un item **`revision_requested`**. Ne remplace pas l'item, ne change pas le lot.
+
+    Item absent → 404 ; item non `revision_requested` → 409 ; lot parent absent → 409.
+    """
+    try:
+        item, batch = load_item_in_revision(db, item_id)
+    except RegenItemNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="item introuvable") from exc
+    except ItemNotInRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BatchNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="lot parent introuvable") from exc
+    regeneration = generate_regeneration(
+        db, llm, item, batch, payload, llm_model=get_settings().anthropic_model
+    )
+    log_product_event(
+        db,
+        "coordinated_item_regeneration_created",
+        "phase12",
+        "coordinated_item_regeneration",
+        regeneration.id,
+        regeneration.status,
+        metadata={"item_id": item.id, "batch_id": batch.id},
+    )
+    return CoordinatedItemRegenerationOut.model_validate(regeneration)
+
+
+@app.get(
+    "/coordinated-deliverable-items/{item_id}/regenerations",
+    response_model=list[CoordinatedItemRegenerationOut],
+)
+def list_coordinated_item_regenerations(
+    item_id: int, db: DbSession
+) -> list[CoordinatedItemRegenerationOut]:
+    """Liste les régénérations d'un item, de la plus récente à la plus ancienne."""
+    return [
+        CoordinatedItemRegenerationOut.model_validate(row)
+        for row in list_regenerations(db, item_id)
+    ]
+
+
+@app.get(
+    "/coordinated-item-regenerations/{regeneration_id}",
+    response_model=CoordinatedItemRegenerationOut,
+)
+def get_coordinated_item_regeneration(
+    regeneration_id: int, db: DbSession
+) -> CoordinatedItemRegenerationOut:
+    """Retourne une régénération précise."""
+    return CoordinatedItemRegenerationOut.model_validate(
+        _get_regeneration_or_404(db, regeneration_id)
+    )
+
+
+@app.get(
+    "/coordinated-item-regenerations/{regeneration_id}/provenance",
+    response_model=CoordinatedItemRegenerationProvenanceOut,
+)
+def get_coordinated_item_regeneration_provenance(
+    regeneration_id: int, db: DbSession
+) -> CoordinatedItemRegenerationProvenanceOut:
+    """Retourne la provenance : item, lot, exploitation, référence, version."""
+    return CoordinatedItemRegenerationProvenanceOut.model_validate(
+        _get_regeneration_or_404(db, regeneration_id)
+    )
+
+
+def _decide_regeneration(
+    regeneration_id: int, new_status: str, event_type: str, db: Session
+) -> CoordinatedItemRegenerationOut:
+    """Applique une décision CEO sur une régénération et la journalise (Phase 12)."""
+    regeneration = _get_regeneration_or_404(db, regeneration_id)
+    previous_status = regeneration.status
+    regeneration = set_regeneration_status(db, regeneration, new_status)
+    log_product_event(
+        db,
+        event_type,
+        "phase12",
+        "coordinated_item_regeneration",
+        regeneration.id,
+        regeneration.status,
+        metadata={
+            "item_id": regeneration.item_id,
+            "batch_id": regeneration.batch_id,
+            "previous_status": previous_status,
+            "new_status": regeneration.status,
+        },
+    )
+    return CoordinatedItemRegenerationOut.model_validate(regeneration)
+
+
+@app.post(
+    "/coordinated-item-regenerations/{regeneration_id}/approve",
+    response_model=CoordinatedItemRegenerationOut,
+)
+def approve_coordinated_item_regeneration(
+    regeneration_id: int, db: DbSession
+) -> CoordinatedItemRegenerationOut:
+    """Validation CEO d'une régénération : passe en `approved`. Ne remplace pas l'item original."""
+    return _decide_regeneration(
+        regeneration_id, "approved", "coordinated_item_regeneration_approved", db
+    )
+
+
+@app.post(
+    "/coordinated-item-regenerations/{regeneration_id}/reject",
+    response_model=CoordinatedItemRegenerationOut,
+)
+def reject_coordinated_item_regeneration(
+    regeneration_id: int, db: DbSession
+) -> CoordinatedItemRegenerationOut:
+    """Refus CEO d'une régénération : passe en `rejected`. Ne change pas l'item original."""
+    return _decide_regeneration(
+        regeneration_id, "rejected", "coordinated_item_regeneration_rejected", db
+    )
+
+
+@app.post(
+    "/coordinated-item-regenerations/{regeneration_id}/request-revision",
+    response_model=CoordinatedItemRegenerationOut,
+)
+def request_revision_coordinated_item_regeneration(
+    regeneration_id: int, db: DbSession
+) -> CoordinatedItemRegenerationOut:
+    """Demande de révision d'une régénération : passe en `revision_requested`. Ne relance rien."""
+    return _decide_regeneration(
+        regeneration_id,
+        "revision_requested",
+        "coordinated_item_regeneration_revision_requested",
+        db,
+    )

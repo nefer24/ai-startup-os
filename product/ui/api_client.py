@@ -470,6 +470,69 @@ class SolutionPlansAPIClient:
         )
         return result
 
+    # --- Phase 12 : régénération guidée d'un item en révision ---------------
+    def create_coordinated_item_regeneration(
+        self,
+        item_id: int,
+        revision_instructions: str,
+        constraints: str = "",
+        acceptance_focus: str = "",
+    ) -> dict[str, Any]:
+        """Régénère un item en révision (`POST .../coordinated-deliverable-items/{id}/regen`)."""
+        payload = {
+            "revision_instructions": revision_instructions,
+            "constraints": constraints,
+            "acceptance_focus": acceptance_focus,
+        }
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-deliverable-items/{item_id}/regenerations", json=payload
+        )
+        return result
+
+    def list_coordinated_item_regenerations(self, item_id: int) -> list[dict[str, Any]]:
+        """Liste les régénérations d'un item (`GET .../regenerations`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/coordinated-deliverable-items/{item_id}/regenerations"
+        )
+        return result
+
+    def get_coordinated_item_regeneration(self, regeneration_id: int) -> dict[str, Any]:
+        """Retourne une régénération précise (`GET /coordinated-item-regenerations/{id}`)."""
+        result: dict[str, Any] = self._request(
+            "GET", f"/coordinated-item-regenerations/{regeneration_id}"
+        )
+        return result
+
+    def get_coordinated_item_regeneration_provenance(self, regeneration_id: int) -> dict[str, Any]:
+        """Provenance d'une régénération (`GET /coordinated-item-regenerations/{id}/provenance`)."""
+        result: dict[str, Any] = self._request(
+            "GET", f"/coordinated-item-regenerations/{regeneration_id}/provenance"
+        )
+        return result
+
+    def approve_coordinated_item_regeneration(self, regeneration_id: int) -> dict[str, Any]:
+        """Validation CEO d'une régénération (`POST .../approve`). Ne remplace pas l'item."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-item-regenerations/{regeneration_id}/approve"
+        )
+        return result
+
+    def reject_coordinated_item_regeneration(self, regeneration_id: int) -> dict[str, Any]:
+        """Refus CEO d'une régénération (`POST .../reject`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-item-regenerations/{regeneration_id}/reject"
+        )
+        return result
+
+    def request_coordinated_item_regeneration_revision(
+        self, regeneration_id: int
+    ) -> dict[str, Any]:
+        """Demande de révision d'une régénération (`POST .../request-revision`)."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-item-regenerations/{regeneration_id}/request-revision"
+        )
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,
