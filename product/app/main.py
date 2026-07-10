@@ -86,6 +86,13 @@ Endpoints Phase 12 (Régénération guidée d'un item en révision) :
   * POST /coordinated-item-regenerations/{id}/reject           — refus CEO (statut rejected).
   * POST /coordinated-item-regenerations/{id}/request-revision — demande de révision.
 
+Endpoints Phase 13 (Adoption contrôlée d'une régénération approuvée — déterministe, sans LLM) :
+  * POST /coordinated-item-regenerations/{id}/adopt            — adopte une régénération approuvée.
+  * GET  /coordinated-deliverable-items/{id}/adoptions        — adoptions d'un item.
+  * GET  /coordinated-item-adoptions/{id}                     — relit une adoption.
+  * GET  /coordinated-item-adoptions/{id}/provenance          — provenance de l'adoption.
+  * GET  /coordinated-deliverable-batches/{id}/adoptions      — adoptions d'un lot.
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -121,6 +128,20 @@ from app.coordinated_deliverables import (
     load_approved_exploitation,
     set_batch_status,
 )
+from app.coordinated_item_adoptions import (
+    BatchNotFoundError as AdoptBatchNotFoundError,
+)
+from app.coordinated_item_adoptions import (
+    ItemNotFoundError as AdoptItemNotFoundError,
+)
+from app.coordinated_item_adoptions import (
+    RegenerationNotApprovedError,
+    RegenerationNotFoundError,
+    adopt_regeneration,
+    list_batch_adoptions,
+    list_item_adoptions,
+    load_approved_regeneration,
+)
 from app.coordinated_item_decisions import (
     ItemNotFoundError,
     batch_item_validation_summary,
@@ -144,6 +165,7 @@ from app.db import (
     CompanyDeliverable,
     CoordinatedDeliverableBatch,
     CoordinatedDeliverableItem,
+    CoordinatedDeliverableItemAdoption,
     CoordinatedDeliverableItemRegeneration,
     DeliverableVersion,
     LLMResult,
@@ -194,6 +216,9 @@ from app.schemas import (
     CoordinatedDeliverableBatchOut,
     CoordinatedDeliverableBatchProvenanceOut,
     CoordinatedDeliverableItemOut,
+    CoordinatedItemAdoptionOut,
+    CoordinatedItemAdoptionProvenanceOut,
+    CoordinatedItemAdoptionRequest,
     CoordinatedItemDecisionOut,
     CoordinatedItemDecisionRequest,
     CoordinatedItemRegenerationCreateRequest,
@@ -1302,3 +1327,110 @@ def request_revision_coordinated_item_regeneration(
         "coordinated_item_regeneration_revision_requested",
         db,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 13 — Adoption contrôlée d'une régénération approuvée.
+# Gouvernance CEO déterministe, SANS aucun appel LLM : promeut explicitement une
+# régénération `approved` comme nouveau contenu de l'item source (append-only).
+# Ne modifie ni le lot, ni les autres items ; n'adopte jamais automatiquement.
+# ---------------------------------------------------------------------------
+def _get_adoption_or_404(db: Session, adoption_id: int) -> CoordinatedDeliverableItemAdoption:
+    """Récupère une adoption par id ou lève 404."""
+    adoption = db.get(CoordinatedDeliverableItemAdoption, adoption_id)
+    if adoption is None:
+        raise HTTPException(status_code=404, detail="adoption introuvable")
+    return adoption
+
+
+@app.post(
+    "/coordinated-item-regenerations/{regeneration_id}/adopt",
+    response_model=CoordinatedItemAdoptionOut,
+    status_code=201,
+)
+def adopt_coordinated_item_regeneration(
+    regeneration_id: int, payload: CoordinatedItemAdoptionRequest, db: DbSession
+) -> CoordinatedItemAdoptionOut:
+    """Adopte une régénération **approuvée** comme nouveau contenu de l'item source (sans LLM).
+
+    Régénération absente → 404 ; non `approved` → 409 ; item ou lot parent absent → 409. Met à jour
+    uniquement l'item source ; ne modifie ni le lot ni les autres items ; garde l'ancien contenu.
+    """
+    try:
+        regeneration, item, batch = load_approved_regeneration(db, regeneration_id)
+    except RegenerationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="régénération introuvable") from exc
+    except RegenerationNotApprovedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AdoptItemNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="item source introuvable") from exc
+    except AdoptBatchNotFoundError as exc:
+        raise HTTPException(status_code=409, detail="lot parent introuvable") from exc
+    adoption = adopt_regeneration(
+        db, regeneration, item, batch, reason=payload.reason, ceo_notes=payload.ceo_notes
+    )
+    log_product_event(
+        db,
+        "coordinated_item_regeneration_adopted",
+        "phase13",
+        "coordinated_item_adoption",
+        adoption.id,
+        adoption.new_item_status,
+        metadata={
+            "regeneration_id": adoption.regeneration_id,
+            "item_id": adoption.item_id,
+            "batch_id": adoption.batch_id,
+            "previous_item_status": adoption.previous_item_status,
+            "new_item_status": adoption.new_item_status,
+        },
+    )
+    return CoordinatedItemAdoptionOut.model_validate(adoption)
+
+
+@app.get(
+    "/coordinated-deliverable-items/{item_id}/adoptions",
+    response_model=list[CoordinatedItemAdoptionOut],
+)
+def get_coordinated_deliverable_item_adoptions(
+    item_id: int, db: DbSession
+) -> list[CoordinatedItemAdoptionOut]:
+    """Liste les adoptions d'un item, de la plus récente à la plus ancienne (append-only)."""
+    return [
+        CoordinatedItemAdoptionOut.model_validate(row) for row in list_item_adoptions(db, item_id)
+    ]
+
+
+@app.get(
+    "/coordinated-item-adoptions/{adoption_id}",
+    response_model=CoordinatedItemAdoptionOut,
+)
+def get_coordinated_item_adoption(adoption_id: int, db: DbSession) -> CoordinatedItemAdoptionOut:
+    """Retourne une adoption précise."""
+    return CoordinatedItemAdoptionOut.model_validate(_get_adoption_or_404(db, adoption_id))
+
+
+@app.get(
+    "/coordinated-item-adoptions/{adoption_id}/provenance",
+    response_model=CoordinatedItemAdoptionProvenanceOut,
+)
+def get_coordinated_item_adoption_provenance(
+    adoption_id: int, db: DbSession
+) -> CoordinatedItemAdoptionProvenanceOut:
+    """Retourne la provenance : régénération, item, lot, exploitation, référence, version."""
+    return CoordinatedItemAdoptionProvenanceOut.model_validate(
+        _get_adoption_or_404(db, adoption_id)
+    )
+
+
+@app.get(
+    "/coordinated-deliverable-batches/{batch_id}/adoptions",
+    response_model=list[CoordinatedItemAdoptionOut],
+)
+def get_coordinated_batch_adoptions(
+    batch_id: int, db: DbSession
+) -> list[CoordinatedItemAdoptionOut]:
+    """Liste toutes les adoptions des items d'un lot, de la plus récente à la plus ancienne."""
+    _get_batch_or_404(db, batch_id)
+    return [
+        CoordinatedItemAdoptionOut.model_validate(row) for row in list_batch_adoptions(db, batch_id)
+    ]

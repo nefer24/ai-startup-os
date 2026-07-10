@@ -549,6 +549,7 @@ class CoordinatedItemRegenerationOut(BaseModel):
     ceo_validation_notes: str
     provenance_notes: str
     status: str
+    adopted: bool
     error: str
     llm_model: str
     created_at: dt.datetime
@@ -569,6 +570,72 @@ class CoordinatedItemRegenerationProvenanceOut(BaseModel):
     reference_version_id: int
     reference_version_number: int
     source_item_status_at_creation: str
+    created_at: dt.datetime
+
+
+class CoordinatedItemAdoptionRequest(BaseModel):
+    """Entrée CEO : adopter une régénération approuvée (raison + notes, Phase 13)."""
+
+    reason: str = ""
+    ceo_notes: str = ""
+
+    @field_validator("reason", "ceo_notes")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+
+class CoordinatedItemAdoptionOut(BaseModel):
+    """Adoption d'une régénération renvoyée par l'API (Phase 13, historique append-only)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    regeneration_id: int
+    item_id: int
+    batch_id: int
+    exploitation_id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    previous_item_title: str
+    previous_item_content: str
+    previous_item_dependencies: str
+    previous_item_consistency_notes: str
+    previous_item_validation_notes: str
+    previous_item_status: str
+    adopted_item_title: str
+    adopted_item_content: str
+    adopted_item_dependencies: str
+    adopted_item_consistency_notes: str
+    adopted_item_validation_notes: str
+    new_item_status: str
+    reason: str
+    ceo_notes: str
+    adopted_by: str
+    source_regeneration_status: str
+    created_at: dt.datetime
+
+
+class CoordinatedItemAdoptionProvenanceOut(BaseModel):
+    """Provenance d'une adoption (Phase 13, lecture seule)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    regeneration_id: int
+    item_id: int
+    batch_id: int
+    exploitation_id: int
+    deliverable_id: int
+    reference_id: int
+    reference_version_id: int
+    reference_version_number: int
+    previous_item_status: str
+    new_item_status: str
+    adopted_by: str
     created_at: dt.datetime
 
 

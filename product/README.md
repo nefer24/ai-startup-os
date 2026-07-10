@@ -585,8 +585,53 @@ puis le contenu régénéré, la provenance et les actions CEO. Toujours **via l
 > **Cette régénération ne remplace pas l'item original. Elle ne modifie pas le lot, ne touche pas
 > aux autres items, ne déploie rien, ne livre rien et ne modifie pas le repo.**
 
+## Phase 13 — Adoption contrôlée d'une régénération approuvée
+
+Le CEO peut **promouvoir explicitement** une régénération **approuvée** (Phase 12) comme **nouveau
+contenu officiel de l'item source**. C'est une **décision de gouvernance déterministe, SANS aucun
+appel LLM** qui **referme la boucle** ouverte par la Phase 12 (où la régénération restait un candidat
+séparé). L'adoption **n'est jamais automatique** : elle ne se produit pas à l'approbation de la
+régénération, seulement quand le CEO la déclenche.
+
+**Exception contrôlée & historique append-only :** cette phase est la seule à **modifier l'item
+source** — parce que le CEO le demande explicitement. La modification est **traçable et réversible
+par l'historique** : chaque adoption (`coordinated_deliverable_item_adoptions`) snapshote **l'ancien
+état** de l'item **et** le **nouvel état adopté** ; aucune adoption n'est jamais supprimée. La
+régénération est marquée `adopted=True` (champ dédié, pas d'écrasement).
+
+**Invariants :**
+
+- La régénération doit être `approved` (sinon 409) ; l'item source et le lot doivent exister (409).
+- **Seul l'item source est modifié** (contenu ← régénération, statut → `approved`). Le **lot**, les
+  **autres items**, l'exploitation, la référence, les versions et le livrable original ne sont
+  **jamais** modifiés ; le lot n'est **pas** approuvé automatiquement.
+- **Aucun appel LLM** n'est fait ni journalisé ; aucune nouvelle régénération, aucune production.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/coordinated-item-regenerations/{id}/adopt` | adopte une régénération `approved` (404 absente ; 409 non approuvée / item ou lot absent) |
+| `GET` | `/coordinated-deliverable-items/{id}/adoptions` | historique des adoptions d'un item |
+| `GET` | `/coordinated-item-adoptions/{id}` | relit une adoption |
+| `GET` | `/coordinated-item-adoptions/{id}/provenance` | provenance de l'adoption |
+| `GET` | `/coordinated-deliverable-batches/{id}/adoptions` | adoptions d'un lot |
+
+**Observabilité :** événement `coordinated_item_regeneration_adopted` (`phase13`,
+`entity_type = coordinated_item_adoption`, métadonnées `regeneration_id` / `item_id` / `batch_id` /
+`previous_item_status` / `new_item_status`). Aucun appel LLM Phase 13.
+
+**Interface :** section **« Adoption d'une régénération approuvée »** de l'onglet « Livrables
+coordonnés » (Streamlit) — régénérations approuvées non adoptées, contenu **actuel vs régénéré
+côte à côte**, `reason` / `ceo_notes`, **« Adopter cette régénération »**, puis l'item mis à jour et
+l'**historique des adoptions** (ancien contenu conservé). Toujours **via le client HTTP**.
+
+> **L'adoption est une décision CEO explicite. Elle met à jour uniquement l'item source, conserve
+> l'ancien contenu dans l'historique, ne modifie pas le lot, ne touche pas aux autres items, ne
+> déploie rien et ne modifie pas le repo.**
+
 ## Prochaine tranche
 
-**Phase 13 (proposée)** — à cadrer par le CEO : adoption d'une régénération approuvée comme nouvelle
-version officielle d'un item, chaînage de plusieurs lots coordonnés, ou export/synthèse des
-livrables et des journaux d'observabilité.
+**Phase 14 (proposée)** — à cadrer par le CEO : **notion de « Projet »** unifiant tout un parcours
+(entrée → entreprise IA → livrables → référence → exploitations → lots → décisions), première pièce
+de la consolidation vers un MVP produit utilisable.

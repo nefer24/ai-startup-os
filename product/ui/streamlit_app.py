@@ -1509,6 +1509,95 @@ def _render_regeneration_list(client: SolutionPlansAPIClient, item_id: int) -> N
                     )
 
 
+ADOPTION_NOTICE = (
+    "L'adoption est une **décision CEO explicite**. Elle met à jour uniquement l'item source avec "
+    "le contenu de la régénération approuvée, conserve l'ancien contenu dans l'historique, ne "
+    "modifie pas le lot, ne touche pas aux autres items, ne déploie rien et ne modifie pas le repo."
+)
+
+
+def render_coordinated_item_adoption(client: SolutionPlansAPIClient) -> None:
+    """Coordonnés — adoption contrôlée d'une régénération approuvée (Phase 13)."""
+    st.header("6. Adoption d'une régénération approuvée")
+    st.caption(ADOPTION_NOTICE)
+    batch_id = st.session_state.get("selected_batch_id")
+    if batch_id is None:
+        st.info("Sélectionnez un lot ci-dessus pour adopter une régénération approuvée.")
+        return
+    try:
+        items = client.list_coordinated_deliverable_items(int(batch_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les items : {exc}")
+        return
+
+    # Collecte des régénérations approuvées non encore adoptées, par item.
+    approved: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for item in items:
+        try:
+            regens = client.list_coordinated_item_regenerations(int(item["id"]))
+        except APIError:
+            regens = []
+        for regen in regens:
+            if regen.get("status") == "approved" and not regen.get("adopted"):
+                approved.append((item, regen))
+
+    if not approved:
+        st.info(
+            "Aucune régénération **approuvée non adoptée** dans ce lot. Approuvez une régénération "
+            "(section précédente) pour pouvoir l'adopter."
+        )
+    for item, regen in approved:
+        regen_id = int(regen["id"])
+        with st.expander(
+            f"Régénération #{regen_id} · item {item.get('item_type')} ({item.get('title')}) "
+            f"· {status_badge(item.get('status', ''))}"
+        ):
+            col_old, col_new = st.columns(2)
+            with col_old:
+                st.markdown("**Contenu actuel de l'item**")
+                st.write(item.get("content", "") or "_(vide)_")
+            with col_new:
+                st.markdown("**Contenu régénéré approuvé**")
+                st.write(regen.get("regenerated_content", "") or "_(vide)_")
+            reason = st.text_input("Raison", key=f"adopt_reason_{regen_id}")
+            ceo_notes = st.text_input("Notes CEO", key=f"adopt_notes_{regen_id}")
+            if st.button("📥 Adopter cette régénération", key=f"adopt_btn_{regen_id}"):
+                _act(
+                    lambda i=regen_id, r=reason, n=ceo_notes: (
+                        client.adopt_coordinated_item_regeneration(i, r, n)
+                    ),
+                    "Régénération adoptée : item source mis à jour, lot inchangé.",
+                )
+
+    _render_batch_adoptions(client, int(batch_id))
+
+
+def _render_batch_adoptions(client: SolutionPlansAPIClient, batch_id: int) -> None:
+    """Affiche l'historique des adoptions du lot (append-only)."""
+    try:
+        adoptions = client.list_coordinated_batch_item_adoptions(batch_id)
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les adoptions : {exc}")
+        return
+    if not adoptions:
+        return
+    st.markdown(f"**Historique des adoptions du lot ({len(adoptions)})**")
+    for adoption in adoptions:
+        with st.expander(
+            f"Adoption #{adoption.get('id')} · item #{adoption.get('item_id')} "
+            f"· régénération #{adoption.get('regeneration_id')} · {adoption.get('created_at', '')}"
+        ):
+            st.write(
+                f"**Statut item :** {status_badge(adoption.get('previous_item_status', ''))} → "
+                f"{status_badge(adoption.get('new_item_status', ''))} · "
+                f"par {adoption.get('adopted_by', '')}"
+            )
+            _section("Ancien contenu (conservé)", adoption.get("previous_item_content", ""))
+            _section("Contenu adopté", adoption.get("adopted_item_content", ""))
+            if adoption.get("reason"):
+                _section("Raison", adoption.get("reason", ""))
+
+
 def render_observability_summary(client: SolutionPlansAPIClient) -> None:
     """Observabilité — résumé (compteurs, durée moyenne, répartitions)."""
     st.header("1. Résumé")
@@ -1674,6 +1763,7 @@ def main() -> None:
         render_coordinated_detail(client)
         render_coordinated_item_validation(client)
         render_coordinated_item_regeneration(client)
+        render_coordinated_item_adoption(client)
     with tab_observability:
         render_observability_summary(client)
         render_observability_llm_calls(client)

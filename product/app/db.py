@@ -436,6 +436,8 @@ class CoordinatedDeliverableItemRegeneration(Base):
     provenance_notes: Mapped[str] = mapped_column(Text, default="")
     # Statut : draft / candidate / approved / rejected / revision_requested.
     status: Mapped[str] = mapped_column(String, default="candidate")
+    # Marqueur d'adoption (Phase 13) : passe à True quand la régénération est adoptée par le CEO.
+    adopted: Mapped[bool] = mapped_column(default=False)
     # Audit / diagnostic (optionnels).
     raw_agent_outputs: Mapped[str] = mapped_column(Text, default="")
     error: Mapped[str] = mapped_column(Text, default="")
@@ -443,6 +445,51 @@ class CoordinatedDeliverableItemRegeneration(Base):
     # Horodatages.
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class CoordinatedDeliverableItemAdoption(Base):
+    """Adoption CEO d'une régénération **approuvée** comme nouveau contenu officiel d'un item (P13).
+
+    Décision de gouvernance **déterministe, sans aucun appel LLM** : le CEO promeut explicitement
+    une régénération `approved` (Phase 12) comme nouveau contenu de l'item source. **Historique
+    append-only** : l'ancien état de l'item **et** le nouvel état adopté sont snapshotés ; aucune
+    adoption n'est jamais supprimée. L'item source est mis à jour ; le lot, les autres items et les
+    sources amont ne sont **jamais** modifiés.
+    """
+
+    __tablename__ = "coordinated_deliverable_item_adoptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Provenance.
+    regeneration_id: Mapped[int] = mapped_column(default=0)
+    item_id: Mapped[int] = mapped_column(default=0)
+    batch_id: Mapped[int] = mapped_column(default=0)
+    exploitation_id: Mapped[int] = mapped_column(default=0)
+    deliverable_id: Mapped[int] = mapped_column(default=0)
+    reference_id: Mapped[int] = mapped_column(default=0)
+    reference_version_id: Mapped[int] = mapped_column(default=0)
+    reference_version_number: Mapped[int] = mapped_column(default=0)
+    # Ancien état de l'item (snapshot figé avant adoption).
+    previous_item_title: Mapped[str] = mapped_column(String, default="")
+    previous_item_content: Mapped[str] = mapped_column(Text, default="")
+    previous_item_dependencies: Mapped[str] = mapped_column(Text, default="")
+    previous_item_consistency_notes: Mapped[str] = mapped_column(Text, default="")
+    previous_item_validation_notes: Mapped[str] = mapped_column(Text, default="")
+    previous_item_status: Mapped[str] = mapped_column(String, default="")
+    # Nouvel état adopté (issu de la régénération).
+    adopted_item_title: Mapped[str] = mapped_column(String, default="")
+    adopted_item_content: Mapped[str] = mapped_column(Text, default="")
+    adopted_item_dependencies: Mapped[str] = mapped_column(Text, default="")
+    adopted_item_consistency_notes: Mapped[str] = mapped_column(Text, default="")
+    adopted_item_validation_notes: Mapped[str] = mapped_column(Text, default="")
+    new_item_status: Mapped[str] = mapped_column(String, default="approved")
+    # Décision CEO.
+    reason: Mapped[str] = mapped_column(Text, default="")
+    ceo_notes: Mapped[str] = mapped_column(Text, default="")
+    adopted_by: Mapped[str] = mapped_column(String, default="CEO")
+    # Audit.
+    source_regeneration_status: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
 
 class LLMCallLog(Base):
