@@ -492,6 +492,48 @@ class CoordinatedDeliverableItemAdoption(Base):
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
 
+class Project(Base):
+    """Espace **projet** unifié (Phase 14) : regroupe tout un parcours AI-SOS.
+
+    Un projet **relie** les objets existants (plan, entreprise IA, livrables, versions, références,
+    exploitations, lots, décisions, régénérations, adoptions…) via `ProjectLink`, **sans les
+    modifier** et **sans** ajouter de `project_id` dans les tables métier. Objet de **regroupement
+    et de navigation** : il n'ajoute aucune capacité métier, n'appelle aucun LLM.
+    """
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    initial_input: Mapped[str] = mapped_column(Text, default="")
+    # project_type : problem / idea / objective / existing_solution / mixed.
+    project_type: Mapped[str] = mapped_column(String, default="objective")
+    # status : draft / active / paused / completed / archived.
+    status: Mapped[str] = mapped_column(String, default="active")
+    ceo_notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class ProjectLink(Base):
+    """Lien **non destructif** entre un projet et un objet métier existant (Phase 14).
+
+    Relie un `Project` à un objet (par `entity_type` + `entity_id`) sans jamais modifier ni
+    supprimer cet objet. Supprimer un lien ne supprime que le lien.
+    """
+
+    __tablename__ = "project_links"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(default=0)
+    entity_type: Mapped[str] = mapped_column(String, default="")
+    entity_id: Mapped[int] = mapped_column(default=0)
+    role: Mapped[str] = mapped_column(String, default="related")
+    label: Mapped[str] = mapped_column(String, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+
+
 class LLMCallLog(Base):
     """Journal d'un appel LLM exécuté par le runtime produit (Phase 8, observabilité).
 

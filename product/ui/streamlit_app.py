@@ -1692,6 +1692,196 @@ def render_observability_events(client: SolutionPlansAPIClient) -> None:
         )
 
 
+PROJECT_TYPES = ["problem", "idea", "objective", "existing_solution", "mixed"]
+PROJECT_STATUSES = ["draft", "active", "paused", "completed", "archived"]
+PROJECT_ENTITY_TYPES = [
+    "solution_plan",
+    "solution_improvement",
+    "ai_company",
+    "company_deliverable",
+    "deliverable_version",
+    "deliverable_reference",
+    "reference_exploitation",
+    "coordinated_deliverable_batch",
+    "coordinated_deliverable_item",
+    "coordinated_item_decision",
+    "coordinated_item_regeneration",
+    "coordinated_item_adoption",
+]
+PROJECT_ROLES = [
+    "origin",
+    "plan",
+    "improvement",
+    "company",
+    "deliverable",
+    "version",
+    "reference",
+    "exploitation",
+    "batch",
+    "item",
+    "decision",
+    "regeneration",
+    "adoption",
+    "related",
+]
+PROJECT_NOTICE = (
+    "Le projet est un **espace de regroupement**. Rattacher un objet **ne le modifie pas**. "
+    "Supprimer un lien **ne supprime pas** l'objet source."
+)
+
+
+def render_project_create(client: SolutionPlansAPIClient) -> None:
+    """Projets — créer un projet et lister les projets existants."""
+    st.header("1. Créer un projet")
+    st.caption(PROJECT_NOTICE)
+    with st.form("create_project"):
+        title = st.text_input("Titre")
+        description = st.text_area("Description")
+        initial_input = st.text_area("Entrée initiale (problème / idée / objectif)")
+        project_type = st.selectbox("Type de projet", PROJECT_TYPES, index=2)
+        ceo_notes = st.text_area("Notes CEO")
+        submitted = st.form_submit_button("Créer le projet")
+    if submitted:
+        if not title.strip():
+            st.error("Le titre est obligatoire.")
+        else:
+            try:
+                project = client.create_project(
+                    title.strip(),
+                    description.strip(),
+                    initial_input.strip(),
+                    project_type,
+                    ceo_notes.strip(),
+                )
+                st.success(f"Projet #{project.get('id')} créé.")
+                st.session_state["selected_project_id"] = project.get("id")
+            except APIError as exc:
+                st.error(f"Création impossible : {exc}")
+
+    st.header("2. Projets")
+    try:
+        projects = client.list_projects()
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les projets : {exc}")
+        return
+    if not projects:
+        st.info("Aucun projet. Créez-en un ci-dessus.")
+        return
+    for project in projects:
+        st.markdown(
+            f"- **#{project.get('id')}** · `{project.get('project_type')}` · "
+            f"{status_badge(project.get('status', ''))} · {project.get('title', '')} "
+            f"· {project.get('created_at', '')}"
+        )
+    ids = [int(p["id"]) for p in projects]
+    current = st.session_state.get("selected_project_id")
+    default_index = ids.index(current) if current in ids else 0
+    selected = st.selectbox("Sélectionner un projet", ids, index=default_index)
+    st.session_state["selected_project_id"] = selected
+
+
+def render_project_detail(client: SolutionPlansAPIClient) -> None:
+    """Projets — détail, mise à jour des métadonnées, liens et overview léger."""
+    st.header("3. Détail du projet")
+    project_id = st.session_state.get("selected_project_id")
+    if project_id is None:
+        st.info("Sélectionnez un projet dans la liste.")
+        return
+    try:
+        project = client.get_project(int(project_id))
+    except APIError as exc:
+        st.error(f"Impossible de récupérer le projet : {exc}")
+        return
+
+    st.subheader(f"#{project.get('id')} — {project.get('title', '')}")
+    st.write(
+        f"**Type :** `{project.get('project_type')}` · "
+        f"**Statut :** {status_badge(project.get('status', ''))}"
+    )
+    _section("Description", project.get("description", ""))
+    _section("Entrée initiale", project.get("initial_input", ""))
+    _section("Notes CEO", project.get("ceo_notes", ""))
+
+    with st.expander("Mettre à jour les métadonnées"):
+        new_status = st.selectbox(
+            "Statut",
+            PROJECT_STATUSES,
+            index=PROJECT_STATUSES.index(project.get("status", "active"))
+            if project.get("status") in PROJECT_STATUSES
+            else 1,
+        )
+        new_notes = st.text_area("Notes CEO", value=project.get("ceo_notes", ""))
+        if st.button("💾 Enregistrer"):
+            _act(
+                lambda: client.update_project(
+                    int(project_id), status=new_status, ceo_notes=new_notes.strip()
+                ),
+                "Projet mis à jour (objets liés inchangés).",
+            )
+
+    _render_project_links(client, int(project_id))
+    _render_project_overview(client, int(project_id))
+
+
+def _render_project_links(client: SolutionPlansAPIClient, project_id: int) -> None:
+    """Projets — rattacher un objet et lister les liens."""
+    st.markdown("**Rattacher un objet existant**")
+    col_type, col_id = st.columns(2)
+    entity_type = col_type.selectbox("Type d'entité", PROJECT_ENTITY_TYPES, key="link_entity_type")
+    entity_id = int(
+        col_id.number_input("ID de l'entité", min_value=1, step=1, key="link_entity_id")
+    )
+    col_role, col_label = st.columns(2)
+    role = col_role.selectbox("Rôle", PROJECT_ROLES, index=len(PROJECT_ROLES) - 1, key="link_role")
+    label = col_label.text_input("Libellé", key="link_label")
+    if st.button("🔗 Rattacher au projet"):
+        _act(
+            lambda: client.add_project_link(
+                project_id, entity_type, entity_id, role, label.strip()
+            ),
+            "Objet rattaché (non modifié).",
+        )
+
+    st.markdown("**Liens du projet**")
+    try:
+        links = client.list_project_links(project_id)
+    except APIError as exc:
+        st.error(f"Impossible de récupérer les liens : {exc}")
+        return
+    if not links:
+        st.info("Aucun lien pour ce projet.")
+        return
+    for link in links:
+        cols = st.columns([5, 1])
+        cols[0].markdown(
+            f"- **{link.get('entity_type')}** #{link.get('entity_id')} · "
+            f"rôle `{link.get('role')}`"
+            f"{' — ' + link['label'] if link.get('label') else ''}"
+        )
+        if cols[1].button("🗑️", key=f"del_link_{link.get('id')}"):
+            _act(
+                lambda link_id=int(link["id"]): client.remove_project_link(project_id, link_id),
+                "Lien supprimé (objet source conservé).",
+            )
+
+
+def _render_project_overview(client: SolutionPlansAPIClient, project_id: int) -> None:
+    """Projets — overview léger (compteurs par type / rôle)."""
+    st.markdown("**Overview léger**")
+    try:
+        overview = client.get_project_overview(project_id)
+    except APIError as exc:
+        st.error(f"Impossible de récupérer l'overview : {exc}")
+        return
+    st.metric("Total liens", overview.get("links_count", 0))
+    by_type = overview.get("counts_by_entity_type", {})
+    by_role = overview.get("counts_by_role", {})
+    if by_type:
+        st.write("**Par type d'entité :** ", by_type)
+    if by_role:
+        st.write("**Par rôle :** ", by_role)
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -1707,6 +1897,7 @@ def main() -> None:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
     (
+        tab_project,
         tab_create,
         tab_improve,
         tab_company,
@@ -1718,6 +1909,7 @@ def main() -> None:
         tab_observability,
     ) = st.tabs(
         [
+            "Projets",
             "Créer une solution",
             "Améliorer une solution existante",
             "Composer une entreprise IA spécialisée",
@@ -1729,6 +1921,9 @@ def main() -> None:
             "Observabilité",
         ]
     )
+    with tab_project:
+        render_project_create(client)
+        render_project_detail(client)
     with tab_create:
         render_submit(client)
         render_plans_list(client)
