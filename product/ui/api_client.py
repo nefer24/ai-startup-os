@@ -533,6 +533,43 @@ class SolutionPlansAPIClient:
         )
         return result
 
+    # --- Phase 13 : adoption contrôlée d'une régénération approuvée ---------
+    def adopt_coordinated_item_regeneration(
+        self, regeneration_id: int, reason: str = "", ceo_notes: str = ""
+    ) -> dict[str, Any]:
+        """Adopte une régénération approuvée (`POST /coordinated-item-regenerations/{id}/adopt`)."""
+        payload = {"reason": reason, "ceo_notes": ceo_notes}
+        result: dict[str, Any] = self._request(
+            "POST", f"/coordinated-item-regenerations/{regeneration_id}/adopt", json=payload
+        )
+        return result
+
+    def list_coordinated_item_adoptions(self, item_id: int) -> list[dict[str, Any]]:
+        """Liste les adoptions d'un item (`GET /coordinated-deliverable-items/{id}/adoptions`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/coordinated-deliverable-items/{item_id}/adoptions"
+        )
+        return result
+
+    def get_coordinated_item_adoption(self, adoption_id: int) -> dict[str, Any]:
+        """Retourne une adoption précise (`GET /coordinated-item-adoptions/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/coordinated-item-adoptions/{adoption_id}")
+        return result
+
+    def get_coordinated_item_adoption_provenance(self, adoption_id: int) -> dict[str, Any]:
+        """Provenance d'une adoption (`GET /coordinated-item-adoptions/{id}/provenance`)."""
+        result: dict[str, Any] = self._request(
+            "GET", f"/coordinated-item-adoptions/{adoption_id}/provenance"
+        )
+        return result
+
+    def list_coordinated_batch_item_adoptions(self, batch_id: int) -> list[dict[str, Any]]:
+        """Liste les adoptions d'un lot (`GET /coordinated-deliverable-batches/{id}/adoptions`)."""
+        result: list[dict[str, Any]] = self._request(
+            "GET", f"/coordinated-deliverable-batches/{batch_id}/adoptions"
+        )
+        return result
+
     # --- Phase 8 : observabilité (lecture seule) ----------------------------
     def list_llm_call_logs(
         self,
