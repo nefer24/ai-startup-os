@@ -674,7 +674,48 @@ Phase 15.
 > **Le projet est un espace de regroupement. Rattacher un objet ne le modifie pas. Supprimer un
 > lien ne supprime pas l'objet source.**
 
+## Phase 15 — Tableau de bord projet global
+
+Deuxième pièce de **consolidation** vers un MVP produit. Le tableau de bord transforme les liens
+d'un projet (Phase 14) en une **vue de pilotage lisible** : où en est le projet, ce qui est validé,
+ce qui attend une décision, ce qui bloque, et **quelles prochaines actions** entreprendre. C'est une
+**couche de lecture seule, déterministe et SANS aucun appel LLM** : elle **ne modifie rien**, ne crée
+aucun objet métier et n'écrit aucun événement (les lectures dashboard ne polluent pas
+l'observabilité).
+
+**Ce qu'il calcule (règles déterministes, pas de LLM) :** résumé + `health_label` (empty /
+in_progress / needs_attention / ready_for_review), progression (compteurs approved / candidate /
+revision / rejected / adopted + score approximatif 0-100), compteurs par type/rôle/statut, décisions
+en attente (entités `candidate`), items en révision, **régénérations approuvées non adoptées**, lots
+candidats, références actives, **liens cassés** (objets introuvables — sans faire échouer le
+dashboard), et une liste de **prochaines actions triées par priorité** (high → medium → low).
+
+**Règles d'action (exemples) :** régénération `approved` non adoptée → *adopter ou laisser en
+attente* (high) ; item `revision_requested` → *traiter la révision* (high) ; lot/livrable/version/
+exploitation `candidate` → *valider ou demander révision* (medium) ; lien cassé → *vérifier ou
+supprimer ce lien* (low) ; projet sans lien → *rattacher des objets*.
+
+**API (read-only) :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `GET` | `/projects/{id}/dashboard` | tableau de bord global (synthèse + prochaines actions) |
+| `GET` | `/projects/{id}/next-actions` | prochaines actions déterministes uniquement |
+| `GET` | `/projects/{id}/pending-decisions` | décisions en attente uniquement |
+
+Projet absent → 404 ; projet sans lien → dashboard **vide mais valide**. Ces endpoints ne modifient
+aucune table et **ne journalisent pas** les lectures.
+
+**Interface :** section **« Tableau de bord du projet »** de l'onglet « Projets » (Streamlit) —
+résumé + `health_label`, métriques (liens, approuvés, en attente, progression), compteurs par
+type/rôle/statut, listes repliables (décisions en attente, items en révision, régénérations non
+adoptées, lots candidats, références actives, liens cassés) et **prochaines actions** avec badge de
+priorité. Toujours **via le client HTTP**.
+
+> **Le tableau de bord est une vue de lecture. Il ne modifie aucun objet et ne déclenche aucune
+> action automatique.**
+
 ## Prochaine tranche
 
-**Phase 15 (proposée)** — à cadrer par le CEO : **tableau de bord projet global** (vue d'avancement
-détaillée, statuts et prochaines actions CEO par projet), 2ᵉ pièce de la consolidation MVP.
+**Phase 16 (proposée)** — à cadrer par le CEO : **export / synthèse finale d'un projet** (document
+consolidé entrée → référence → livrables approuvés → décisions), 3ᵉ pièce de la consolidation MVP.
