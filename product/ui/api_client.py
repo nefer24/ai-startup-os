@@ -59,6 +59,8 @@ class SolutionPlansAPIClient:
             ) from exc
         if response.is_error:
             raise APIError(f"L'API a répondu {response.status_code} : {response.text}")
+        if response.status_code == 204 or not response.content:
+            return None
         return response.json()
 
     def health(self) -> dict[str, Any]:
@@ -568,6 +570,93 @@ class SolutionPlansAPIClient:
         result: list[dict[str, Any]] = self._request(
             "GET", f"/coordinated-deliverable-batches/{batch_id}/adoptions"
         )
+        return result
+
+    # --- Phase 14 : espace projet unifié ------------------------------------
+    def create_project(
+        self,
+        title: str,
+        description: str = "",
+        initial_input: str = "",
+        project_type: str = "objective",
+        ceo_notes: str = "",
+    ) -> dict[str, Any]:
+        """Crée un projet (`POST /projects`)."""
+        payload = {
+            "title": title,
+            "description": description,
+            "initial_input": initial_input,
+            "project_type": project_type,
+            "ceo_notes": ceo_notes,
+        }
+        result: dict[str, Any] = self._request("POST", "/projects", json=payload)
+        return result
+
+    def list_projects(self, status: str = "", project_type: str = "") -> list[dict[str, Any]]:
+        """Liste les projets (`GET /projects`), filtres optionnels."""
+        params = {"status": status, "project_type": project_type}
+        result: list[dict[str, Any]] = self._request("GET", "/projects", params=params)
+        return result
+
+    def get_project(self, project_id: int) -> dict[str, Any]:
+        """Retourne un projet précis (`GET /projects/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/projects/{project_id}")
+        return result
+
+    def update_project(
+        self,
+        project_id: int,
+        title: str | None = None,
+        description: str | None = None,
+        status: str | None = None,
+        ceo_notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Met à jour les métadonnées d'un projet (`PATCH /projects/{id}`)."""
+        payload = {
+            k: v
+            for k, v in {
+                "title": title,
+                "description": description,
+                "status": status,
+                "ceo_notes": ceo_notes,
+            }.items()
+            if v is not None
+        }
+        result: dict[str, Any] = self._request("PATCH", f"/projects/{project_id}", json=payload)
+        return result
+
+    def add_project_link(
+        self,
+        project_id: int,
+        entity_type: str,
+        entity_id: int,
+        role: str = "related",
+        label: str = "",
+    ) -> dict[str, Any]:
+        """Rattache un objet existant au projet (`POST /projects/{id}/links`)."""
+        payload = {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "role": role,
+            "label": label,
+        }
+        result: dict[str, Any] = self._request(
+            "POST", f"/projects/{project_id}/links", json=payload
+        )
+        return result
+
+    def list_project_links(self, project_id: int) -> list[dict[str, Any]]:
+        """Liste les liens d'un projet (`GET /projects/{id}/links`)."""
+        result: list[dict[str, Any]] = self._request("GET", f"/projects/{project_id}/links")
+        return result
+
+    def remove_project_link(self, project_id: int, link_id: int) -> None:
+        """Supprime un lien (`DELETE /projects/{id}/links/{link_id}`). Ne supprime pas l'objet."""
+        self._request("DELETE", f"/projects/{project_id}/links/{link_id}")
+
+    def get_project_overview(self, project_id: int) -> dict[str, Any]:
+        """Overview léger d'un projet (`GET /projects/{id}/overview`)."""
+        result: dict[str, Any] = self._request("GET", f"/projects/{project_id}/overview")
         return result
 
     # --- Phase 8 : observabilité (lecture seule) ----------------------------

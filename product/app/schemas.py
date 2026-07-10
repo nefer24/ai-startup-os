@@ -5,13 +5,30 @@ from __future__ import annotations
 import datetime as dt
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _DEFAULT_PROMPT = "Réponds en une phrase courte confirmant que le runtime AI-SOS fonctionne."
 
 InputType = Literal["problem", "idea", "objective"]
 PlanStatus = Literal["draft", "candidate", "approved", "revision_requested"]
 SourceType = Literal["solution_plan", "solution_improvement"]
+
+ProjectType = Literal["problem", "idea", "objective", "existing_solution", "mixed"]
+ProjectStatus = Literal["draft", "active", "paused", "completed", "archived"]
+ProjectEntityType = Literal[
+    "solution_plan",
+    "solution_improvement",
+    "ai_company",
+    "company_deliverable",
+    "deliverable_version",
+    "deliverable_reference",
+    "reference_exploitation",
+    "coordinated_deliverable_batch",
+    "coordinated_deliverable_item",
+    "coordinated_item_decision",
+    "coordinated_item_regeneration",
+    "coordinated_item_adoption",
+]
 
 
 class HealthOut(BaseModel):
@@ -636,6 +653,96 @@ class CoordinatedItemAdoptionProvenanceOut(BaseModel):
     previous_item_status: str
     new_item_status: str
     adopted_by: str
+    created_at: dt.datetime
+
+
+class ProjectCreateRequest(BaseModel):
+    """Entrée CEO : créer un espace projet unifié (Phase 14)."""
+
+    title: str
+    description: str = ""
+    initial_input: str = ""
+    project_type: ProjectType = "objective"
+    ceo_notes: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        """Refuse un titre vide ou fait uniquement d'espaces."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("description", "initial_input", "ceo_notes")
+    @classmethod
+    def _strip_optional(cls, value: str) -> str:
+        """Nettoie les champs optionnels sans les rendre obligatoires."""
+        return value.strip()
+
+
+class ProjectUpdateRequest(BaseModel):
+    """Entrée CEO : mise à jour des **métadonnées** d'un projet (Phase 14). Champs optionnels."""
+
+    title: str | None = None
+    description: str | None = None
+    status: ProjectStatus | None = None
+    ceo_notes: str | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _not_blank(cls, value: str | None) -> str | None:
+        """Si fourni, le titre ne doit pas être vide."""
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+
+class ProjectOut(BaseModel):
+    """Espace projet renvoyé par l'API (Phase 14)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    description: str
+    initial_input: str
+    project_type: str
+    status: str
+    ceo_notes: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class ProjectLinkCreateRequest(BaseModel):
+    """Entrée CEO : rattacher un objet existant à un projet (lien non destructif, Phase 14)."""
+
+    entity_type: ProjectEntityType
+    entity_id: int = Field(gt=0)
+    role: str = "related"
+    label: str = ""
+
+    @field_validator("role", "label")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        """Nettoie role/label ; `role` vide retombe sur `related` côté service."""
+        return value.strip()
+
+
+class ProjectLinkOut(BaseModel):
+    """Lien projet → objet existant renvoyé par l'API (Phase 14)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int
+    entity_type: str
+    entity_id: int
+    role: str
+    label: str
     created_at: dt.datetime
 
 

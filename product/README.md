@@ -630,8 +630,51 @@ l'**historique des adoptions** (ancien contenu conservé). Toujours **via le cli
 > l'ancien contenu dans l'historique, ne modifie pas le lot, ne touche pas aux autres items, ne
 > déploie rien et ne modifie pas le repo.**
 
+## Phase 14 — Espace projet unifié
+
+Première pièce de **consolidation** vers un MVP produit (cf. rapport roadmap). Une entité
+**`Project`** **regroupe** tout un parcours AI-SOS — entrée initiale, plan, entreprise IA,
+livrables, versions, références, exploitations, lots, décisions, régénérations, adoptions — au lieu
+de laisser ces objets reliés uniquement par des identifiants épars. C'est une couche de
+**regroupement et de navigation**, **déterministe et SANS aucun appel LLM** : elle **n'ajoute aucune
+capacité métier**, ne produit rien, ne régénère rien, n'adopte rien.
+
+**Liens non destructifs :** le rattachement se fait via une table `ProjectLink` (`entity_type` +
+`entity_id` + `role` + `label`), **sans** ajouter de `project_id` dans les tables métier et **sans
+jamais modifier ni supprimer** l'objet lié. **Supprimer un lien ne supprime que le lien.**
+
+**Règles :** `project_type` ∈ {problem, idea, objective, existing_solution, mixed} et `status` ∈
+{draft, active, paused, completed, archived} (bornés, 422 sinon) ; `entity_type` contrôlé (12 types,
+422 sinon) ; `entity_id > 0` (422) ; l'objet lié doit exister (404) ; pas de **doublon exact**
+`(project_id, entity_type, entity_id, role)` (409). La mise à jour ne touche que les **métadonnées**
+du projet.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `POST` | `/projects` | crée un projet |
+| `GET` | `/projects` | liste les projets (filtres `status` / `project_type`) |
+| `GET` | `/projects/{id}` | relit un projet |
+| `PATCH` | `/projects/{id}` | met à jour les métadonnées (title/description/status/ceo_notes) |
+| `POST` | `/projects/{id}/links` | rattache un objet existant (non destructif) |
+| `GET` | `/projects/{id}/links` | liste les liens du projet |
+| `DELETE` | `/projects/{id}/links/{link_id}` | supprime le lien (jamais l'objet source) |
+| `GET` | `/projects/{id}/overview` | overview **léger** (compteurs par type/rôle + entités liées) |
+
+**Observabilité :** événements `project_created` / `project_updated` / `project_link_added` /
+`project_link_removed` (`phase14`, `entity_type` ∈ {`project`, `project_link`}, métadonnées
+`project_id` / `link_id` / `linked_entity_type` / `linked_entity_id` / `role`). Aucun appel LLM.
+
+**Interface :** onglet **« Projets »** (Streamlit) — créer un projet, lister/sélectionner, voir le
+détail, mettre à jour le statut/les notes, **rattacher un objet** (type + id + rôle + libellé), voir
+les liens et un **overview léger**. Toujours **via le client HTTP**. L'overview détaillé sera la
+Phase 15.
+
+> **Le projet est un espace de regroupement. Rattacher un objet ne le modifie pas. Supprimer un
+> lien ne supprime pas l'objet source.**
+
 ## Prochaine tranche
 
-**Phase 14 (proposée)** — à cadrer par le CEO : **notion de « Projet »** unifiant tout un parcours
-(entrée → entreprise IA → livrables → référence → exploitations → lots → décisions), première pièce
-de la consolidation vers un MVP produit utilisable.
+**Phase 15 (proposée)** — à cadrer par le CEO : **tableau de bord projet global** (vue d'avancement
+détaillée, statuts et prochaines actions CEO par projet), 2ᵉ pièce de la consolidation MVP.

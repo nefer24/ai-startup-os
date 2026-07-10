@@ -93,6 +93,16 @@ Endpoints Phase 13 (Adoption contrôlée d'une régénération approuvée — d�
   * GET  /coordinated-item-adoptions/{id}/provenance          — provenance de l'adoption.
   * GET  /coordinated-deliverable-batches/{id}/adoptions      — adoptions d'un lot.
 
+Endpoints Phase 14 (Espace projet unifié — déterministe, sans LLM) :
+  * POST   /projects                       — crée un projet.
+  * GET    /projects                       — liste les projets (filtres status/project_type).
+  * GET    /projects/{id}                  — relit un projet.
+  * PATCH  /projects/{id}                  — met à jour les métadonnées du projet.
+  * POST   /projects/{id}/links            — rattache un objet existant (lien non destructif).
+  * GET    /projects/{id}/links            — liste les liens du projet.
+  * DELETE /projects/{id}/links/{link_id}  — supprime le lien (jamais l'objet source).
+  * GET    /projects/{id}/overview         — overview léger (compteurs + entités liées).
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -169,6 +179,7 @@ from app.db import (
     CoordinatedDeliverableItemRegeneration,
     DeliverableVersion,
     LLMResult,
+    Project,
     ReferenceExploitation,
     SolutionImprovement,
     SolutionPlan,
@@ -197,6 +208,22 @@ from app.observability import (
     list_llm_calls,
     log_product_event,
     observability_summary,
+)
+from app.projects import (
+    DuplicateProjectLinkError,
+    InvalidEntityTypeError,
+    LinkedEntityNotFoundError,
+    ProjectLinkNotFoundError,
+    ProjectNotFoundError,
+    add_project_link,
+    create_project,
+    get_project,
+    get_project_link,
+    get_project_overview,
+    list_project_links,
+    list_projects,
+    remove_project_link,
+    update_project,
 )
 from app.reference_exploitations import (
     DeliverableNotFoundError as ExploitationDeliverableNotFoundError,
@@ -236,6 +263,11 @@ from app.schemas import (
     LLMResultOut,
     LLMTestRequest,
     ProductEventLogOut,
+    ProjectCreateRequest,
+    ProjectLinkCreateRequest,
+    ProjectLinkOut,
+    ProjectOut,
+    ProjectUpdateRequest,
     ReferenceExploitationCreateRequest,
     ReferenceExploitationOut,
     ReferenceExploitationProvenanceOut,
@@ -1434,3 +1466,123 @@ def get_coordinated_batch_adoptions(
     return [
         CoordinatedItemAdoptionOut.model_validate(row) for row in list_batch_adoptions(db, batch_id)
     ]
+
+
+# ---------------------------------------------------------------------------
+# Phase 14 — Espace projet unifié.
+# Un projet REGROUPE les objets existants via des liens NON destructifs, sans
+# les modifier ni les supprimer. Gouvernance déterministe, SANS aucun appel LLM.
+# ---------------------------------------------------------------------------
+def _get_project_or_404(db: Session, project_id: int) -> Project:
+    """Récupère un projet par id ou lève 404."""
+    try:
+        return get_project(db, project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="projet introuvable") from exc
+
+
+@app.post("/projects", response_model=ProjectOut, status_code=201)
+def create_project_endpoint(payload: ProjectCreateRequest, db: DbSession) -> ProjectOut:
+    """Crée un espace projet (métadonnées uniquement). Ne touche à aucun objet métier."""
+    project = create_project(db, payload)
+    log_product_event(db, "project_created", "phase14", "project", project.id, project.status)
+    return ProjectOut.model_validate(project)
+
+
+@app.get("/projects", response_model=list[ProjectOut])
+def list_projects_endpoint(
+    db: DbSession,
+    status: Annotated[str | None, Query()] = None,
+    project_type: Annotated[str | None, Query()] = None,
+) -> list[ProjectOut]:
+    """Liste les projets, du plus récent au plus ancien (filtres status / project_type)."""
+    return [
+        ProjectOut.model_validate(row)
+        for row in list_projects(db, status=status, project_type=project_type)
+    ]
+
+
+@app.get("/projects/{project_id}", response_model=ProjectOut)
+def get_project_endpoint(project_id: int, db: DbSession) -> ProjectOut:
+    """Retourne un projet précis."""
+    return ProjectOut.model_validate(_get_project_or_404(db, project_id))
+
+
+@app.patch("/projects/{project_id}", response_model=ProjectOut)
+def update_project_endpoint(
+    project_id: int, payload: ProjectUpdateRequest, db: DbSession
+) -> ProjectOut:
+    """Met à jour uniquement les métadonnées du projet. Ne modifie aucun objet lié."""
+    project = update_project(db, _get_project_or_404(db, project_id), payload)
+    log_product_event(db, "project_updated", "phase14", "project", project.id, project.status)
+    return ProjectOut.model_validate(project)
+
+
+@app.post("/projects/{project_id}/links", response_model=ProjectLinkOut, status_code=201)
+def add_project_link_endpoint(
+    project_id: int, payload: ProjectLinkCreateRequest, db: DbSession
+) -> ProjectLinkOut:
+    """Rattache un objet existant au projet (lien non destructif). N'altère jamais l'objet lié.
+
+    entity_type invalide → 422 (schéma) ; objet lié absent → 404 ; doublon exact → 409.
+    """
+    project = _get_project_or_404(db, project_id)
+    try:
+        link = add_project_link(db, project, payload)
+    except InvalidEntityTypeError as exc:
+        raise HTTPException(status_code=422, detail="entity_type non supporté") from exc
+    except LinkedEntityNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="objet lié introuvable") from exc
+    except DuplicateProjectLinkError as exc:
+        raise HTTPException(status_code=409, detail="lien déjà existant") from exc
+    log_product_event(
+        db,
+        "project_link_added",
+        "phase14",
+        "project_link",
+        link.id,
+        "",
+        metadata={
+            "project_id": link.project_id,
+            "link_id": link.id,
+            "linked_entity_type": link.entity_type,
+            "linked_entity_id": link.entity_id,
+            "role": link.role,
+        },
+    )
+    return ProjectLinkOut.model_validate(link)
+
+
+@app.get("/projects/{project_id}/links", response_model=list[ProjectLinkOut])
+def list_project_links_endpoint(project_id: int, db: DbSession) -> list[ProjectLinkOut]:
+    """Liste les liens d'un projet, du plus récent au plus ancien."""
+    _get_project_or_404(db, project_id)
+    return [ProjectLinkOut.model_validate(row) for row in list_project_links(db, project_id)]
+
+
+@app.delete("/projects/{project_id}/links/{link_id}", status_code=204)
+def remove_project_link_endpoint(project_id: int, link_id: int, db: DbSession) -> None:
+    """Supprime **uniquement le lien** (jamais l'objet source)."""
+    _get_project_or_404(db, project_id)
+    try:
+        link = get_project_link(db, project_id, link_id)
+    except ProjectLinkNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="lien introuvable") from exc
+    metadata = {
+        "project_id": project_id,
+        "link_id": link.id,
+        "linked_entity_type": link.entity_type,
+        "linked_entity_id": link.entity_id,
+        "role": link.role,
+    }
+    remove_project_link(db, link)
+    log_product_event(
+        db, "project_link_removed", "phase14", "project_link", link_id, "", metadata=metadata
+    )
+
+
+@app.get("/projects/{project_id}/overview")
+def get_project_overview_endpoint(project_id: int, db: DbSession) -> dict[str, Any]:
+    """Overview **léger** du projet (compteurs + entités liées). Le dashboard riche = Phase 15."""
+    project = _get_project_or_404(db, project_id)
+    return get_project_overview(db, project)
