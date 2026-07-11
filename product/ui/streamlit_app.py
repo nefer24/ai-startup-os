@@ -2046,6 +2046,109 @@ def render_project_export(client: SolutionPlansAPIClient) -> None:
     )
 
 
+SNAPSHOT_NOTICE = (
+    "Le rechargement crée un **nouveau projet** et restaure seulement les liens vers des objets "
+    "existants. Il **ne recrée pas** les objets métier sources et **ne les modifie pas**."
+)
+
+
+def render_project_snapshot(client: SolutionPlansAPIClient) -> None:
+    """Projets — sauvegarde / rechargement JSON (Phase 17)."""
+    st.header("6. Sauvegarde / rechargement")
+    st.caption(SNAPSHOT_NOTICE)
+    _render_snapshot_save(client)
+    _render_snapshot_restore(client)
+
+
+def _render_snapshot_save(client: SolutionPlansAPIClient) -> None:
+    """Sauvegarde — génère et télécharge un snapshot JSON du projet sélectionné."""
+    st.subheader("A. Sauvegarde")
+    project_id = st.session_state.get("selected_project_id")
+    if project_id is None:
+        st.info("Sélectionnez un projet pour générer un snapshot.")
+        return
+    if not st.button("💾 Générer snapshot JSON"):
+        return
+    try:
+        snapshot = client.get_project_snapshot(int(project_id))
+    except APIError as exc:
+        st.error(f"Impossible de générer le snapshot : {exc}")
+        return
+    source = snapshot.get("source_project", {})
+    st.write(
+        f"**Titre :** {source.get('title', '')} · "
+        f"**Version :** `{snapshot.get('snapshot_format_version', '')}` · "
+        f"**Liens :** {len(snapshot.get('project_links', []))}"
+    )
+    for warning in snapshot.get("warnings", []):
+        st.warning(warning)
+    payload = json.dumps(snapshot, ensure_ascii=False, indent=2)
+    st.text_area("Snapshot JSON", value=payload, height=280, key="snapshot_json")
+    st.download_button(
+        "⬇️ Télécharger le snapshot (.json)",
+        data=payload,
+        file_name=f"project_{project_id}_snapshot.json",
+        mime="application/json",
+    )
+
+
+def _render_snapshot_restore(client: SolutionPlansAPIClient) -> None:
+    """Rechargement — importe un snapshot JSON comme nouveau projet."""
+    st.subheader("B. Rechargement")
+    uploaded = st.file_uploader("Fichier snapshot .json", type=["json"], key="snapshot_upload")
+    if uploaded is None:
+        st.info("Chargez un fichier snapshot pour l'importer.")
+        return
+    try:
+        snapshot = json.loads(uploaded.getvalue().decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        st.error(f"Fichier JSON invalide : {exc}")
+        return
+    if not isinstance(snapshot, dict):
+        st.error("Le fichier ne contient pas un snapshot JSON valide.")
+        return
+    source = snapshot.get("source_project", {})
+    version = snapshot.get("snapshot_format_version", "")
+    link_count = len(snapshot.get("project_links", []))
+    st.write(
+        f"**Titre source :** {source.get('title', '')} · "
+        f"**Version :** `{version}` · "
+        f"**Liens :** {link_count}"
+    )
+    st.warning("Les objets métier sources ne seront pas recréés.")
+    title_suffix = st.text_input("Suffixe de titre (optionnel)", key="snapshot_suffix")
+    skip_missing = st.checkbox(
+        "Ignorer les liens vers des objets absents", value=True, key="snapshot_skip_missing"
+    )
+    if not st.button("📥 Importer comme nouveau projet"):
+        return
+    try:
+        result = client.import_project_snapshot(
+            snapshot,
+            title_suffix=title_suffix.strip() or None,
+            skip_missing_entities=skip_missing,
+        )
+    except APIError as exc:
+        st.error(f"Import impossible : {exc}")
+        return
+    st.success(f"Nouveau projet #{result.get('created_project_id')} créé (statut draft).")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Liens demandés", result.get("links_requested", 0))
+    col2.metric("Restaurés", result.get("links_restored", 0))
+    col3.metric("Ignorés", result.get("links_skipped", 0))
+    for warning in result.get("warnings", []):
+        st.info(warning)
+    skipped = result.get("skipped_links", [])
+    if skipped:
+        with st.expander(f"Liens ignorés ({len(skipped)})"):
+            for link in skipped:
+                st.markdown(
+                    f"- **{link.get('entity_type')}** #{link.get('entity_id')} — "
+                    f"{link.get('reason')}"
+                )
+    st.session_state["selected_project_id"] = result.get("created_project_id")
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -2090,6 +2193,7 @@ def main() -> None:
         render_project_detail(client)
         render_project_dashboard(client)
         render_project_export(client)
+        render_project_snapshot(client)
     with tab_create:
         render_submit(client)
         render_plans_list(client)

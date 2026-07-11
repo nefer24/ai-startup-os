@@ -758,8 +758,55 @@ UI depuis la réponse API — aucun fichier créé dans le repo, aucun PDF, aucu
 > **Cette synthèse est générée en lecture seule depuis les données du projet. Elle ne modifie aucun
 > objet, ne déclenche aucune action et n'appelle aucun LLM.**
 
+## Phase 17 — Sauvegarde / rechargement simple des projets (déterministe, sans LLM)
+
+**Responsabilité unique : préserver.** La Phase 17 donne au CEO une **continuité** : **exporter** un
+snapshot JSON d'un projet, puis le **recharger** plus tard — dans une autre session ou une autre base
+locale — en un **nouveau projet**. Elle réutilise le tableau de bord Phase 15 et l'export Phase 16 ;
+c'est une couche **simple**, **déterministe**, **sans LLM**, **sans service externe** et **sans
+fichier écrit côté serveur** (le téléchargement `.json` est géré par l'UI).
+
+**Snapshot (`GET /projects/{id}/snapshot`, lecture seule) :** `snapshot_format_version` (`"1.0"`),
+`exported_at`, `source_project` (métadonnées), `project_links` (chaque lien + `resolved_at_export` /
+`title_at_export` / `status_at_export`), `dashboard_snapshot` (Phase 15), `final_export_snapshot`
+(Phase 16, allégé mais Markdown complet), `compatibility_notes`, `warnings`.
+
+**Import (`POST /projects/snapshot/import`) — principe clé :** recrée **uniquement** un `Project`
+(toujours en statut **`draft`**, jamais actif automatiquement) et des `ProjectLink` **non
+destructifs** vers les objets **qui existent encore**. Il **ne recrée jamais** les objets métier
+sources (plans, livrables, versions, références, exploitations, lots, items, décisions,
+régénérations, adoptions…) et **ne modifie jamais** un objet existant — une migration métier serait
+lourde et risquée, hors périmètre de cette phase.
+
+**Liens restaurés / ignorés :** un lien vers un objet absent ou de type inconnu est **ignoré** et
+listé dans `skipped_links` avec sa raison (si `skip_missing_entities=true`, défaut), ou **refusé**
+avec une **erreur 422 claire** (si `false`). Les doublons internes au snapshot sont ignorés. Le
+résultat détaille `links_requested` / `links_restored` / `links_skipped` + `warnings`. Le titre
+importé est `{titre} (imported)` (ou `{titre} {title_suffix}`), et une **note d'origine** est ajoutée
+aux `ceo_notes`.
+
+**API :**
+
+| Méthode | Route | Rôle |
+| --- | --- | --- |
+| `GET` | `/projects/{id}/snapshot` | snapshot JSON du projet (lecture seule) |
+| `POST` | `/projects/snapshot/import` | recharge un snapshot en **nouveau projet `draft`** + liens |
+
+Projet absent → 404 ; snapshot invalide → **422** ; version inconnue → **400** ; objet lié absent en
+mode strict → **422**. L'import journalise un événement sobre `project_snapshot_imported` (`phase17`)
+— **aucun appel LLM**.
+
+**Interface :** section **« Sauvegarde / rechargement »** de l'onglet « Projets » (Streamlit) —
+**A. Sauvegarde** (bouton *Générer snapshot JSON*, résumé, JSON copiable, **download `.json`**
+`project_{id}_snapshot.json`) ; **B. Rechargement** (`file_uploader` `.json`, aperçu, options
+`title_suffix` / `skip_missing_entities`, bouton *Importer comme nouveau projet*, résultat
+demandés/restaurés/ignorés + liens ignorés). Le fichier est traité **côté UI** puis envoyé à l'API.
+
+> **Le rechargement crée un nouveau projet et restaure seulement les liens vers des objets existants.
+> Il ne recrée pas les objets métier sources et ne les modifie pas.**
+
 ## Prochaine tranche
 
-**Phase 17 (proposée)** — à cadrer par le CEO : **sauvegarde / rechargement d'un projet**
-(persistance/restauration d'un espace projet et de ses liens), 4ᵉ pièce de la consolidation MVP ;
-puis Phase 18 (stabilisation / QA finale).
+**Phase 18 (proposée)** — à cadrer par le CEO : **stabilisation / QA finale** du MVP produit
+(revue transverse des parcours, robustesse, cohérence de gouvernance), 5ᵉ et dernière pièce de la
+consolidation MVP.

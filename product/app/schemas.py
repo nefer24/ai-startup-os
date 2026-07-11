@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -751,6 +751,46 @@ class ProjectExportMarkdownOut(BaseModel):
 
     project_id: int
     markdown: str
+
+
+class ProjectSnapshotImportRequest(BaseModel):
+    """Entrée CEO : recharger un snapshot JSON en **nouveau** projet (Phase 17)."""
+
+    snapshot: dict[str, Any]
+    import_mode: Literal["create_new_project"] = "create_new_project"
+    title_suffix: str | None = None
+    restore_links: bool = True
+    skip_missing_entities: bool = True
+
+    @field_validator("title_suffix")
+    @classmethod
+    def _strip_suffix(cls, value: str | None) -> str | None:
+        """Nettoie le suffixe optionnel sans le rendre obligatoire."""
+        if value is None:
+            return None
+        return value.strip()
+
+
+class ProjectSnapshotSkippedLinkOut(BaseModel):
+    """Lien du snapshot **non restauré** à l'import (avec sa raison) — Phase 17."""
+
+    entity_type: str
+    entity_id: int
+    role: str
+    label: str
+    reason: str
+
+
+class ProjectSnapshotImportResultOut(BaseModel):
+    """Résultat de l'import d'un snapshot de projet (Phase 17)."""
+
+    imported_project: ProjectOut
+    created_project_id: int
+    links_requested: int
+    links_restored: int
+    links_skipped: int
+    skipped_links: list[ProjectSnapshotSkippedLinkOut]
+    warnings: list[str]
 
 
 class LLMCallLogOut(BaseModel):
