@@ -32,6 +32,11 @@ IMPROVEMENT_PHRASE = (
     "différenciante et plus unique."
 )
 
+# Notice de gouvernance globale (Phase 18) affichée en tête de l'interface.
+GOVERNANCE_GLOBAL_NOTICE = (
+    "AI-SOS ne valide, ne régénère, n'adopte et ne livre rien sans action explicite du CEO."
+)
+
 INPUT_TYPES = ["problem", "idea", "objective"]
 
 STATUS_LABELS = {
@@ -2149,11 +2154,100 @@ def _render_snapshot_restore(client: SolutionPlansAPIClient) -> None:
     st.session_state["selected_project_id"] = result.get("created_project_id")
 
 
+CEO_JOURNEY = [
+    (
+        "A. Problème → plan → entreprise IA → livrable",
+        [
+            "Créer un plan depuis une demande CEO (onglet « Créer une solution »).",
+            "Composer une entreprise IA spécialisée depuis le plan approuvé.",
+            "Produire un livrable encadré.",
+            "Rien n'est approuvé automatiquement : chaque étape attend la validation CEO.",
+        ],
+    ),
+    (
+        "B. Livrable → version → référence",
+        [
+            "Créer une version candidate (onglet « Itérer sur un livrable »).",
+            "Valider ou demander une révision selon le flux existant.",
+            "Consolider une référence officielle active (onglet « Consolider une référence »).",
+            "La référence ne modifie jamais le livrable original (historique conservé).",
+        ],
+    ),
+    (
+        "C. Référence → exploitation → lot coordonné",
+        [
+            "Exploiter une référence active (onglet « Exploiter une référence »).",
+            "Produire un lot coordonné de livrables candidats.",
+            "Vérifier les items un par un.",
+            "Le lot reste candidat tant que le CEO ne valide pas.",
+        ],
+    ),
+    (
+        "D. Validation item → régénération → adoption",
+        [
+            "Demander une révision sur un item.",
+            "Générer une régénération candidate.",
+            "Approuver la régénération.",
+            "Adopter explicitement : seule l'adoption remplace le contenu officiel de l'item.",
+        ],
+    ),
+    (
+        "E. Projet → dashboard → export → snapshot",
+        [
+            "Créer un projet et y rattacher des objets (onglet « Projets »).",
+            "Lire le tableau de bord.",
+            "Générer la synthèse finale Markdown.",
+            "Exporter le snapshot JSON puis le recharger comme nouveau projet draft.",
+            "Les objets sources ne sont ni recréés ni modifiés.",
+        ],
+    ),
+]
+
+
+def render_mvp_guide(client: SolutionPlansAPIClient) -> None:
+    """Guide MVP — parcours CEO recommandé + carte de statut produit (lecture seule, Phase 18)."""
+    st.header("Guide MVP — parcours CEO recommandé")
+    st.info(GOVERNANCE_GLOBAL_NOTICE)
+    st.caption(
+        "Cette page est en lecture seule : elle ne déclenche aucune action et n'appelle aucun LLM."
+    )
+
+    st.subheader("Parcours recommandés pour la démonstration")
+    for title, steps in CEO_JOURNEY:
+        with st.expander(title):
+            for index, step in enumerate(steps, start=1):
+                st.markdown(f"{index}. {step}")
+
+    st.subheader("Statut du MVP")
+    try:
+        status = client.get_product_status()
+    except APIError as exc:
+        st.error(f"Impossible de récupérer le statut produit : {exc}")
+        return
+    col1, col2 = st.columns(2)
+    col1.metric("Version", status.get("version", ""))
+    col2.metric("Statut MVP", status.get("mvp_status", ""))
+    _guide_list("Capacités livrées", status.get("capabilities", []))
+    _guide_list("Invariants de gouvernance garantis", status.get("governance_invariants", []))
+    _guide_list("Opérations déterministes (sans LLM)", status.get("no_llm_operations", []))
+    _guide_list("Ce que le MVP ne fait pas encore", status.get("notes", []))
+
+
+def _guide_list(title: str, rows: list[str]) -> None:
+    """Affiche une liste simple repliable (guide MVP), masquée si vide."""
+    if not rows:
+        return
+    with st.expander(f"{title} ({len(rows)})"):
+        for row in rows:
+            st.markdown(f"- {row}")
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
     st.title("AI-SOS — Fabrique de solutions")
     st.caption(FOUNDING_PHRASE)
+    st.info(GOVERNANCE_GLOBAL_NOTICE)
 
     client = get_client()
     st.sidebar.write(f"**API :** {client.base_url}")
@@ -2164,6 +2258,7 @@ def main() -> None:
         st.sidebar.error("API injoignable — lancez FastAPI (uvicorn app.main:app).")
 
     (
+        tab_guide,
         tab_project,
         tab_create,
         tab_improve,
@@ -2176,6 +2271,7 @@ def main() -> None:
         tab_observability,
     ) = st.tabs(
         [
+            "Guide MVP",
             "Projets",
             "Créer une solution",
             "Améliorer une solution existante",
@@ -2188,6 +2284,8 @@ def main() -> None:
             "Observabilité",
         ]
     )
+    with tab_guide:
+        render_mvp_guide(client)
     with tab_project:
         render_project_create(client)
         render_project_detail(client)
