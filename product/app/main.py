@@ -116,6 +116,9 @@ Endpoints Phase 17 (Sauvegarde / rechargement simple des projets — déterminis
   * GET  /projects/{id}/snapshot           — snapshot JSON (métadonnées, liens, dashboard, export).
   * POST /projects/snapshot/import         — recharge un snapshot en NOUVEAU projet draft + liens.
 
+Endpoint Phase 18 (Stabilisation MVP — lecture seule, déterministe, sans LLM) :
+  * GET  /product/status                   — carte de statut MVP (capacités + invariants + no-LLM).
+
 Aucune décision automatique, aucune action destructive : plans, améliorations, entreprises IA,
 livrables et versions restent candidats tant que le CEO ne les a pas validés ; l'approbation ne
 déclenche aucune exécution, aucune production automatique, aucun déploiement, aucune modification
@@ -222,6 +225,7 @@ from app.observability import (
     log_product_event,
     observability_summary,
 )
+from app.product_status import build_product_status
 from app.project_dashboard import (
     build_next_actions_only,
     build_pending_decisions_only,
@@ -360,6 +364,15 @@ LLM = Annotated[LLMClient, Depends(get_llm)]
 def health() -> HealthOut:
     """Retourne un statut simple confirmant que le service tourne."""
     return HealthOut(status="ok", service="aisos-product")
+
+
+@app.get("/product/status")
+def product_status_endpoint() -> dict[str, Any]:
+    """Carte de statut MVP (Phase 18) : capacités, invariants de gouvernance, opérations sans LLM.
+
+    Lecture seule, déterministe : ne touche pas la base, n'appelle aucun LLM, ne journalise rien.
+    """
+    return build_product_status()
 
 
 @app.post("/llm/test", response_model=LLMResultOut)

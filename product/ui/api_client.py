@@ -68,6 +68,11 @@ class SolutionPlansAPIClient:
         result: dict[str, Any] = self._request("GET", "/health")
         return result
 
+    def get_product_status(self) -> dict[str, Any]:
+        """Carte de statut MVP (`GET /product/status`) : capacités + invariants (lecture seule)."""
+        result: dict[str, Any] = self._request("GET", "/product/status")
+        return result
+
     def create_plan(self, input_type: str, title: str, description: str) -> dict[str, Any]:
         """Crée un plan candidat depuis une entrée CEO (`POST /solutions/plans`)."""
         payload = {"input_type": input_type, "title": title, "description": description}

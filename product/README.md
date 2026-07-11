@@ -805,8 +805,52 @@ demandés/restaurés/ignorés + liens ignorés). Le fichier est traité **côté
 > **Le rechargement crée un nouveau projet et restaure seulement les liens vers des objets existants.
 > Il ne recrée pas les objets métier sources et ne les modifie pas.**
 
+## Phase 18 — Stabilisation UX + passe QA finale du MVP (lecture seule, sans LLM)
+
+**Responsabilité unique : stabiliser.** La Phase 18 n'ajoute **aucune capacité métier profonde** :
+elle **nettoie, harmonise et vérifie** l'expérience CEO de bout en bout pour faire d'AI-SOS un **MVP
+interne réellement utilisable**. Notice de gouvernance globale affichée en tête d'interface,
+**onglet « Guide MVP »** (parcours CEO recommandé A→E + carte de statut produit), endpoint
+read-only `GET /product/status` (capacités, invariants de gouvernance, opérations sans LLM), et
+**QA du parcours** Projet → Dashboard → Export → Snapshot → Import par des tests de bout en bout.
+Aucun LLM, aucun événement produit, aucune nouvelle table.
+
+### Guide MVP — Parcours CEO recommandé pour démonstration
+
+Lancer l'API et l'interface, puis suivre :
+
+- **A. Problème → plan → entreprise IA → livrable** — créer un plan, composer une entreprise IA,
+  produire un livrable ; rien n'est approuvé automatiquement.
+- **B. Livrable → version → référence** — créer une version, la valider, consolider une référence
+  active ; le livrable original n'est jamais modifié.
+- **C. Référence → exploitation → lot coordonné** — exploiter une référence, produire un lot,
+  vérifier les items ; le lot reste candidat jusqu'à validation.
+- **D. Validation item → régénération → adoption** — demander une révision, régénérer, approuver,
+  **adopter explicitement** ; seule l'adoption remplace le contenu officiel de l'item.
+- **E. Projet → dashboard → export → snapshot** — créer un projet, rattacher des objets, lire le
+  dashboard, générer la synthèse Markdown, exporter puis recharger le snapshot en nouveau projet
+  `draft` ; les objets sources ne sont ni recréés ni modifiés.
+
+### Invariants de gouvernance (confirmés par les tests)
+
+- Aucun objet n'est **approuvé automatiquement** ; aucune régénération n'est **adoptée
+  automatiquement**.
+- L'export, le dashboard et le snapshot **ne modifient aucun objet** ; l'import **ne recrée jamais**
+  les objets métier sources et crée un projet **`draft`**.
+- Les opérations déterministes (phases 7, 11, 13, 14–17) **n'appellent aucun LLM** ; les lectures
+  **ne journalisent aucun événement**.
+- **`src/aisos/` reste inchangé.**
+
+### Ce que le MVP ne fait pas encore
+
+Authentification, multi-utilisateur, permissions, paiement, persistance cloud, déploiement,
+multi-LLM. C'est un **MVP interne à usage CEO contrôlé**.
+
+> **AI-SOS ne valide, ne régénère, n'adopte et ne livre rien sans action explicite du CEO.**
+
 ## Prochaine tranche
 
-**Phase 18 (proposée)** — à cadrer par le CEO : **stabilisation / QA finale** du MVP produit
-(revue transverse des parcours, robustesse, cohérence de gouvernance), 5ᵉ et dernière pièce de la
-consolidation MVP.
+**Consolidation MVP terminée (phases 14–18).** AI-SOS est un **MVP interne utilisable** : parcours
+CEO complets, gouvernance intégrée, espace projet (dashboard, export, snapshot). Prochaines pistes à
+cadrer par le CEO au-delà du MVP interne : durcissement (persistance/multi-utilisateur), ou
+approfondissement métier d'un parcours existant — **hors périmètre du MVP interne actuel**.
