@@ -854,3 +854,55 @@ multi-LLM. C'est un **MVP interne à usage CEO contrôlé**.
 CEO complets, gouvernance intégrée, espace projet (dashboard, export, snapshot). Prochaines pistes à
 cadrer par le CEO au-delà du MVP interne : durcissement (persistance/multi-utilisateur), ou
 approfondissement métier d'un parcours existant — **hors périmètre du MVP interne actuel**.
+
+## OT-V1 — Incrément 1 : mission de cadrage (Cadrage → Composition → Tour 0 → Cartographie → Rapport)
+
+Premier incrément construit **à rebours des tests d'acceptation** de la cible opérationnelle
+(`docs/strategy/AI-SOS-OPERATIONAL-TARGET-V1.md`, Décision 026). Ce n'est pas une phase : il existe
+parce qu'il améliore de façon mesurable T02, T04, T05, T06, T10, T13, T14, T23, T24, T25 et T26
+(partiellement pour plusieurs d'entre eux — voir le rapport de la PR).
+
+**Ce qu'une mission fait** (`POST /missions`) :
+
+1. **Cadrage** — un appel structuré : problème compris, objectif supposé, contraintes, hypothèses,
+   **inconnues**, **dimensions émergentes** (aucune liste imposée), **contestation éventuelle** de la
+   demande (`none` est légitime), signaux d'escalade. Sans classe déclarée, la mission démarre en
+   `importante_provisoire` (non déterminée) et le cadrage **peut l'escalader** ; une classe déclarée
+   par le CEO n'est jamais écrasée (l'escalade lui est soumise).
+2. **Composition** — règles codées, sans LLM : dimensions → cellules → profondeur initiale modeste
+   (selon la criticité présumée) → contrainte par le budget. Catalogue ouvert `EXPERT_ARCHETYPES`
+   (jamais tous convoqués) ; le mécanisme historique « 10 experts par spécialité » n'est pas appelé.
+   Borne de 3 angles par cellule : **expérimentale, temporaire, paramétrable, non doctrinale**.
+   Si une préférence CEO est déclarée, une perspective capable de la contredire est présente (T26).
+   Journal : dimension → angle → justification.
+3. **Tour 0** — un appel **isolé** par expert (même dossier de cadrage, sa fiche, aucun exposé
+   d'un autre) ; sortie structurée : position, raisonnement, hypothèses, risques, inconnues, à
+   vérifier, options (dont non-action), objections typées, preuves typées (jamais `verified` sans
+   source ; connaissance du modèle marquée comme telle). Le prompt complet et son empreinte sont
+   journalisés pour prouver l'isolement après coup.
+4. **Cartographie** — le facilitateur structure sans orienter : opérations déterministes codées
+   (identifiants, comptages, indice de divergence, agrégats) ; opérations sémantiques confiées aux
+   experts (auto-qualification après clôture du Tour 0, positions anonymisées) puis, si ambiguïté
+   résiduelle, à un **greffier** au schéma fermé (aucun champ de préférence, classement ou
+   recommandation — testé).
+5. **Rapport de situation** — objet `candidate` : établi / supposé / inconnu / non vérifié /
+   contesté, alternatives distinctes, désaccords, risques, à rechercher, coût, tokens, appels, état du
+   budget ; 14 champs présents, ceux non produisibles honnêtement marqués « non encore délibéré ».
+   Aucune recommandation. Approbation / révision / rejet = actions CEO explicites, sans exécution.
+
+**Budget (défauts CEO)** : 12 appels LLM et 2,00 € par mission, `max_tokens` par type d'appel,
+**estimation avant chaque appel** et refus/arrêt propre si le plafond pourrait être dépassé, tokens et
+coût réels journalisés (`llm_call_logs` : colonnes `input_tokens`, `output_tokens`, `cost_eur`,
+`call_type`, `mission_id`). Un arrêt produit un **rapport partiel** cohérent.
+
+**Endpoints** : `POST /missions`, `GET /missions`, `GET /missions/{id}`,
+`GET /missions/{id}/journal`, `GET /missions/{id}/report/markdown`,
+`POST /missions/{id}/approve|request-revision|reject`. Onglet Streamlit « Missions (cadrage) ».
+
+**Ce que l'incrément ne fait pas** : recherche externe, tours de critique, steelman, révision sous
+preuve, porte qualité indépendante, classification automatique complète, exécution d'actions.
+
+**Client LLM** : `complete(prompt)` inchangé pour les phases 0–18 ; nouveau chemin
+`complete_structured(system, prompt, call_type, max_tokens)` retournant l'usage. Barème de coût
+configurable (`LLM_PRICE_INPUT_EUR_PER_MTOK`, `LLM_PRICE_OUTPUT_EUR_PER_MTOK`) à aligner sur la
+grille du fournisseur.

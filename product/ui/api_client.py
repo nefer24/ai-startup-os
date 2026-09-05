@@ -763,3 +763,38 @@ class SolutionPlansAPIClient:
         """Résumé d'observabilité (`GET /observability/summary`)."""
         result: dict[str, Any] = self._request("GET", "/observability/summary")
         return result
+
+    # --- OT-V1, incrément 1 : missions de cadrage -------------------------------------------
+    def create_mission(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Crée et exécute une mission de cadrage (`POST /missions`)."""
+        result: dict[str, Any] = self._request("POST", "/missions", json=payload)
+        return result
+
+    def list_missions(self) -> list[dict[str, Any]]:
+        """Liste les missions (`GET /missions`)."""
+        result: list[dict[str, Any]] = self._request("GET", "/missions")
+        return result
+
+    def get_mission(self, mission_id: int) -> dict[str, Any]:
+        """Retourne une mission complète (`GET /missions/{id}`)."""
+        result: dict[str, Any] = self._request("GET", f"/missions/{mission_id}")
+        return result
+
+    def get_mission_journal(self, mission_id: int) -> list[dict[str, Any]]:
+        """Journal d'une mission (`GET /missions/{id}/journal`)."""
+        result: list[dict[str, Any]] = self._request("GET", f"/missions/{mission_id}/journal")
+        return result
+
+    def get_mission_report_markdown(self, mission_id: int) -> dict[str, Any]:
+        """Rapport de situation Markdown (`GET /missions/{id}/report/markdown`)."""
+        result: dict[str, Any] = self._request("GET", f"/missions/{mission_id}/report/markdown")
+        return result
+
+    def mission_ceo_action(
+        self, mission_id: int, action: str, ceo_notes: str = ""
+    ) -> dict[str, Any]:
+        """Action CEO sur une mission : `approve`, `request-revision` ou `reject`."""
+        result: dict[str, Any] = self._request(
+            "POST", f"/missions/{mission_id}/{action}", json={"ceo_notes": ceo_notes}
+        )
+        return result

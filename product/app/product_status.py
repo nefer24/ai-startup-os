@@ -56,6 +56,8 @@ PROJECT_FEATURES = [
     "project_export_markdown",
     "project_snapshot_export",
     "project_snapshot_import",
+    "mission_framing_otv1_inc1 (cadrage → composition → Tour 0 isolé → cartographie → "
+    "rapport de situation candidate, sous plafonds CEO)",
 ]
 
 # Opérations produit **déterministes** (aucun appel LLM), par phase.
