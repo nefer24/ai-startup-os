@@ -24,9 +24,11 @@ def make_client(handler: Handler, base_url: str = "http://testserver") -> Soluti
 
 def test_create_mission_posts_payload() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "POST" and request.url.path == "/missions"
+        assert request.method == "POST"
+        assert request.url.path == "/missions"
         body = json.loads(request.content)
-        assert body["input_type"] == "idea" and body["input_text"] == "x"
+        assert body["input_type"] == "idea"
+        assert body["input_text"] == "x"
         return httpx.Response(201, json={"id": 7, "status": "candidate"})
 
     result = make_client(handler).create_mission({"input_type": "idea", "input_text": "x"})

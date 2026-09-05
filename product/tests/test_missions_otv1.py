@@ -2,8 +2,8 @@
 
 Tous les tests utilisent un **faux client LLM structuré** et des **fixtures abstraites** (aucun cas
 réel, aucun banc d'essai, aucun domaine métier particulier). Ils prouvent le comportement du
-mécanisme, pas la qualité des réponses d'un modèle : par exemple, « une contestation remonte quand le
-cadrage en produit une », et non « le modèle conteste ce qu'il faut ».
+mécanisme, pas la qualité des réponses d'un modèle : par exemple, « une contestation remonte
+quand le cadrage en produit une », et non « le modèle conteste ce qu'il faut ».
 """
 
 from __future__ import annotations
@@ -90,6 +90,8 @@ COMPLEX_FRAMING: dict[str, Any] = {
     "suggested_class": "structurante",
 }
 
+DEFAULT_USAGE = LLMUsage(input_tokens=1000, output_tokens=500)
+
 EXPERT_POSITIONS = {
     "E1": "conditionner tout engagement à un contrat écrit",
     "E2": "construire un chemin progressif plutôt qu'un engagement total",
@@ -137,13 +139,13 @@ class ScriptedStructuredLLM:
         expert_kinds: dict[str, str] | None = None,
         relation: str = "different",
         bad_evidence_for: set[str] | None = None,
-        usage: LLMUsage = LLMUsage(input_tokens=1000, output_tokens=500),
+        usage: LLMUsage | None = None,
     ) -> None:
         self.framing = framing
         self.expert_kinds = expert_kinds or {}
         self.relation = relation
         self.bad_evidence_for = bad_evidence_for or set()
-        self.usage = usage
+        self.usage = usage or DEFAULT_USAGE
         self.calls: list[dict[str, Any]] = []
 
     def complete(self, prompt: str) -> str:
@@ -266,7 +268,8 @@ def test_journal_proves_isolation_after_the_fact(
     # L'auto-qualification n'intervient qu'après la clôture du Tour 0.
     seqs_tour0 = [e["seq"] for e in planned]
     seqs_selfq = [e["seq"] for e in journal if e["step"] == "auto_qualification"]
-    assert seqs_selfq and min(seqs_selfq) > max(seqs_tour0)
+    assert seqs_selfq
+    assert min(seqs_selfq) > max(seqs_tour0)
 
 
 # --- Composition émergente ------------------------------------------------------------------
@@ -399,7 +402,9 @@ def test_evidence_verified_without_source_is_downgraded() -> None:
     ev = EvidenceOut(claim="x", source="", status="verified")
     assert ev.status == "unverified"
     parsed, error = parse_structured('{"claim": "y", "status": "verified"}', EvidenceOut)
-    assert error == "" and parsed is not None and parsed.status == "unverified"
+    assert error == ""
+    assert parsed is not None
+    assert parsed.status == "unverified"
 
 
 def test_report_marks_unverified_evidence(
@@ -446,7 +451,8 @@ def test_ledger_refuses_the_call_after_the_cap() -> None:
         ledger.record(LLMUsage(input_tokens=10, output_tokens=10))
     with pytest.raises(BudgetExceededError) as exc:
         ledger.check_before_call(system="s", prompt="p", max_tokens=100, call_type="t")
-    assert exc.value.reason == "max_calls_reached" and ledger.calls_used == 12
+    assert exc.value.reason == "max_calls_reached"
+    assert ledger.calls_used == 12
 
 
 def test_hard_stop_before_exceeding_max_calls(
@@ -489,7 +495,8 @@ def test_hard_stop_before_exceeding_cost_cap(
     # Chaque appel effectué avait, avant lancement, un coût majoré compatible avec le plafond.
     assert len(llm.calls) < 12
     refusals = mission["report"]["budget"]["refusals"]
-    assert refusals and refusals[-1]["reason"] == "cost_cap_would_be_exceeded"
+    assert refusals
+    assert refusals[-1]["reason"] == "cost_cap_would_be_exceeded"
 
 
 def test_partial_report_is_coherent_after_budget_stop(
@@ -506,11 +513,13 @@ def test_partial_report_is_coherent_after_budget_stop(
     assert report["epistemic"]["unknown"]["total"] >= 3
     assert report["alternatives"] == []
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
-    assert "partiel" in md and "budget_insufficient_for_exploration" in md
+    assert "partiel" in md
+    assert "budget_insufficient_for_exploration" in md
     # Budget intermédiaire : la composition se contraint d'elle-même (aucun arrêt nécessaire).
     use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
     mission = _post_mission(client, max_llm_calls=6)
-    assert mission["stop_reason"] == "" and mission["llm_calls_used"] <= 6
+    assert mission["stop_reason"] == ""
+    assert mission["llm_calls_used"] <= 6
     assert len(mission["composition"]["experts"]) == 2
 
 
@@ -523,7 +532,8 @@ def test_report_stays_candidate_until_explicit_ceo_action(
     assert mission["status"] == "candidate"
     calls_before = len(llm.calls)
     approved = client.post(f"/missions/{mission['id']}/approve", json={"ceo_notes": "lu"}).json()
-    assert approved["status"] == "approved" and approved["ceo_notes"] == "lu"
+    assert approved["status"] == "approved"
+    assert approved["ceo_notes"] == "lu"
     assert len(llm.calls) == calls_before  # approuver ne déclenche aucun appel ni exécution
     again = client.post(f"/missions/{mission['id']}/reject")
     assert again.status_code == 409
@@ -557,7 +567,9 @@ def test_observed_client_keeps_legacy_path_and_refuses_silent_fallback(
             wrapped.complete_structured(system="s", prompt="p", call_type="t", max_tokens=10)
         session.commit()
         row = session.execute(select(LLMCallLog)).scalars().one()
-        assert row.input_tokens is None and row.cost_eur is None and row.call_type is None
+        assert row.input_tokens is None
+        assert row.cost_eur is None
+        assert row.call_type is None
 
 
 def test_mission_rows_persisted(
@@ -569,5 +581,6 @@ def test_mission_rows_persisted(
     mission = _post_mission(client)
     with session_factory() as session:
         row = session.get(Mission, mission["id"])
-        assert row is not None and row.status == "candidate"
+        assert row is not None
+        assert row.status == "candidate"
         assert json.loads(row.report_json)["mission_id"] == mission["id"]
