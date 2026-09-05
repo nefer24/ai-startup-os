@@ -63,6 +63,22 @@ class FramingOutput(_Lenient):
     contestation: ContestationOut = Field(default_factory=ContestationOut)
     escalation_signals: list[str] = Field(default_factory=list)
     suggested_class: DecisionClass | Literal[""] = ""
+    # Contrat d'escalade : des signaux substantiels exigent une classe suggérée exploitable. Si le
+    # cadrage n'en donne pas, le manquement est marqué ici et l'orchestrateur escalade d'un rang
+    # (classe provisoire) ou soumet l'escalade au CEO (classe déclarée) — jamais « rien ».
+    suggested_class_missing: bool = False
+
+    @model_validator(mode="after")
+    def _signals_require_a_class(self) -> FramingOutput:
+        signals = [s for s in self.escalation_signals if s.strip()]
+        self.escalation_signals = signals
+        self.suggested_class_missing = bool(signals) and not self.suggested_class
+        return self
+
+    @property
+    def escalation_required(self) -> bool:
+        """Vrai dès qu'au moins un signal d'escalade substantiel est présent."""
+        return bool(self.escalation_signals)
 
 
 # --- Tour 0 : exposé d'un expert ---------------------------------------------------------

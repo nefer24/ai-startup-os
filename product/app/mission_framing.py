@@ -54,7 +54,10 @@ FRAMING_SYSTEM = (
     'Si la demande est correctement posée, mets status = "none". Ne conteste jamais par principe.\n'
     "6. Signaux d'escalade : signale toute irréversibilité, coût d'erreur élevé ou incertitude "
     "critique qui justifierait de traiter la décision dans une classe plus exigeante que celle "
-    "annoncée ; sinon laisse la liste vide. suggested_class est facultatif.\n"
+    "annoncée ; sinon laisse la liste vide. Si tu émets au moins un signal d'escalade, "
+    "suggested_class est OBLIGATOIRE (courante | importante | structurante | critique) : un "
+    "risque majeur signalé sans classe proposée n'est pas une sortie acceptable. Sans signal, "
+    "laisse suggested_class vide.\n"
     "7. Tout ce que tu affirmes qui ne vient pas de la demande relève de ta connaissance "
     "générale : "
     "formule-le comme hypothèse, pas comme fait.\n\n"

@@ -19,6 +19,7 @@ from app.mission_budget import BudgetExceededError, BudgetLedger
 from app.mission_schemas import (
     FORBIDDEN_CLERK_FIELDS,
     EvidenceOut,
+    FramingOutput,
     clerk_schema_field_names,
     parse_structured,
 )
@@ -29,18 +30,18 @@ from sqlalchemy.orm import Session, sessionmaker
 
 # --- Fixtures abstraites (aucun cas réel) -----------------------------------------------------
 SIMPLE_FRAMING: dict[str, Any] = {
-    "problem_understood": "situation A : un besoin simple et réversible",
-    "assumed_objective": "réduire un écart mesurable",
-    "constraints": ["budget faible"],
-    "assumptions": ["le demandeur suppose que l'écart vient d'un seul facteur"],
-    "global_unknowns": ["mesure actuelle de l'écart"],
+    "problem_understood": "cas synthétique S : une seule dimension, faible criticité, réversible",
+    "assumed_objective": "objectif synthétique S",
+    "constraints": ["contrainte C0"],
+    "assumptions": ["hypothèse H0"],
+    "global_unknowns": ["inconnue U0"],
     "dimensions": [
         {
-            "name": "organisation",
-            "why": "l'écart se joue dans l'organisation quotidienne",
+            "name": "dimension omega",
+            "why": "seule dimension pertinente du cas synthétique S",
             "presumed_criticality": "low",
             "unknowns": [],
-            "suggested_angles": ["praticien de terrain"],
+            "suggested_angles": ["praticien"],
         }
     ],
     "contestation": {"status": "none", "target": "", "argument": ""},
@@ -48,34 +49,30 @@ SIMPLE_FRAMING: dict[str, Any] = {
     "suggested_class": "",
 }
 
-COMPLEX_FRAMING: dict[str, Any] = {
-    "problem_understood": "situation B : un engagement lourd fondé sur une promesse non écrite",
-    "assumed_objective": "sécuriser l'avenir sans mettre l'ensemble en péril",
-    "constraints": ["décision attendue sous trois mois", "capacité financière limitée"],
-    "assumptions": ["la promesse sera tenue", "ne pas agir revient à perdre"],
-    "global_unknowns": [
-        "ce que la contrepartie acceptera de signer",
-        "calendrier réel de la contrepartie",
-        "existence d'alternatives locales",
-    ],
+MULTI_FRAMING: dict[str, Any] = {
+    "problem_understood": "cas synthétique M : trois dimensions de criticités différentes",
+    "assumed_objective": "objectif synthétique M",
+    "constraints": ["contrainte C1", "contrainte C2"],
+    "assumptions": ["hypothèse H1", "hypothèse H2"],
+    "global_unknowns": ["inconnue U1", "inconnue U2", "inconnue U3"],
     "dimensions": [
         {
-            "name": "contractuel",
-            "why": "tout repose sur un engagement oral",
+            "name": "dimension alpha",
+            "why": "dimension présumée critique du cas synthétique M",
             "presumed_criticality": "high",
-            "unknowns": ["forme d'engagement obtenable"],
-            "suggested_angles": ["juriste des contrats", "sceptique / adversaire"],
+            "unknowns": ["inconnue U-alpha"],
+            "suggested_angles": ["angle A1 (théoricien)", "angle A2 (sceptique)"],
         },
         {
-            "name": "financier",
-            "why": "l'engagement mobilise toute la capacité",
+            "name": "dimension beta",
+            "why": "dimension présumée moyenne du cas synthétique M",
             "presumed_criticality": "medium",
-            "unknowns": ["point mort du projet"],
-            "suggested_angles": ["mesure et chiffres"],
+            "unknowns": ["inconnue U-beta"],
+            "suggested_angles": ["angle B1 (mesure)"],
         },
         {
-            "name": "humain",
-            "why": "des personnes clés devraient se déplacer",
+            "name": "dimension gamma",
+            "why": "dimension présumée secondaire du cas synthétique M",
             "presumed_criticality": "low",
             "unknowns": [],
             "suggested_angles": [],
@@ -83,21 +80,40 @@ COMPLEX_FRAMING: dict[str, Any] = {
     ],
     "contestation": {
         "status": "raised",
-        "target": "hypothèse « ne pas agir revient à perdre »",
-        "argument": "la perte est probable à terme mais ni certaine ni immédiate",
+        "target": "hypothèse H2",
+        "argument": "H2 n'est pas établie par les éléments fournis",
     },
-    "escalation_signals": ["engagement irréversible de toute la capacité financière"],
+    "escalation_signals": ["signal S1 : irréversibilité présumée"],
     "suggested_class": "structurante",
+}
+
+# Signaux d'escalade substantiels mais aucune classe suggérée : le contrat doit compenser.
+SIGNALS_WITHOUT_CLASS_FRAMING: dict[str, Any] = {**MULTI_FRAMING, "suggested_class": ""}
+
+# Dimension critique dont les angles appelés ne sont pas critiques : T26 doit ajouter un
+# contradicteur (ou substituer un angle du catalogue), jamais un angle appelé par le cadrage.
+HIGH_WITHOUT_CRITICAL_ANGLE_FRAMING: dict[str, Any] = {
+    **SIMPLE_FRAMING,
+    "problem_understood": "cas synthétique H : une dimension critique sans angle critique appelé",
+    "dimensions": [
+        {
+            "name": "dimension delta",
+            "why": "dimension présumée critique du cas synthétique H",
+            "presumed_criticality": "high",
+            "unknowns": ["inconnue U-delta"],
+            "suggested_angles": ["angle D1 (théoricien)", "angle D2 (utilisateur)"],
+        }
+    ],
 }
 
 DEFAULT_USAGE = LLMUsage(input_tokens=1000, output_tokens=500)
 
 EXPERT_POSITIONS = {
-    "E1": "conditionner tout engagement à un contrat écrit",
-    "E2": "construire un chemin progressif plutôt qu'un engagement total",
-    "E3": "attendre et vérifier le calendrier réel avant de décider",
-    "E4": "s'adosser à un partenaire plutôt que porter seul le capital",
-    "E5": "refuser et diversifier",
+    "E1": "position synthétique distincte numéro un",
+    "E2": "position synthétique distincte numéro deux",
+    "E3": "position synthétique distincte numéro trois",
+    "E4": "position synthétique distincte numéro quatre",
+    "E5": "position synthétique distincte numéro cinq",
 }
 
 
@@ -233,7 +249,7 @@ def _post_mission(client: TestClient, **overrides: Any) -> dict[str, Any]:
 def test_tour0_is_isolated_one_call_per_expert(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    llm = use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client)
     expert_calls = [c for c in llm.calls if c["call_type"] == "expert_tour0"]
     experts = mission["composition"]["experts"]
@@ -251,7 +267,7 @@ def test_tour0_is_isolated_one_call_per_expert(
 def test_journal_proves_isolation_after_the_fact(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client)
     journal = client.get(f"/missions/{mission['id']}/journal").json()
     planned = [e for e in journal if e["step"] == "tour0" and e["entry_type"] == "call_planned"]
@@ -278,7 +294,7 @@ def test_two_problems_two_compositions(
 ) -> None:
     use_llm(ScriptedStructuredLLM(SIMPLE_FRAMING))
     simple = _post_mission(client)
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     complex_ = _post_mission(client)
     simple_cells = simple["composition"]["cells"]
     complex_cells = complex_["composition"]["cells"]
@@ -287,13 +303,13 @@ def test_two_problems_two_compositions(
     assert len(complex_["composition"]["experts"]) > len(simple["composition"]["experts"])
     # La profondeur suit la criticité présumée, bornée par le budget ; rien de fixe.
     by_dim = {c["dimension"]: c["depth"] for c in complex_cells}
-    assert by_dim["contractuel"] >= by_dim["humain"]
+    assert by_dim["dimension alpha"] >= by_dim["dimension gamma"]
 
 
 def test_no_fixed_number_of_experts_is_doctrine(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client)
     bounds = mission["composition"]["bounds"]
     assert "expérimentale" in bounds["max_angles_per_cell_nature"]
@@ -304,20 +320,69 @@ def test_no_fixed_number_of_experts_is_doctrine(
     assert mission["llm_calls_used"] <= 12
 
 
-def test_ceo_preference_adds_a_contradicting_perspective_only_when_present(
+def test_t26_pertinent_need_uses_existing_critical_angle(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     without = _post_mission(client)
     assert not any(e["contradicts_preference"] for e in without["composition"]["experts"])
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
-    with_pref = _post_mission(client, ceo_preference="je penche pour l'engagement total")
-    contradictors = [e for e in with_pref["composition"]["experts"] if e["contradicts_preference"]]
-    assert len(contradictors) == 1
-    assert contradictors[0]["angle_title"] == "Red Team / adversaire"
-    assert "préférence" in contradictors[0]["justification"]
-    journal = with_pref["composition"]["journal"]
-    assert any(j["event"] == "perspective_contraire_preference" for j in journal)
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
+    with_pref = _post_mission(client, ceo_preference="préférence déclarée X")
+    # Le cadrage appelle un angle critique (« sceptique ») sur une dimension critique : la
+    # perspective critique déjà présente porte le mandat ; rien n'est ajouté.
+    assert [c["angles"] for c in with_pref["composition"]["cells"]] == [
+        c["angles"] for c in without["composition"]["cells"]
+    ]
+    mandated = [e for e in with_pref["composition"]["experts"] if e["contradicts_preference"]]
+    assert len(mandated) == 1
+    assert mandated[0]["angle_title"] == "Red Team / adversaire"
+    assert mandated[0]["dimension"] == "dimension alpha"
+    entry = next(
+        j
+        for j in with_pref["composition"]["journal"]
+        if j["event"] == "perspective_contraire_preference"
+    )
+    assert entry["decision"] == "mandat_confie"
+    assert "dimension critique" in entry["detail"]
+
+
+def test_t26_no_artificial_opposition_without_pertinent_need(
+    client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
+) -> None:
+    use_llm(ScriptedStructuredLLM(SIMPLE_FRAMING))
+    without = _post_mission(client)
+    use_llm(ScriptedStructuredLLM(SIMPLE_FRAMING))
+    with_pref = _post_mission(client, ceo_preference="préférence déclarée Y")
+    assert with_pref["composition"]["cells"] == without["composition"]["cells"]
+    assert not any(e["contradicts_preference"] for e in with_pref["composition"]["experts"])
+    entry = next(
+        j
+        for j in with_pref["composition"]["journal"]
+        if j["event"] == "perspective_contraire_preference"
+    )
+    assert entry["decision"] == "aucun_ajout"
+    assert "pas d'opposition artificielle" in entry["detail"]
+
+
+def test_t26_pertinent_need_without_critical_angle_adds_contradictor_not_replacing_framing_angles(
+    client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
+) -> None:
+    use_llm(ScriptedStructuredLLM(HIGH_WITHOUT_CRITICAL_ANGLE_FRAMING))
+    with_pref = _post_mission(client, ceo_preference="préférence déclarée Z")
+    cell = with_pref["composition"]["cells"][0]
+    assert "Red Team / adversaire" in cell["angles"]
+    # Les angles appelés par le cadrage sont conservés ; seul un angle du catalogue a cédé la place.
+    assert "Théoricien / fondamentaux" in cell["angles"]
+    assert "Expert UX / utilisateur" in cell["angles"]
+    entry = next(
+        j
+        for j in with_pref["composition"]["journal"]
+        if j["event"] == "perspective_contraire_preference"
+    )
+    assert entry["decision"] == "angle_contraire"
+    assert "substitué à l'angle du catalogue" in entry["detail"]
+    mandated = [e for e in with_pref["composition"]["experts"] if e["contradicts_preference"]]
+    assert len(mandated) == 1
 
 
 # --- Cadrage : contestation, inconnues, classe -----------------------------------------------
@@ -327,10 +392,10 @@ def test_contestation_surfaces_when_framing_raises_it_and_not_otherwise(
     use_llm(ScriptedStructuredLLM(SIMPLE_FRAMING))
     sane = _post_mission(client)
     assert sane["report"]["contestation"]["status"] == "none"
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     contested = _post_mission(client)
     assert contested["report"]["contestation"]["status"] == "raised"
-    assert "ne pas agir" in contested["report"]["contestation"]["target"]
+    assert contested["report"]["contestation"]["target"] == "hypothèse H2"
     md = client.get(f"/missions/{contested['id']}/report/markdown").json()["markdown"]
     assert "Contestation soulevée" in md
 
@@ -338,12 +403,12 @@ def test_contestation_surfaces_when_framing_raises_it_and_not_otherwise(
 def test_unknowns_are_structured_and_counted(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client)
     unknown = mission["report"]["epistemic"]["unknown"]
     assert len(unknown["global"]) == 3
     assert unknown["total"] >= 3 + len(mission["composition"]["experts"])
-    assert any(d["dimension"] == "contractuel" for d in unknown["by_dimension"])
+    assert any(d["dimension"] == "dimension alpha" for d in unknown["by_dimension"])
 
 
 def test_class_is_provisional_by_default_and_escalated_by_framing(
@@ -353,21 +418,63 @@ def test_class_is_provisional_by_default_and_escalated_by_framing(
     simple = _post_mission(client)
     assert simple["effective_class"] == "importante_provisoire"
     assert simple["class_is_provisional"] is True
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     escalated = _post_mission(client)
     assert escalated["effective_class"] == "structurante"
     assert "escaladée" in escalated["report"]["class"]["escalation"]
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     declared = _post_mission(client, declared_class="importante")
     assert declared["effective_class"] == "importante"  # la classe CEO n'est pas écrasée
     assert "soumise au CEO" in declared["report"]["class"]["escalation"]
+
+
+def test_escalation_signals_without_suggested_class_still_escalate(
+    client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
+) -> None:
+    use_llm(ScriptedStructuredLLM(SIGNALS_WITHOUT_CLASS_FRAMING))
+    provisional = _post_mission(client)
+    assert provisional["effective_class"] == "structurante"  # escalade d'un rang par défaut
+    escalation = provisional["report"]["class"]["escalation"]
+    assert "par défaut" in escalation
+    assert provisional["report"]["class"]["suggested_class_missing"] is True
+    journal = client.get(f"/missions/{provisional['id']}/journal").json()
+    entry = next(e for e in journal if e["entry_type"] == "class_escalation")
+    assert entry["payload"]["default_escalation_used"] is True
+    assert entry["payload"]["applied_suggestion"] == "structurante"
+    use_llm(ScriptedStructuredLLM(SIGNALS_WITHOUT_CLASS_FRAMING))
+    declared = _post_mission(client, declared_class="courante")
+    assert declared["effective_class"] == "courante"  # jamais écrasée : escalade soumise au CEO
+    assert "soumise au CEO" in declared["report"]["class"]["escalation"]
+    assert "importante" in declared["report"]["class"]["escalation"]
+
+
+def test_framing_schema_flags_missing_class_when_signals_present() -> None:
+    with_signals, _ = parse_structured(
+        json.dumps({"problem_understood": "p", "escalation_signals": ["s"], "suggested_class": ""}),
+        FramingOutput,
+    )
+    assert with_signals is not None
+    assert with_signals.suggested_class_missing is True
+    assert with_signals.escalation_required is True
+    with_class, _ = parse_structured(
+        json.dumps(
+            {"problem_understood": "p", "escalation_signals": ["s"], "suggested_class": "critique"}
+        ),
+        FramingOutput,
+    )
+    assert with_class is not None
+    assert with_class.suggested_class_missing is False
+    quiet, _ = parse_structured(json.dumps({"problem_understood": "p"}), FramingOutput)
+    assert quiet is not None
+    assert quiet.suggested_class_missing is False
+    assert quiet.escalation_required is False
 
 
 # --- Cartographie : options séparées, greffier, schéma fermé --------------------------------
 def test_options_stay_distinct_and_non_action_is_recognised(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING, expert_kinds={"E3": "wait", "E4": "integrate"}))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING, expert_kinds={"E3": "wait", "E4": "integrate"}))
     mission = _post_mission(client)
     carto = mission["cartography"]
     assert carto["distinct_option_groups"] >= 3
@@ -379,11 +486,11 @@ def test_options_stay_distinct_and_non_action_is_recognised(
 def test_clerk_called_only_on_residual_ambiguity(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    llm = use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING, relation="different"))
+    llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING, relation="different"))
     mission = _post_mission(client)
     assert not [c for c in llm.calls if c["call_type"] == "clerk"]
     assert mission["cartography"]["clerk_used"] is False
-    llm = use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING, relation="variant"))
+    llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING, relation="variant"))
     mission = _post_mission(client)
     clerk_calls = [c for c in llm.calls if c["call_type"] == "clerk"]
     assert len(clerk_calls) == 1
@@ -410,7 +517,7 @@ def test_evidence_verified_without_source_is_downgraded() -> None:
 def test_report_marks_unverified_evidence(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING, bad_evidence_for={"E1"}))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING, bad_evidence_for={"E1"}))
     mission = _post_mission(client)
     unverified = mission["report"]["epistemic"]["unverified"]
     assert any(u["text"] == "chiffre précis sans source" for u in unverified)
@@ -426,7 +533,7 @@ def test_tokens_and_cost_are_logged_per_call_and_per_mission(
     use_llm: Callable[..., ScriptedStructuredLLM],
     session_factory: sessionmaker[Session],
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client)
     with session_factory() as session:
         rows = list(
@@ -463,7 +570,7 @@ def test_hard_stop_before_exceeding_max_calls(
     # La composition réserve normalement les appels ; on la force à planifier plus d'experts que
     # le plafond ne permet, pour prouver que l'arrêt dur du registre s'exerce quand même.
     monkeypatch.setattr(BudgetLedger, "max_affordable_experts", lambda self, **_: 5)
-    llm = use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client, max_llm_calls=4)
     assert len(mission["composition"]["experts"]) == 5
     assert len(llm.calls) == 4  # cadrage + 3 experts ; le 5e appel est refusé
@@ -487,7 +594,7 @@ def test_hard_stop_before_exceeding_cost_cap(
     client: TestClient,
     use_llm: Callable[..., ScriptedStructuredLLM],
 ) -> None:
-    llm = use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client)
     assert mission["max_cost_eur"] == 2.0
     assert mission["cost_eur"] <= 2.0
@@ -502,7 +609,7 @@ def test_hard_stop_before_exceeding_cost_cap(
 def test_partial_report_is_coherent_after_budget_stop(
     client: TestClient, use_llm: Callable[..., ScriptedStructuredLLM]
 ) -> None:
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     # Budget trop étroit pour explorer : le cadrage a lieu, aucun expert n'est finançable.
     mission = _post_mission(client, max_llm_calls=2)
     report = mission["report"]
@@ -516,7 +623,7 @@ def test_partial_report_is_coherent_after_budget_stop(
     assert "partiel" in md
     assert "budget_insufficient_for_exploration" in md
     # Budget intermédiaire : la composition se contraint d'elle-même (aucun arrêt nécessaire).
-    use_llm(ScriptedStructuredLLM(COMPLEX_FRAMING))
+    use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client, max_llm_calls=6)
     assert mission["stop_reason"] == ""
     assert mission["llm_calls_used"] <= 6

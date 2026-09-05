@@ -68,6 +68,14 @@ CLASS_RANK = {
     "structurante": 2,
     "critique": 3,
 }
+# Escalade par défaut d'un rang quand le cadrage signale un risque sans proposer de classe.
+NEXT_CLASS = {
+    "courante": "importante",
+    "importante": "structurante",
+    PROVISIONAL_CLASS: "structurante",
+    "structurante": "critique",
+    "critique": "critique",
+}
 CEO_ACTIONS = {
     "approve": "approved",
     "request_revision": "revision_requested",
@@ -217,32 +225,56 @@ def _escalate_class(session: Session, run: _Run) -> dict[str, Any]:
     }
     if run.framing is None:
         return info
-    suggested = run.framing.suggested_class
+    suggested: str = run.framing.suggested_class
     signals = list(run.framing.escalation_signals)
     if not suggested and not signals:
         return info
     current_rank = CLASS_RANK.get(m.effective_class, 1)
-    suggested_rank = CLASS_RANK.get(suggested, -1) if suggested else -1
+    default_used = False
+    if signals and not suggested:
+        # Contrat d'escalade : des signaux substantiels sans classe suggérée exploitable ne
+        # peuvent pas laisser la classe inchangée « faute d'un champ facultatif ». Escalade d'un
+        # rang par défaut (appliquée si la classe est provisoire, soumise au CEO sinon).
+        suggested = NEXT_CLASS.get(m.effective_class, "structurante")
+        default_used = True
+    suffix = (
+        " (escalade par défaut d'un rang : signaux substantiels sans classe suggérée exploitable)"
+        if default_used
+        else ""
+    )
+    suggested_rank = CLASS_RANK.get(suggested, -1)
     if suggested_rank > current_rank:
         if m.class_is_provisional:
             m.effective_class = suggested
             session.commit()
             info["effective"] = suggested
-            info["escalation"] = f"classe provisoire escaladée à « {suggested} » par le cadrage"
+            info["escalation"] = (
+                f"classe provisoire escaladée à « {suggested} » par le cadrage{suffix}"
+            )
         else:
             info["escalation"] = (
-                f"le cadrage recommande « {suggested} » ; la classe déclarée par le CEO "
+                f"le cadrage recommande « {suggested} »{suffix} ; la classe déclarée par le CEO "
                 f"(« {m.declared_class} ») est conservée — escalade soumise au CEO"
             )
     elif signals:
-        info["escalation"] = "signaux d'escalade consignés sans changement de classe"
+        info["escalation"] = (
+            "signaux d'escalade consignés ; la classe en vigueur est déjà au moins égale à la "
+            "classe suggérée"
+        )
+    info["suggested_class_missing"] = run.framing.suggested_class_missing
     _journal(
         session,
         run,
         "cadrage",
         "class_escalation",
         "facilitateur",
-        {**info, "signals": signals, "suggested_class": suggested},
+        {
+            **info,
+            "signals": signals,
+            "suggested_class": run.framing.suggested_class,
+            "applied_suggestion": suggested,
+            "default_escalation_used": default_used,
+        },
     )
     return info
 

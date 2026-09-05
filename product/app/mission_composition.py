@@ -42,7 +42,35 @@ DEFAULT_ANGLE_ORDER: tuple[str, ...] = (
     "Expert performance / optimisation",
 )
 CONTRADICTOR_ANGLE = "Red Team / adversaire"
+# Angles naturellement critiques : une préférence CEO peut être challengée par l'un d'eux sans
+# qu'il soit nécessaire d'ajouter un contradicteur.
+CRITICAL_ANGLES = frozenset(
+    {"Red Team / adversaire", "Expert risques / sécurité", "Auditeur / conformité"}
+)
 EXCLUDED_FROM_TOUR0 = frozenset({"Synthétiseur / arbitre"})
+
+
+def contradiction_pertinence(framing: FramingOutput) -> tuple[bool, list[str]]:
+    """Le cadrage justifie-t-il une perspective contraire à une préférence déclarée ?
+
+    Le besoin se lit dans le problème, jamais dans la seule existence d'une préférence : dimension
+    de criticité élevée, signaux d'escalade, contestation soulevée, ou angle critique appelé par
+    le cadrage. Retourne (pertinent, raisons).
+    """
+    reasons: list[str] = []
+    for dim in framing.dimensions:
+        if dim.presumed_criticality == "high":
+            reasons.append(f"dimension critique « {dim.name} »")
+        for free in dim.suggested_angles:
+            matched = match_catalogue_angle(free)
+            if matched in CRITICAL_ANGLES:
+                reasons.append(f"angle critique appelé par le cadrage : « {free} »")
+    if framing.escalation_signals:
+        reasons.append("signaux d'escalade présents")
+    if framing.contestation.status == "raised":
+        reasons.append("contestation soulevée au cadrage")
+    return bool(reasons), reasons
+
 
 # Profondeur initiale MODESTE par criticité présumée (avant approfondissement, qui relève des
 # incréments suivants). Ce ne sont pas des quotas : elles sont bornées par la classe et le budget.
@@ -276,36 +304,81 @@ def compose(
         if not plan:
             break
 
-    # 3) T26 — préférence CEO : au moins une perspective susceptible de la contredire, placée sur
-    #    la dimension la plus critique, sans opposition artificielle (une seule, pas davantage).
+    # 3) T26 — préférence CEO : la composition ne s'aligne pas sur la préférence, et n'ajoute pas
+    #    d'opposition artificielle. On distingue « préférence déclarée » et « besoin pertinent d'un
+    #    angle contraire » ; ce besoin se lit dans le cadrage (criticité, signaux d'escalade,
+    #    contestation, angles critiques appelés), jamais dans la seule présence d'une préférence.
+    mandate_target: tuple[str, str] | None = None
     if ceo_preference.strip() and plan:
-        already = any(a[0] == CONTRADICTOR_ANGLE for p in plan for a in p["angles"])
+        pertinent, reasons = contradiction_pertinence(framing)
         target = sorted(plan, key=lambda p: order.get(p["dimension"].presumed_criticality, 1))[0]
-        if not already:
-            if len(target["angles"]) < max_angles_per_cell and total() < max_experts:
-                target["angles"].append((CONTRADICTOR_ANGLE, "contradicteur"))
-                action = "ajouté"
-            else:
-                target["angles"][-1] = (CONTRADICTOR_ANGLE, "contradicteur")
-                action = "substitué au dernier angle"
+        critical_present = [(p, a) for p in plan for a in p["angles"] if a[0] in CRITICAL_ANGLES]
+        if not pertinent:
             result.journal.append(
                 {
                     "event": "perspective_contraire_preference",
-                    "dimension": target["dimension"].name,
-                    "angle": CONTRADICTOR_ANGLE,
+                    "decision": "aucun_ajout",
                     "detail": (
-                        f"préférence du demandeur déclarée → angle contradicteur {action} sur la "
-                        "dimension la plus critique (neutralité de composition)"
+                        "préférence déclarée ; aucun besoin pertinent de contradiction spécialisée "
+                        "identifié par le cadrage (aucune dimension critique, aucun signal "
+                        "d'escalade, aucune contestation, aucun angle critique appelé) : "
+                        "composition inchangée — pas d'opposition artificielle"
+                    ),
+                }
+            )
+        elif critical_present:
+            # Une perspective naturellement critique est déjà présente : elle porte le mandat.
+            critical_present.sort(
+                key=lambda pa: order.get(pa[0]["dimension"].presumed_criticality, 1)
+            )
+            chosen_plan, chosen_angle = critical_present[0]
+            mandate_target = (chosen_plan["dimension"].name, chosen_angle[0])
+            result.journal.append(
+                {
+                    "event": "perspective_contraire_preference",
+                    "decision": "mandat_confie",
+                    "dimension": mandate_target[0],
+                    "angle": mandate_target[1],
+                    "detail": (
+                        "besoin pertinent de contradiction ("
+                        + " ; ".join(reasons)
+                        + ") : perspective critique déjà présente, mandat de challenger la "
+                        "préférence confié à cet angle — aucun ajout"
                     ),
                 }
             )
         else:
+            if len(target["angles"]) < max_angles_per_cell and total() < max_experts:
+                target["angles"].append((CONTRADICTOR_ANGLE, "contradicteur"))
+                action = "ajouté"
+                mandate_target = (target["dimension"].name, CONTRADICTOR_ANGLE)
+            else:
+                # Ne substituer qu'un angle venu du catalogue par défaut : un angle appelé par le
+                # cadrage n'est jamais remplacé sans justification sémantique du cadrage.
+                replaceable = [i for i, a in enumerate(target["angles"]) if a[1] == "catalogue"]
+                if replaceable:
+                    idx = replaceable[-1]
+                    replaced = target["angles"][idx][0]
+                    target["angles"][idx] = (CONTRADICTOR_ANGLE, "contradicteur")
+                    action = f"substitué à l'angle du catalogue « {replaced} »"
+                    mandate_target = (target["dimension"].name, CONTRADICTOR_ANGLE)
+                else:
+                    first = target["angles"][0][0]
+                    mandate_target = (target["dimension"].name, first)
+                    action = (
+                        "non ajouté (budget atteint, angles appelés par le cadrage conservés) ; "
+                        f"mandat de challenger la préférence confié à « {first} »"
+                    )
             result.journal.append(
                 {
                     "event": "perspective_contraire_preference",
+                    "decision": "angle_contraire",
+                    "dimension": target["dimension"].name,
+                    "angle": mandate_target[1],
                     "detail": (
-                        "un angle contradicteur était déjà présent : le mandat de contredire la "
-                        "préférence lui est confié, aucun ajout"
+                        "besoin pertinent de contradiction ("
+                        + " ; ".join(reasons)
+                        + f") : angle contradicteur {action} sur la dimension la plus critique"
                     ),
                 }
             )
@@ -318,7 +391,7 @@ def compose(
         for title, source in p["angles"]:
             counter += 1
             expert_id = f"E{counter}"
-            contradicts = bool(ceo_preference.strip()) and title == CONTRADICTOR_ANGLE
+            contradicts = mandate_target == (dimension.name, title)
             if source == "cadrage":
                 why = f"angle appelé par le cadrage pour la dimension « {dimension.name} »"
             elif source == "contradicteur":

@@ -867,13 +867,18 @@ parce qu'il améliore de façon mesurable T02, T04, T05, T06, T10, T13, T14, T23
 1. **Cadrage** — un appel structuré : problème compris, objectif supposé, contraintes, hypothèses,
    **inconnues**, **dimensions émergentes** (aucune liste imposée), **contestation éventuelle** de la
    demande (`none` est légitime), signaux d'escalade. Sans classe déclarée, la mission démarre en
-   `importante_provisoire` (non déterminée) et le cadrage **peut l'escalader** ; une classe déclarée
-   par le CEO n'est jamais écrasée (l'escalade lui est soumise).
+   `importante_provisoire` (non déterminée) et le cadrage **peut l'escalader** ; des signaux
+   d'escalade sans classe suggérée exploitable entraînent une escalade **d'un rang par défaut**
+   (jamais « rien ») ; une classe déclarée par le CEO n'est jamais écrasée (l'escalade lui est
+   soumise).
 2. **Composition** — règles codées, sans LLM : dimensions → cellules → profondeur initiale modeste
    (selon la criticité présumée) → contrainte par le budget. Catalogue ouvert `EXPERT_ARCHETYPES`
    (jamais tous convoqués) ; le mécanisme historique « 10 experts par spécialité » n'est pas appelé.
    Borne de 3 angles par cellule : **expérimentale, temporaire, paramétrable, non doctrinale**.
-   Si une préférence CEO est déclarée, une perspective capable de la contredire est présente (T26).
+   Une préférence CEO ne fait jamais pencher la composition vers l'alignement ; lorsque le cadrage
+   révèle un besoin pertinent de contradiction (dimension critique, signaux d'escalade, contestation,
+   angle critique appelé), une perspective capable de la challenger porte ce mandat — une perspective
+   déjà critique suffit ; aucune opposition artificielle n'est ajoutée sinon (T26).
    Journal : dimension → angle → justification.
 3. **Tour 0** — un appel **isolé** par expert (même dossier de cadrage, sa fiche, aucun exposé
    d'un autre) ; sortie structurée : position, raisonnement, hypothèses, risques, inconnues, à
