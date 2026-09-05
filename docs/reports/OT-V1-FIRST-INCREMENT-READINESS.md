@@ -166,7 +166,9 @@ noyau depuis `product/` briserait cette isolation et est interdit par les contra
 
 **Décision** : **ne pas toucher** `src/aisos/` ; **porter par spécification** le seul classifieur à quatre
 classes, dans un incrément ultérieur (T16). Le premier incrément se contente d'**enregistrer** une classe
-déclarée au cadrage (CEO ou valeur par défaut « importante »), sans délégation.
+déclarée au cadrage (CEO) ou, à défaut, une classe **« importante provisoire / non déterminée »** — jamais une
+« importante » définitive par défaut — que le cadrage **peut et doit escalader** selon les risques découverts ;
+sans délégation.
 
 ### 2.12 Invariant « aucune règle ne nomme un projet » (T23)
 
@@ -209,7 +211,10 @@ T07/T09 (tours C-D-F = incrément 3), T11 complet (porte indépendante = incrém
 **Ce qu'il fait, dans l'ordre (une mission) :**
 
 1. **Cadrage** — entrée unique (type : problème / idée / objectif / solution existante ; texte ; dossier
-   optionnel ; classe déclarée par le CEO ou « importante » par défaut ; plafond d'appels et d'euros).
+   optionnel ; classe déclarée par le CEO ou, à défaut, **« importante provisoire / non déterminée »** —
+   jamais « importante » définitive par défaut : le cadrage **peut et doit l'escalader** selon les risques
+   découverts (irréversibilité, coût d'erreur, incertitude critique), et l'escalade est journalisée ;
+   plafond d'appels et d'euros — **décision CEO** : plafond dur **2,00 € par mission et 12 appels LLM**).
    Un appel LLM produit une **sortie structurée** : problème compris, **contestation éventuelle de la
    demande** (T14), **dimensions émergentes** avec criticité présumée et inconnues par dimension (T04),
    **inconnues globales** (T02).
@@ -303,7 +308,7 @@ s'améliore de façon observable, l'incrément est un échec et l'approche est r
 | R7 | **Dérive vers l'exécution** : tentation d'ajouter *lire un dépôt* ou *coder* « puisque le cadrage existe » | Portée | Interdits explicites du mandat ; incréments justifiés par tests nommés ; 026 §7 (légitimité ≠ autorisation) |
 | R8 | **Règle nommant un banc d'essai** : un prompt ou un test cite le projet servant de banc | Tout `product/` | Test automatisé T23 en CI |
 | R9 | **Régression des phases 0–18** : extension du client LLM ou des schémas qui casse l'existant | Client, DB | `complete(prompt)` conservé ; colonnes nullable ; suite des 335 tests inchangée |
-| R10 | **Coût non borné** : `max_tokens` 8 k × N experts sans plafond | Étape 3 | Plafond d'appels et d'euros au cadrage ; arrêt dur ; coût affiché dans le rapport (T24 partiel) |
+| R10 | **Coût non borné** : `max_tokens` 8 k × N experts sans plafond | Étape 3 | Plafond dur fixé par le CEO : **2,00 €/mission et 12 appels** ; `max_tokens` configurable **par type d'appel** (cadrage, exposé, auto-qualification, greffier) ; **estimation avant chaque appel** et refus/arrêt si l'appel peut dépasser le plafond ; tokens et coût journalisés ; arrêt dur avec rapport partiel et incertitudes déclarées (T24 partiel) |
 | R11 | **Nouvelle couche documentaire** : multiplication de documents de méthode | Dépôt | 026 §8 : Décision, document canonique, protocole, un rapport par porte — rien d'autre |
 
 ---
@@ -328,12 +333,17 @@ avant de coder :**
    CEO (ou Orion) rédige et scelle hors dépôt **au moins trois problèmes** (un courant, un importante, un
    structurant ; natures différentes), avec pour chacun les constats majeurs attendus — la grille de
    jugement de T02 et T04.
-3. **Couloir de budget du premier incrément.** Passer de 256 à 4–8 k tokens par appel et de 3 à
-   « 1 + N » appels par mission change le coût réel par mission (estimation : 0,10–1,50 €). Le CEO doit
-   fixer le **plafond par mission** (appels et euros) que l'incrément codera en dur comme valeur par
-   défaut — c'est une décision de classe *courante* mais elle lui appartient (`behavior/13`).
+3. ~~**Couloir de budget du premier incrément.**~~ **Résolu par décision CEO (2026-09-05)** : plafond dur
+   **2,00 € par mission et 12 appels LLM** ; `max_tokens` **configurable par type d'appel** ; **estimation
+   avant appel** et refus ou arrêt si l'appel peut dépasser le plafond ; tokens et coût journalisés. Le CEO a
+   également fixé la **classe initiale** : *importante provisoire / non déterminée*, jamais « importante »
+   définitive par défaut, à escalader par le cadrage selon les risques découverts. Conséquence
+   expérimentale (non doctrinale) : avec 1 appel de cadrage + N exposés + N auto-qualifications + 0–1
+   greffier, le plafond de 12 appels borne l'incrément 1 à **N ≤ 5 experts par mission** ; cette borne découle
+   du budget, pas d'une règle de profondeur, et sera revue avec le protocole §10.
 
-**Ce qui devient READY dès que ces trois éléments existent** : l'incrément 1 tel que décrit au §4, sur la
+**Ce qui devient READY dès que les deux éléments restants existent** (ratification par fusion ; trois
+problèmes scellés) : l'incrément 1 tel que décrit au §4, sur la
 branche produit habituelle, en PR vers `develop`, avec ARP, sans fusion sans validation CEO.
 
 **Ce qui n'est pas demandé au CEO** : aucun choix technique (le client, les tables, les schémas relèvent de

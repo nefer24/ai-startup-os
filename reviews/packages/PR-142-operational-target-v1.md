@@ -76,9 +76,9 @@ Totale : aucun fichier de `product/` modifié (la CI produit ne se déclenche pa
 
 1. *(Résolue)* Le retrait de `HANDOFF-AI-SOS-ORION.md` a été demandé par le CEO et effectué par revert.
 2. Qui rédige et scelle les **trois problèmes jamais vus** (CEO ou Orion) et où sont-ils conservés hors dépôt ?
-3. Quel **plafond par mission** (appels, euros) pour le premier incrément ?
-4. La classe par défaut d'une mission de cadrage sans classe déclarée est-elle bien « importante » (défaut conservateur) ?
+3. *(Résolue par le CEO)* Plafond dur **2,00 €/mission + 12 appels LLM** ; `max_tokens` configurable par type d'appel ; estimation avant appel et refus/arrêt si dépassement possible ; tokens et coût journalisés.
+4. *(Résolue par le CEO)* Classe initiale = **« importante provisoire / non déterminée »**, jamais « importante » définitive par défaut ; le cadrage peut et doit l'escalader selon les risques découverts.
 
 ## 14. Recommandation de Claude Code
 
-**Verdict documentaire : READY FOR CEO RATIFICATION** (les cinq incohérences signalées par le CEO sont corrigées ; aucune incohérence connue ne subsiste). **Verdict d'implémentation : NOT READY** (inchangé) — la ratification n'est qu'un des trois prérequis. **Fusionner après revue** pour ratifier la Décision 026 et le document canonique — c'est le premier des trois prérequis du premier incrément. **Ne pas** demander de code tant que les problèmes scellés et le plafond de budget n'existent pas : le verdict reste **NOT READY** jusque-là, et il bascule en READY dès que ces trois éléments sont réunis, sans autre décision technique requise du CEO.
+**Verdict documentaire : READY FOR CEO RATIFICATION** (les cinq incohérences signalées par le CEO sont corrigées ; aucune incohérence connue ne subsiste). **Verdict d'implémentation : NOT READY** (inchangé) — deux prérequis restent : la ratification par fusion et les trois problèmes scellés jamais vus (le budget et la classe initiale sont désormais fixés par le CEO). **Fusionner après revue** pour ratifier la Décision 026 et le document canonique — c'est le premier des trois prérequis du premier incrément. **Ne pas** demander de code tant que les problèmes scellés et le plafond de budget n'existent pas : le verdict reste **NOT READY** jusque-là, et il bascule en READY dès que ces trois éléments sont réunis, sans autre décision technique requise du CEO.
