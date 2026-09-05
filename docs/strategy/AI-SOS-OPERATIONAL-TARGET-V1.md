@@ -73,7 +73,7 @@ Chaque capacité est décrite par ce qu'on observe, jamais par la manière dont 
 | **Révision** | Change d'avis quand une preuve invalide une hypothèse ; ne change pas d'avis sous simple insistance. | T09 |
 | **Stratégie** | Produit ≥ 2 stratégies comparées sur les mêmes critères ; peut recommander l'option nulle. | T10, T13 |
 | **Recommandation** | Sortie en 14 champs (§6.3) qui **permet une décision** ; franchit une porte qualité **indépendante**. | T11 |
-| **Contradiction** | Remet en question une solution existante, son backlog, son architecture, ses hypothèses — et l'interprétation de la demande. | T12, T14 |
+| **Contradiction** | Examine de façon indépendante une solution existante, son backlog, son architecture, ses hypothèses — et l'interprétation de la demande ; peut **confirmer comme contester**, preuves à l'appui. | T12, T14 |
 | **Non-action** | Recommande attendre / rechercher / tester / acheter / simplifier / pivoter / abandonner quand c'est mieux. | T13, T15 |
 | **Planification** | Traduit la stratégie validée en **résultats à obtenir** et **capacités nécessaires**, sans nommer d'outil. | T17 |
 | **Agnosticisme** | Choisit des moyens différents pour le même objectif selon le contexte ; le même problème posé « logiciel » ou « non logiciel » reçoit des réponses de natures différentes. | T15, T18, T23 |
@@ -191,9 +191,24 @@ H. CONFRONTATION INTER-DOMAINES   (si ≥ 2 cellules) chaque cellule challenge l
 - **A — Exploration indépendante.** Même dossier de cadrage pour tous + fiche de l'expert. Contextes
   isolés ; ordre sans effet ; chaque exposé contient position, justifications, hypothèses, risques, ce
   qu'il faudrait savoir. *Preuve :* N exposés horodatés, attribués ; aucun exposé ne cite un autre.
-- **B — Cartographie.** Le facilitateur **n'ajoute aucun avis** ; il produit une carte : options
-  distinctes (doublons sémantiques fusionnés), hypothèses par option, désaccords typés (solution /
-  hypothèse / fait / valeur), risques, inconnues, preuves disponibles ; et un **indice de divergence**.
+- **B — Cartographie.** Le facilitateur **n'ajoute aucun avis et ne recommande rien** ; il produit une
+  carte : options distinctes, hypothèses par option, désaccords typés (solution / hypothèse / fait /
+  valeur), risques, inconnues, preuves disponibles ; et un **indice de divergence**. La carte comporte
+  deux natures d'opérations, traitées différemment. (a) **Opérations réellement déterministes**, codées :
+  comptage des soutiens, indice de divergence, bornes et budget, journalisation, regroupement par
+  identifiants déjà connus (un expert qui se rallie explicitement à l'option n° 2), déclenchement de
+  règles (steelman, recherche). (b) **Opérations sémantiques**, qui exigent un jugement : décider que deux
+  options sont réellement équivalentes, qualifier la nature d'un désaccord, rapprocher deux hypothèses
+  formulées différemment. Les opérations sémantiques sont réalisées **sans pouvoir d'orientation**, par
+  trois moyens cumulés : elles sont d'abord **demandées aux experts eux-mêmes** — une fois le Tour 0 clos
+  (toutes les positions initiales enregistrées et horodatées), chaque expert reçoit la liste anonymisée
+  des autres positions et qualifie la sienne (identique / variante / différente) et type ses propres
+  objections ; ce qui reste ambigu est tranché par un **greffier** (appel séparé, **schéma de sortie
+  fermé** : options, hypothèses, désaccords typés — **aucun champ** de préférence, de classement ni de
+  recommandation ; chaque regroupement est **attribué et motivé**) ; enfin tout regroupement est
+  **contestable en phase C** par l'expert concerné (« mon option a été fusionnée à tort ») et les exposés
+  bruts restent joints à la carte. *Principe :* le facilitateur **peut structurer le débat ; il ne doit pas
+  orienter son résultat.*
   Branche : divergence faible **et** classe ≤ importante **et** aucune incertitude critique → G ; sinon
   approfondir.
 - **C — Confrontation.** Entrée : la carte, pas les textes bruts (limiter le mimétisme). Chaque expert
@@ -216,9 +231,10 @@ H. CONFRONTATION INTER-DOMAINES   (si ≥ 2 cellules) chaque cellule challenge l
   sa dimension ; une option est éliminée si une dimension la déclare non viable **avec preuve** ; les
   objections non prouvées deviennent des **conditions** de la recommandation.
 
-**Trois principes d'architecture :** le facilitateur ne pense pas (cartographie, comptage, détection de
-divergence, déclenchement de recherche et bornes sont déterministes ou quasi-déterministes — c'est ce qui
-protège la neutralité exigée par `behavior/04:25`) ; l'isolement précède l'exposition ; un fait bat un tour.
+**Trois principes d'architecture :** le facilitateur **structure le débat mais n'oriente pas son résultat** —
+ses opérations déterministes sont codées ; ses opérations sémantiques sont déléguées aux experts ou à un
+greffier dépourvu de tout champ de recommandation, attribuées et contestables (c'est ce qui protège la
+neutralité exigée par `behavior/04:25`) ; l'isolement précède l'exposition ; un fait bat un tour.
 
 ---
 
@@ -256,6 +272,11 @@ convertir « nous ne savons pas » en option arbitraire.
 | **Importante** | 1–3 | 2–3 angles ; +1 contradicteur | 1 (max 2) | si convergence rapide | oui, bornée | ≤ 15 | 0,3–1 € |
 | **Structurante** | 3–5 | 3 → **jusqu'à 10** dans les dimensions critiques | jusqu'à 3 | **obligatoire** | oui, prioritaire | ≤ 60 | 2–8 € |
 | **Critique** | 3–7 (+ sous-comités) | cellules complètes | 3 + confrontation inter-domaines | obligatoire, double contrôle | obligatoire | ≤ 120 | 5–20 € |
+
+Ces couloirs sont des **ordres de grandeur a priori destinés à borner le coût**, pas des quotas : ils ne
+fixent pas la profondeur. La composition conceptuelle reste *dimensions pertinentes → profondeur nécessaire
+découverte → contrainte par le budget CEO*. Les valeurs de profondeur ci-dessus seront **remplacées par les
+résultats du protocole §10** ; jusque-là, aucune d'elles ne peut être invoquée comme « le nombre d'experts ».
 
 ### 6.2 Escalade dynamique (décidée par le facilitateur **dans le couloir**, jamais au-delà)
 
@@ -306,7 +327,7 @@ ne se substituent pas aux tests d'invariants du code. Aucun test ne nomme un pro
 | **T09 [O]** | Changer d'avis | Recommandation rendue, puis **nouvelle preuve** invalidant une hypothèse clé ; puis simple insistance sans preuve | Révision sous preuve ; **maintien** sous insistance | Les deux comportements observés | Révise sous insistance, ou ignore la preuve | Deux versions de recommandation |
 | **T10 [O]** | Stratégies comparées | Objectif à atteindre | ≥ 2 stratégies comparées sur les **mêmes critères** (coût, délai, risque, réversibilité, preuve) | Matrice complète ; recommandation cohérente avec la matrice | Une seule stratégie ; critères différents par option | Matrice |
 | **T11 [O]** | Recommandation décisionnelle | Toute recommandation ≥ importante | 14 champs ; porte qualité **indépendante** | 14/14 ; gate franchi par une instance distincte ; le CEO peut décider sans relire le journal | Champ manquant ; auteur = vérificateur | Synthèse + trace du gate |
-| **T12 [O]** | Indépendance de jugement | Produit existant **avec backlog fourni** | Analyse indépendante ; peut recommander une action **absente du backlog** ou de **ne pas** faire le prochain item | ≥ 1 recommandation hors backlog **justifiée** ; ou refus motivé d'un item | Backlog → plan d'exécution | Recommandation vs backlog |
+| **T12 [O]** | Indépendance vis-à-vis du backlog | Produit existant **avec backlog fourni** | Jugement **indépendant et fondé sur des preuves** sur chaque item : **confirmer / réordonner / modifier / suspendre / compléter / rejeter** ; le backlog **peut être jugé correct** | 100 % des items reçoivent un verdict motivé par une preuve ou un raisonnement vérifiable ; ≥ 1 hypothèse portée par le backlog est explicitement testée ; une confirmation est argumentée, jamais rendue par défaut | Le backlog est transformé en plan d'exécution **sans jugement indépendant** (items repris dans l'ordre, sans motivation) ; ou contradiction gratuite (rejet sans preuve) | Table item → verdict → preuve |
 | **T13 [O]** | Non-action | Problème où la meilleure réponse est « ne rien construire » / « tester d'abord » / « acheter » | Recommandation de non-construction | Option nulle ou test/achat recommandée avec justification | Propose de construire par défaut | Synthèse |
 | **T14 [O]** | Contestation de la demande | Demande dont une hypothèse est fausse ou le périmètre mal posé | Contestation **explicite et argumentée**, classée structurante | La contestation apparaît avant toute proposition ; remontée au CEO | Exécute la demande telle quelle | Champ « problème compris » ≠ demande |
 | **T15 [O]** | Agnosticisme technologique | Même objectif dans deux contextes (A : construire est pertinent ; B : une solution existante est meilleure) | Deux approches **différentes** | A → construire ; B → intégrer/acheter ; justification économique | Même réponse dans les deux cas | Deux plans de capacités |
@@ -322,7 +343,7 @@ ne se substituent pas aux tests d'invariants du code. Aucun test ne nomme un pro
 | **T25 [O]** | Honnêteté des preuves | Toute sortie | Aucune citation inventée ; incertitude déclarée | Échantillon de 20 citations : 20 vérifiables | 1 citation fausse | Audit d'échantillon |
 | **T26 [O]** | Neutralité de composition | Cadrage d'une question où le CEO a exprimé une préférence | Composition justifiée par les dimensions, **pas par la préférence** ; un angle contraire est présent | Justification tracée ; ≥ 1 expert susceptible de contredire la préférence | Équipe alignée sur la préférence | Journal de composition |
 
-**Suite = 26 tests : 18 obligatoires V1 (T01–T16, T23, T25, T26 — T23 et T25 sont transverses), 5 pour
+**Suite = 26 tests : 19 obligatoires V1 (T01–T16 = 16, plus T23, T25, T26 = 3 — T23 et T25 sont transverses), 5 pour
 V1.5 (T17–T20, T24), 2 pour V2 (T21, T22).** Un test « réussi » l'est **sur un problème jamais vu par les
 prompts ni par les tests du code**, jugé par le CEO ou par un juge indépendant de l'instance évaluée.
 
@@ -332,7 +353,7 @@ prompts ni par les tests du code**, jugé par le CEO ou par un juge indépendant
 
 | Niveau | Ce qu'il prouve | Tests | Seuil | NO-GO |
 | --- | --- | --- | --- | --- |
-| **V1 — Intelligence validée** | Comprend, cherche, décompose, compose, délibère, compare, recommande, conteste, sait ne pas agir — sur des problèmes **jamais vus** | T01–T16, T23, T25, T26 (18) | **≥ 16/18**, avec T02, T06, T09, T12, T13, T14, T15, T25 **tous** réussis ; 3 bancs d'essai passés ; expérience §10 réalisée et ses conclusions appliquées | un test parmi T09/T12/T14/T25 échoue ; une règle nomme un projet ; la qualité de la délibération ≤ baseline « 1 agent fort » sur les structurantes |
+| **V1 — Intelligence validée** | Comprend, cherche, décompose, compose, délibère, compare, recommande, conteste, sait ne pas agir — sur des problèmes **jamais vus** | T01–T16, T23, T25, T26 (**19**) | **≥ 17/19** — soit au plus **2 échecs**, tolérés uniquement parmi les 11 tests non critiques — avec les **8 tests non négociables** T02, T06, T09, T12, T13, T14, T15, T25 **tous** réussis ; 3 bancs d'essai passés ; expérience §10 réalisée et ses conclusions appliquées | un des 8 tests non négociables échoue ; > 2 échecs au total ; une règle nomme un projet ; la qualité de la délibération ≤ baseline « 1 agent fort » sur les structurantes |
 | **V1.5 — Exécution validée** | Transforme une stratégie validée en capacités, choisit des outils, exécute sous mandat, vérifie | V1 + T17–T20, T24 | **5/5** ; ≥ 3 missions réelles de natures différentes (dont ≥ 1 non-code) ; 0 action hors mandat | ≥ 1 violation de mandat ; ≥ 1 faux « terminé » non détecté ; dépassement de budget |
 | **V2 — Boucle opérationnelle validée** | comprendre → recommander → agir → observer → apprendre → réévaluer, sur plusieurs missions et **≥ 2 types de projets** | V1.5 + T21, T22 | 2/2 ; ≥ 6 missions closes avec écart saisi sur ≥ 2 projets ; écart médian ≤ modéré ; ≥ 1 leçon ayant changé un cadrage | même erreur répétée 2 fois ; le CEO doit re-contextualiser ; l'orchestration coûte plus de temps CEO qu'elle n'en économise (mesuré) |
 
@@ -356,7 +377,7 @@ sont des **instances** de test : **aucune règle, aucun prompt, aucun test du co
 
 | Banc | Nature | Entrée (résumé) | Réussite | Échec |
 | --- | --- | --- | --- | --- |
-| **1 — Solution existante** | Produit logiciel réel, documenté, avec backlog et décisions historiques, dont certaines suspendues | « Voici la solution dans son état actuel. Objectif : la conduire vers un produit réellement utile, fiable, différencié et viable. » Aucun backlog imposé. | Retrouve les contradictions internes et la décision historique qui porte la thèse économique ; ≥ 3 stratégies confrontées dont « continuer le backlog » qui doit **perdre sur la preuve** ; recommande de **ne pas** faire le prochain lot avant une validation terrain ; identifie ce qui est CEO-only ; première mission en capacités *lire, chercher, interroger, analyser, rédiger* — **pas coder** | Produit un plan d'exécution des lots ; ne trouve pas la décision suspendue ; ne conteste rien ; propose du code en premier |
+| **1 — Solution existante** | Produit logiciel réel, documenté, avec backlog et décisions historiques, dont certaines suspendues | « Voici la solution dans son état actuel. Objectif : la conduire vers un produit réellement utile, fiable, différencié et viable. » Aucun backlog imposé. | Retrouve les contradictions internes et la décision historique qui porte la thèse économique ; ≥ 3 stratégies confrontées, dont « continuer le backlog tel quel », jugées sur les **mêmes critères** ; prend position, **preuves à l'appui**, sur le prochain lot (le confirmer, le suspendre ou le réordonner) au lieu de l'exécuter par défaut ; identifie ce qui est CEO-only ; première mission en capacités *lire, chercher, interroger, analyser, rédiger* — **pas coder** | Produit un plan d'exécution des lots sans jugement indépendant ; ne trouve pas la décision suspendue ; ne prend aucune position motivée (ni confirmation ni contestation appuyée) ; propose du code en premier |
 | **2 — Création ex nihilo** | Idée de service hors logiciel B2B classique, budget faible, « je ne sais pas si ça doit être un logiciel » | Ex. : veille réglementaire personnalisée pour petites associations, 500 € | Inconnues déclarées ; recherche des sources publiques et offres existantes ; dimensions juridique et économique émergent seules ; ≥ 3 stratégies dont une **sans produit** ; recommandation de type **« tester la demande avant de construire »** ; première mission non logicielle | « Construisons un SaaS » en première recommandation |
 | **3 — Problème non-logiciel** | Objectif opérationnel mesurable, sans embauche | Ex. : réduire de 30 % en 60 jours le temps entre commande et premier plat dans un restaurant de 45 couverts | **Mesurer avant d'agir** (baseline) ; cellule approfondie sur les opérations ; stratégies opérationnelles ; un outil numérique peut apparaître comme **option**, jamais comme prémisse ; résultat vérifiable par une mesure indépendante | Propose une application ; ne demande pas de baseline |
 
@@ -408,13 +429,13 @@ pour l'élégance : chaque modification est justifiée par le test qu'elle débl
 | **T03** | Aucun accès externe ; le client LLM est le seul I/O | `llm.py:22-46` | Capacité *chercher* absente ; Voie A l'interdisait (levée par 026 §5) | `ObservedLLMClient` (`observability.py:40`) comme modèle d'adaptateur observé | Adaptateur *chercher* (interface + fausse implémentation testable + format de citation) ; **incrément 2**, pas le premier |
 | **T04** | Dimensions jamais calculées ; les « départements » d'une entreprise IA sont générés par un prompt sans notion de dimension du problème | `company_agents.py:193-230` (`AICompanyArchitect`) | Pas d'étape de cadrage | Sortie du `RiskReviewer` (`expertise_needs`, `agents.py:116-129`) ; `DepartmentSpecialtyDesigner` (`company_agents.py:232`) | Étape « dimensions émergentes » (sortie structurée : dimension, pourquoi, criticité présumée, inconnues) sans liste imposée |
 | **T05** | Toujours 3 rôles (plan) ou 4 (amélioration) ; **10 archétypes stampés par spécialité** sans appel LLM | `agents.py:66-129` ; `improvement_agents.py:102-214` ; `company_agents.py:277-300` (`build_expert_cells`), `:131` (`EXPERTS_PER_SPECIALTY = len(EXPERT_ARCHETYPES)`) | Pas de résolveur d'équipe (largeur × profondeur) ; pas de classe de décision ; pas de journal de composition | `EXPERT_ARCHETYPES` (`company_agents.py:58`) comme **catalogue d'angles** ; `DefaultPolicyEngine` (`src/aisos/policies/engine.py:88`) comme référence de classification | Résolveur : dimensions → cellules (largeur) → angles initiaux choisis dans le catalogue ouvert (profondeur modeste) + journal ; `build_expert_cells` conservé pour PHASE 4B-R (non-régression), non appelé par le nouveau chemin |
-| **T06** | Une option par pipeline ; le « protocole de débat » est un texte généré, jamais exécuté | `company_agents.py:303-338` (`DebateProtocolArchitect`) ; `deliverable_agents.py:118-135` (`ExpertCellSynthesizer` : **une synthèse en un appel**) | Pas de Tour 0 isolé ; pas de cartographie ; pas de tours | Prompts de rôle existants comme lentilles ; `observed(...)` par agent (`observability.py:104`) | Tour 0 : un appel **isolé par expert** (même dossier de cadrage, fiche d'expert) + cartographie **déterministe** (options, hypothèses, désaccords typés, indice de divergence) |
+| **T06** | Une option par pipeline ; le « protocole de débat » est un texte généré, jamais exécuté | `company_agents.py:303-338` (`DebateProtocolArchitect`) ; `deliverable_agents.py:118-135` (`ExpertCellSynthesizer` : **une synthèse en un appel**) | Pas de Tour 0 isolé ; pas de cartographie ; pas de tours | Prompts de rôle existants comme lentilles ; `observed(...)` par agent (`observability.py:104`) | Tour 0 : un appel **isolé par expert** (même dossier de cadrage, fiche d'expert) + cartographie **sans pouvoir d'orientation** (partie déterministe codée ; partie sémantique par auto-qualification des experts puis greffier au schéma fermé, regroupements attribués et contestables) |
 | **T07** | Aucun contradicteur exécuté ; `RiskReviewer` et `DifferentiationReviewer` critiquent sans droit de réponse | `agents.py:107` ; `improvement_agents.py:182` | Tours C-D-F absents | Prompts des relecteurs comme base du contradicteur | Tour de steelman désigné par le facilitateur ; reformulation validée par un partisan (incrément ultérieur, après T06) |
 | **T08** | Impossible | — | *chercher* absent | Cartographie (désaccords typés « fait ») | Déclencheur « désaccord factuel → tâche de recherche » ; dépend de T03 |
 | **T09** | Aucun mécanisme de révision ; les JSON sont écrits une fois | `db.py` : aucun état de position | Pas de persistance de position ; pas d'injection de preuve | Historique append-only des décisions (`coordinated_item_decisions.py`) comme modèle de trace | Journal des positions (v1 → v2, cause) ; tour de révision |
-| **T10** | Une stratégie par plan | `agents.py:86-105` (`SolutionArchitect` : « un plan candidat ») | Pas d'options multiples ni de matrice | `SolutionArchitect` (réutilisé N fois avec angles distincts) | ≥ 2 options issues du Tour 0 + matrice sur critères communs (déterministe à partir de la carte) |
+| **T10** | Une stratégie par plan | `agents.py:86-105` (`SolutionArchitect` : « un plan candidat ») | Pas d'options multiples ni de matrice | `SolutionArchitect` (réutilisé N fois avec angles distincts) | ≥ 2 options issues du Tour 0 + matrice sur critères communs, remplie à partir des exposés et de la carte, sans jugement du facilitateur |
 | **T11** | Sorties JSON en `max_tokens=256` ; aucune porte qualité indépendante (le `QualityGovernanceReviewer` relit **dans la même chaîne**, sans autorité de refus) | `config.py:24` ; `llm.py:37` ; `deliverable_agents.py:159-189` | Pas de synthèse 14 champs ; pas de contrôle indépendant ; pas de system prompt | `QualityGovernanceReviewer` ; `DefaultPolicyEngine.quality_gate` (`src/aisos/policies/engine.py:304`) comme référence | System prompt + `max_tokens` paramétrable par appel (4–8 k) + synthèse 14 champs + gate par une instance distincte de la synthèse |
-| **T12** | Le pipeline « améliore » ce qu'on lui donne ; le backlog n'est pas lu | `improvement_agents.py:149-180` | Pas de contestation ; pas de lecture du backlog réel | `WeaknessReviewer` (`improvement_agents.py:128`) | Champ « recommandations hors backlog / items à ne pas faire » dans le rapport de situation ; lecture réelle = avec *lire* |
+| **T12** | Le pipeline « améliore » ce qu'on lui donne ; le backlog n'est pas lu | `improvement_agents.py:149-180` | Pas de jugement indépendant par item ; pas de lecture du backlog réel | `WeaknessReviewer` (`improvement_agents.py:128`) | Table « item de backlog → verdict (confirmer / réordonner / modifier / suspendre / compléter / rejeter) → preuve » dans le rapport de situation ; lecture réelle = avec *lire* |
 | **T13** | Chaque phase produit obligatoirement un artefact | Toutes les chaînes retournent un objet persisté (`solution_plans.py:27`) | Pas d'option nulle | Statuts existants (`draft`/`approved`/…) | Option « ne rien construire / tester / acheter » admise dans les options du Tour 0 et dans la synthèse |
 | **T14** | L'Analyste « clarifie » la demande ; doctrine et code muets | `agents.py:66-83` | Contestation non autorisée (levée par 026 §2) | Champ « problème compris » de la synthèse | Champ « contestation de la demande » (structurante → CEO) en tête du rapport |
 | **T15** | Une seule forme de sortie (texte) | — | Pas de plan de capacités ni de registre | — | V1.5 (T17/T18) ; V1 se limite à « la recommandation peut être de ne pas coder » (T13) |
@@ -471,7 +492,7 @@ adopter), historique append-only des décisions et régénérations, observabili
 - [ ] T10 / T11 — Il compare ≥ 2 stratégies sur les mêmes critères et remet une recommandation en 14 champs, passée par une porte qualité indépendante, avec un niveau de confiance et des conditions de bascule.
 
 **Il ose**
-- [ ] T12 — Devant un backlog, il recommande au moins une fois autre chose que le prochain item — avec raison.
+- [ ] T12 — Devant un backlog, il rend sur chaque item un jugement indépendant et motivé — confirmer, réordonner, modifier, suspendre, compléter ou rejeter — sans jamais le transformer en plan d'exécution par défaut.
 - [ ] T13 — Il sait recommander de **ne rien construire**, d'attendre, de tester, d'acheter, de simplifier, de pivoter, d'abandonner.
 - [ ] T14 — Il conteste l'interprétation d'une demande mal posée, avant de proposer quoi que ce soit.
 - [ ] T15 — Le même objectif reçoit deux réponses de natures différentes selon le contexte ; le code n'est jamais une prémisse.

@@ -201,7 +201,7 @@ pas) ; chaînes séquentielles 1→2→3 comme **mode d'exploration** (T06 : opt
 
 **Tests visés** : **T02** (partiel : inconnues explicites sur dossier fourni), **T04**, **T05**, **T06**
 (partiel : ≥ 3 options réellement différentes au Tour 0, désaccords conservés — sans tours de critique),
-**T10** (partiel : matrice déterministe), **T13/T14** (champs présents), **T23** (test automatisé),
+**T10** (partiel : matrice options × critères remplie à partir des exposés, sans jugement du facilitateur), **T13/T14** (champs présents), **T23** (test automatisé),
 **T24** (partiel : tokens et coût journalisés), **T25** (format de preuve, sans recherche externe),
 **T26** (journal de composition). **Hors périmètre** : T03/T08 (recherche externe = incrément 2),
 T07/T09 (tours C-D-F = incrément 3), T11 complet (porte indépendante = incrément 3), T16 (classifieur).
@@ -213,20 +213,33 @@ T07/T09 (tours C-D-F = incrément 3), T11 complet (porte indépendante = incrém
    Un appel LLM produit une **sortie structurée** : problème compris, **contestation éventuelle de la
    demande** (T14), **dimensions émergentes** avec criticité présumée et inconnues par dimension (T04),
    **inconnues globales** (T02).
-2. **Composition** — **déterministe** : dimensions → cellules (largeur ≤ 7) ; par cellule, **1 à 3
-   angles** choisis dans le catalogue ouvert (`EXPERT_ARCHETYPES` + angles proposés par le cadrage),
-   selon la criticité présumée et la classe ; **journal de composition** (dimension → angles →
-   justification ; angle contraire obligatoire si une préférence CEO est déclarée) (T05, T26).
-   Un problème courant donne **≤ 2 experts** ; aucun chiffre fixe.
+2. **Composition** — règles codées : dimensions → cellules (largeur ≤ 7, `policies/06`) ; par cellule,
+   angles choisis dans le catalogue ouvert (`EXPERT_ARCHETYPES` + angles proposés par le cadrage) selon
+   la criticité présumée et la classe. La composition conceptuelle reste : *dimensions pertinentes →
+   profondeur nécessaire découverte → contrainte par le budget CEO*. Pour contenir le coût du prototype,
+   l'incrément applique une **borne expérimentale temporaire de 3 angles par cellule au Tour 0 — non
+   doctrinale, paramétrable, destinée à être remplacée par les résultats du protocole §10 du document
+   canonique** ; elle n'est **ni un défaut ni un quota** (une cellule peut n'avoir qu'un angle ; aucune
+   valeur n'est présentée comme « le nombre d'experts »), et l'approfondissement au-delà relève des
+   incréments suivants (tours C–F). **Journal de composition** (dimension → angles → justification ; angle
+   contraire obligatoire si une préférence CEO est déclarée) (T05, T26). La proportionnalité est testée
+   par T05 (un problème courant mobilise ≤ 2 experts), sans nombre fixe.
 3. **Exploration indépendante (Tour 0)** — **un appel isolé par expert**, même dossier de cadrage, fiche
    d'expert (domaine, angle, a priori, objections) ; sortie structurée : position, justifications,
    hypothèses, risques, ce qu'il faudrait savoir, **preuves** au format « énoncé + source + fiabilité »
    (T25 : une preuve sans source est marquée « non sourcée », jamais inventée). Chaque appel est
    journalisé par `observed(...)` avec le nom de l'expert (T06 : preuve d'isolement).
-4. **Cartographie** — **déterministe** (aucun appel) : options distinctes (dédoublonnage par clé
-   normalisée, avec fusion manuelle possible), hypothèses par option, désaccords typés (solution /
-   hypothèse / fait / valeur), risques, inconnues consolidées, **indice de divergence**, matrice options ×
-   critères communs (T10). Un seul appel LLM **optionnel** de « résumé sans opinion » si le CEO le demande.
+4. **Cartographie** — sans pouvoir d'orientation. Opérations **réellement déterministes**, codées :
+   comptage des soutiens, indice de divergence, bornes et budget, journalisation, regroupement par
+   identifiants connus, matrice options × critères communs (T10). Opérations **sémantiques** (deux options
+   sont-elles équivalentes ? quelle est la nature d'un désaccord ? deux hypothèses sont-elles la même ?)
+   réalisées en deux temps : (i) **auto-qualification par les experts** — une fois le Tour 0 clos et toutes
+   les positions horodatées, chaque expert reçoit la liste anonymisée des autres positions et qualifie la
+   sienne (identique / variante / différente) et type ses objections (appel court, N appels) ; (ii) pour ce
+   qui reste ambigu, un **appel de greffier** au **schéma fermé** (options, hypothèses, désaccords typés —
+   **aucun champ** de préférence, de classement ni de recommandation), chaque regroupement étant attribué,
+   motivé et **contestable** par l'expert concerné dans les incréments suivants (phase C). Les exposés bruts
+   restent joints. **Aucun « résumé » libre** : le facilitateur structure, il n'oriente pas.
 5. **Rapport de situation** — objet persisté en statut `candidate`, rendu Markdown déterministe (modèle
    Phase 16), 14 champs pré-remplis là où le Tour 0 le permet (recommandation = « à délibérer » ou
    « rechercher / tester d'abord » si l'information manque — T13), **désaccords conservés**, coût et
@@ -237,8 +250,8 @@ T07/T09 (tours C-D-F = incrément 3), T11 complet (porte indépendante = incrém
 module d'exploration, un module de cartographie, un module de rapport ; 2 tables nouvelles + 2 colonnes
 nullable ; 3 à 4 endpoints (`POST` créer une mission de cadrage, `GET` mission, `POST` approuver / demander
 révision) ; une section Streamlit via le client HTTP ; **aucune** modification des phases 0–18 hors le
-client LLM étendu sans rupture. Appels LLM par mission : **1 + N (N = experts, typiquement 2–8) + 0–1** ;
-coût attendu **0,10–1,50 €** avec `max_tokens` 4–8 k par appel.
+client LLM étendu sans rupture. Appels LLM par mission : **1 (cadrage) + N (Tour 0, N = experts) + N (auto-qualification, courts) + 0–1
+(greffier)** ; coût attendu **0,10–2 €** avec `max_tokens` 4–8 k par appel (les appels courts en moins).
 
 **Tests du code (sans réseau, sans clé)** : faux client structuré ; isolement du Tour 0 (aucun prompt
 d'expert ne contient un exposé d'un autre ; N appels journalisés avec N noms distincts) ; deux cadrages
@@ -270,8 +283,8 @@ de nouvel onglet au-delà d'une section.
 | T25 | Pas de format de preuve | Preuve = énoncé + source + fiabilité ; « non sourcée » explicite | Échantillon de 20 preuves |
 | T26 | Aucun journal | Justification par dimension ; angle contraire si préférence déclarée | Journal de composition |
 
-**Non améliorés volontairement par cet incrément** : T03, T07, T08, T09, T11 (complet), T12 (lecture
-réelle), T15–T22. Si, après exécution sur les problèmes scellés, **aucun** des tests du tableau ne
+**Non améliorés volontairement par cet incrément** : T03, T07, T08, T09, T11 (complet), T12 (jugement
+item par item sur un backlog réellement lu), T15–T22. Si, après exécution sur les problèmes scellés, **aucun** des tests du tableau ne
 s'améliore de façon observable, l'incrément est un échec et l'approche est réévaluée avant l'incrément 2
 (critère d'arrêt, Décision 026 §8).
 
@@ -281,8 +294,8 @@ s'améliore de façon observable, l'incrément est un échec et l'approche est r
 
 | # | Risque | Où il se matérialiserait | Garde-fou |
 | --- | --- | --- | --- |
-| R1 | **Le facilitateur prend parti** : la cartographie ou le « résumé sans opinion » glisse vers une recommandation implicite | Étape 4 | Cartographie déterministe ; l'appel de résumé est optionnel, marqué comme tel, et son prompt interdit toute recommandation ; test : le résumé ne contient aucun champ « recommandation » |
-| R2 | **Retour du quota** : un nombre d'experts par défaut réapparaît (10 ou 3) | Étape 2 | Profondeur fonction de la criticité et de la classe ; test « courant → ≤ 2 » ; aucun nombre constant hors bornes de couloir ; expérience §10 avant tout défaut |
+| R1 | **Le facilitateur oriente le résultat** : un regroupement sémantique ou un « résumé » glisse vers une recommandation implicite | Étape 4 | Opérations déterministes codées ; opérations sémantiques déléguées aux experts (auto-qualification) puis à un greffier au **schéma fermé** sans champ de préférence, de classement ni de recommandation ; regroupements attribués, motivés, contestables ; exposés bruts joints ; test : le schéma de la carte ne contient aucun champ de recommandation ; aucun résumé libre |
+| R2 | **Retour du quota** : un nombre d'experts par défaut réapparaît (10 ou 3), y compris via la borne de coût de l'incrément | Étape 2 | Profondeur fonction de la criticité et de la classe ; la borne de 3 est déclarée **expérimentale, temporaire, non doctrinale**, paramétrée et jamais présentée comme défaut ; test « courant → ≤ 2 » (T05) ; expérience §10 avant tout défaut |
 | R3 | **Faux experts** : les appels du Tour 0 partagent un contexte (un seul appel multi-voix « pour économiser ») | Étape 3 | Test d'isolement (N appels, N noms, aucun exposé cité par un autre) ; règle 026 §4 |
 | R4 | **Contestation cosmétique** : le champ « contestation » est toujours vide ou toujours rempli | Étape 1 | Cas injectés dans les tests (hypothèse fausse → contestation ; dossier sain → aucune) ; jugement CEO sur problème scellé |
 | R5 | **Preuves fabriquées** : des « sources » plausibles sans accès externe | Étape 3 | Sans capacité *chercher*, toute source est marquée « non vérifiée / mémoire du modèle » ; T25 audit d'échantillon ; system prompt d'honnêteté |
