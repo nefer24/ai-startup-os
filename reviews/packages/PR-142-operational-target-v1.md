@@ -7,7 +7,7 @@
 
 ## 1. Executive Summary
 
-Cette Pull Request est **purement documentaire**. Elle inscrit dans le système documentaire du dépôt la **cible opérationnelle d'AI-SOS V1** et sa **définition de « terminé » par tests d'acceptation comportementaux** (T01–T26), sous la forme d'une **Décision 026** (statut *proposée*, qui prend effet à la fusion) et d'un **document canonique**. Elle joint un **audit ciblé** du code existant au regard du premier objectif (T02–T06) et des fondations (T11, T25), une **proposition du premier incrément de code minimal** — **non codé** dans ce lot — et un **verdict NOT READY** motivé par trois éléments qui relèvent du CEO. **Aucun code produit modifié, `src/aisos/` inchangé, `product/` inchangé, aucune phase ouverte.**
+Cette Pull Request est **purement documentaire**. Elle inscrit dans le système documentaire du dépôt la **cible opérationnelle d'AI-SOS V1** et sa **définition de « terminé » par tests d'acceptation comportementaux** (T01–T26), sous la forme d'une **Décision 026** (statut *proposée*, qui prend effet à la fusion) et d'un **document canonique**. Elle joint un **audit ciblé** du code existant au regard du premier objectif (T02–T06) et des fondations (T11, T25), une **proposition du premier incrément de code minimal** — **non codé** dans ce lot — et un **verdict NOT READY** motivé par des prérequis qui relèvent du CEO (deux subsistent : la ratification par fusion et les trois problèmes scellés). **Aucun code produit modifié, `src/aisos/` inchangé, `product/` inchangé, aucune phase ouverte.**
 
 ## 2. Objectifs
 
@@ -32,7 +32,7 @@ Ajoutés : `docs/strategy/AI-SOS-OPERATIONAL-TARGET-V1.md`, `docs/reports/OT-V1-
 - **Tests d'acceptation comportementaux plutôt que fonctionnalités** : le réalignement a montré que les phases se succédaient sans cible observable ; un test « réussi sur un problème jamais vu » est le seul critère qui ne se satisfait pas de lui-même.
 - **Catalogue ouvert plutôt que quota** : « 10 » n'avait qu'une origine de commit (`8fe1032`) ; « 3 » n'en aurait pas davantage. La profondeur se découvre (divergence, incertitude, irréversibilité) et se mesure (protocole expérimental).
 - **`src/aisos/` réutilisé par spécification, jamais par import** : `product/pyproject.toml` déclare le produit isolé du noyau ; importer briserait cette isolation et est interdit par le mandat.
-- **Verdict NOT READY** : coder l'incrément avant ratification reproduirait la dérive de `product/` PHASE 0 ; juger T02–T06 sans problèmes scellés serait juger sur des cas déjà vus ; le plafond de budget appartient au CEO.
+- **Verdict NOT READY** : coder l'incrément avant ratification reproduirait la dérive de `product/` PHASE 0 ; juger T02–T06 sans problèmes scellés serait juger sur des cas déjà vus. (Le plafond de budget et la classe initiale, initialement manquants, ont été fixés par le CEO le 2026-09-05.)
 
 ## 6. Alternatives étudiées
 
@@ -81,4 +81,4 @@ Totale : aucun fichier de `product/` modifié (la CI produit ne se déclenche pa
 
 ## 14. Recommandation de Claude Code
 
-**Verdict documentaire : READY FOR CEO RATIFICATION** (les cinq incohérences signalées par le CEO sont corrigées ; aucune incohérence connue ne subsiste). **Verdict d'implémentation : NOT READY** (inchangé) — deux prérequis restent : la ratification par fusion et les trois problèmes scellés jamais vus (le budget et la classe initiale sont désormais fixés par le CEO). **Fusionner après revue** pour ratifier la Décision 026 et le document canonique — c'est le premier des trois prérequis du premier incrément. **Ne pas** demander de code tant que les problèmes scellés et le plafond de budget n'existent pas : le verdict reste **NOT READY** jusque-là, et il bascule en READY dès que ces trois éléments sont réunis, sans autre décision technique requise du CEO.
+**Verdict documentaire : READY FOR CEO RATIFICATION** (les cinq incohérences signalées par le CEO sont corrigées ; aucune incohérence connue ne subsiste). **Verdict d'implémentation : NOT READY** (inchangé) — deux prérequis restent : la ratification par fusion et les trois problèmes scellés jamais vus (le budget et la classe initiale sont désormais fixés par le CEO). **Fusionner après revue** pour ratifier la Décision 026 et le document canonique. Après ratification, **le seul prérequis externe restant est la constitution des trois problèmes scellés jamais vus** : le verdict d'implémentation reste **NOT READY** tant que la Décision 026 n'est pas ratifiée et que ces problèmes ne sont pas constitués, et il bascule en READY dès lors, sans autre décision technique requise du CEO.

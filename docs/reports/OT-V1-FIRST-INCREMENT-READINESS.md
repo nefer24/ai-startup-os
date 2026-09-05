@@ -319,8 +319,8 @@ s'améliore de façon observable, l'incrément est un échec et l'approche est r
 
 La proposition d'incrément est **cohérente, minimale et entièrement justifiée par des tests nommés** ; les
 composants réutilisables sont identifiés ; aucune modification de `src/aisos/` n'est nécessaire ; aucune
-interdiction du mandat n'est franchie. **Mais trois éléments, qui ne relèvent pas de Claude, manquent
-avant de coder :**
+interdiction du mandat n'est franchie. **Trois éléments, qui ne relèvent pas de Claude, manquaient au
+moment du rapport ; le troisième a depuis été résolu par décision CEO — deux restent :**
 
 1. **Ratification de la Décision 026.** Tant que la Pull Request qui la porte n'est pas fusionnée dans
    `develop`, le droit de contestation (T14), l'axe profondeur (T05/T26), la légitimité de la recherche
