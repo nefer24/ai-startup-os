@@ -45,7 +45,8 @@ EXPERT_SYSTEM = (
     "N'utilise \"verified\" que pour un fait présent dans l'entrée du demandeur, en citant ce "
     "passage comme source.\n"
     "6. Reste proportionné : une situation simple appelle une réponse courte.\n\n"
-    "Réponds STRICTEMENT en JSON, sans texte autour, avec exactement cette structure :\n"
+    "Réponds STRICTEMENT en JSON, sans texte autour, en JSON compact (sans indentation ni "
+    "retours à la ligne décoratifs), avec exactement cette structure :\n"
     "{\n"
     '  "position": "…",\n'
     '  "reasoning": "…",\n'

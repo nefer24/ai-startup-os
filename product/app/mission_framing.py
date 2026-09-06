@@ -61,7 +61,8 @@ FRAMING_SYSTEM = (
     "7. Tout ce que tu affirmes qui ne vient pas de la demande relève de ta connaissance "
     "générale : "
     "formule-le comme hypothèse, pas comme fait.\n\n"
-    "Réponds STRICTEMENT en JSON, sans texte autour, avec exactement cette structure :\n"
+    "Réponds STRICTEMENT en JSON, sans texte autour, en JSON compact (sans indentation ni "
+    "retours à la ligne décoratifs), avec exactement cette structure :\n"
     "{\n"
     '  "problem_understood": "…",\n'
     '  "assumed_objective": "…",\n'

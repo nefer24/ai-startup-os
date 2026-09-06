@@ -895,7 +895,11 @@ parce qu'il améliore de façon mesurable T02, T04, T05, T06, T10, T13, T14, T23
    budget ; 14 champs présents, ceux non produisibles honnêtement marqués « non encore délibéré ».
    Aucune recommandation. Approbation / révision / rejet = actions CEO explicites, sans exécution.
 
-**Budget (défauts CEO)** : 12 appels LLM et 2,00 € par mission, `max_tokens` par type d'appel,
+**Budget (défauts CEO)** : 12 appels LLM et 2,00 € par mission, `max_tokens` par type d'appel
+(plafonds de sortie dimensionnés avec marge : cadrage 8 000, expert 6 000, auto-qualification
+1 500, greffier 3 000 — une sortie coupée à `max_tokens` rend le JSON invalide ; le `stop_reason`
+du fournisseur est journalisé et une panne de cadrage met la mission en `failed` au lieu de
+produire un rapport `candidate` vide),
 **estimation avant chaque appel** et refus/arrêt propre si le plafond pourrait être dépassé, tokens et
 coût réels journalisés (`llm_call_logs` : colonnes `input_tokens`, `output_tokens`, `cost_eur`,
 `call_type`, `mission_id`). Un arrêt produit un **rapport partiel** cohérent.

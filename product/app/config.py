@@ -32,11 +32,15 @@ class Settings(BaseSettings):
     # Borne EXPÉRIMENTALE et TEMPORAIRE du nombre d'angles par cellule au Tour 0. Elle borne le
     # coût du prototype ; elle n'est ni une profondeur normale ni une doctrine (Décision 026 §3).
     mission_max_angles_per_cell: int = 3
-    # `max_tokens` par type d'appel (les appels courts en consomment moins).
-    mission_max_tokens_framing: int = 3000
-    mission_max_tokens_expert: int = 2500
-    mission_max_tokens_self_qualification: int = 700
-    mission_max_tokens_clerk: int = 1500
+    # `max_tokens` par type d'appel (les appels courts en consomment moins). Ce sont des plafonds
+    # de sortie, pas des cibles : le coût réel est calculé sur l'usage rapporté. Les valeurs sont
+    # dimensionnées avec une marge large par rapport au volume des schémas demandés (en français,
+    # JSON compris) : une sortie coupée à `max_tokens` rend le JSON invalide (« Unterminated
+    # string ») et fait échouer l'appel — c'est exactement ce que la marge doit empêcher.
+    mission_max_tokens_framing: int = 8000
+    mission_max_tokens_expert: int = 6000
+    mission_max_tokens_self_qualification: int = 1500
+    mission_max_tokens_clerk: int = 3000
     # Barème d'estimation du coût (euros par million de tokens) — à aligner sur la grille du
     # fournisseur pour le modèle configuré. Sert à l'estimation avant appel et au coût journalisé.
     llm_price_input_eur_per_mtok: float = 3.0

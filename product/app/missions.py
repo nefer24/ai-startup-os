@@ -207,11 +207,32 @@ def _call(
             "call_type": call_type,
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
+            "max_tokens": max_tokens,
+            "stop_reason": response.stop_reason,
+            "truncated": response.truncated,
+            "raw_length_chars": len(response.text),
             "cost_eur": cost,
             "budget": run.ledger.snapshot(),
         },
     )
     return response
+
+
+def _classify_parse_error(response: LLMResponse, error: str) -> str:
+    """Distingue une sortie tronquée à `max_tokens` d'un JSON réellement invalide.
+
+    Une réponse coupée par le fournisseur produit typiquement « Unterminated string » : ce n'est
+    pas une faute de format du modèle mais une limite de sortie atteinte. La classe d'erreur est
+    conservée dans le journal et le rapport pour que la cause soit prouvable après coup.
+    """
+    if not error:
+        return ""
+    if response.truncated:
+        return (
+            f"truncated_output: sortie coupée à max_tokens "
+            f"({response.usage.output_tokens} tokens, {len(response.text)} caractères) — {error}"
+        )
+    return error
 
 
 def _escalate_class(session: Session, run: _Run) -> dict[str, Any]:
@@ -363,13 +384,42 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
         run.framing_error = f"cadrage non exécuté ({run.stop_reason})"
         return
     framing, error = parse_structured(response.text, FramingOutput)
+    error = _classify_parse_error(response, error)
     run.framing = framing
     run.framing_error = error
     m.framing_json = json.dumps(
-        {"parsed": framing.model_dump() if framing else None, "error": error, "raw": response.text},
+        {
+            "parsed": framing.model_dump() if framing else None,
+            "error": error,
+            "stop_reason": response.stop_reason,
+            "output_tokens": response.usage.output_tokens,
+            "max_tokens": settings.mission_max_tokens_framing,
+            "raw": response.text,
+        },
         ensure_ascii=False,
     )
     session.commit()
+    if framing is None:
+        # Panne de cadrage : la mission ne continue pas sur un cadrage fictif. Elle s'arrête
+        # proprement, conserve la réponse brute pour diagnostic, et le rapport est marqué
+        # partiel et la mission `failed` — jamais un rapport `candidate` presque vide.
+        kind = "truncated_output" if response.truncated else "json_invalid"
+        run.stop_reason = f"framing_failed:{kind}"
+        _journal(
+            session,
+            run,
+            "cadrage",
+            "framing_failed",
+            "facilitateur",
+            {
+                "kind": kind,
+                "error": error,
+                "stop_reason": response.stop_reason,
+                "output_tokens": response.usage.output_tokens,
+                "max_tokens": settings.mission_max_tokens_framing,
+                "raw_length_chars": len(response.text),
+            },
+        )
     _journal(
         session,
         run,
@@ -468,6 +518,7 @@ def _step_tour0(session: Session, run: _Run, llm: LLMClient, settings: Settings)
         if response is None:
             continue
         output, error = parse_structured(response.text, ExpertOutput)
+        error = _classify_parse_error(response, error)
         run.expert_results.append(
             {
                 "expert_id": spec.expert_id,
@@ -552,6 +603,7 @@ def _step_self_qualification(
         if response is None:
             break
         output, error = parse_structured(response.text, SelfQualificationOutput)
+        error = _classify_parse_error(response, error)
         run.self_qual[r["expert_id"]] = output
         _journal(
             session,
@@ -603,6 +655,7 @@ def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings)
     if response is None:
         return
     output, error = parse_structured(response.text, ClerkOutput)
+    error = _classify_parse_error(response, error)
     run.clerk = output
     _journal(
         session,
@@ -637,10 +690,13 @@ def _finalize(session: Session, run: _Run, class_info: dict[str, Any]) -> None:
         budget=run.ledger.snapshot(),
         stop_reason=run.stop_reason,
     )
+    # Une panne de cadrage n'est pas un rapport candidat : la mission est `failed`, le rapport
+    # partiel et la réponse brute restent disponibles pour le diagnostic.
+    m.status = "failed" if run.stop_reason.startswith("framing_failed") else "candidate"
+    report["status"] = m.status
     m.cartography_json = json.dumps(cartography, ensure_ascii=False, default=str)
     m.report_json = json.dumps(report, ensure_ascii=False, default=str)
     m.stop_reason = run.stop_reason
-    m.status = "candidate"
     session.commit()
     _journal(
         session,

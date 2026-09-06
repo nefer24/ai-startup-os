@@ -46,6 +46,14 @@ class LLMResponse:
 
     text: str
     usage: LLMUsage
+    # Raison d'arrêt rapportée par le fournisseur (`end_turn`, `max_tokens`, …). Indispensable pour
+    # distinguer une sortie TRONQUÉE (limite de sortie atteinte) d'un JSON réellement invalide.
+    stop_reason: str = ""
+
+    @property
+    def truncated(self) -> bool:
+        """Vrai si le fournisseur a coupé la sortie à la limite `max_tokens`."""
+        return self.stop_reason == "max_tokens"
 
 
 @runtime_checkable
@@ -134,6 +142,7 @@ class AnthropicLLMClient:
                 input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
                 output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
             ),
+            stop_reason=str(getattr(message, "stop_reason", "") or ""),
         )
 
 
