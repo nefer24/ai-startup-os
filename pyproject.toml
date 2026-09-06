@@ -54,6 +54,12 @@ src = ["src", "tests"]
 # et sa propre CI (product-ci). On l'exclut de l'outillage racine pour garder les périmètres séparés.
 extend-exclude = ["product"]
 
+[tool.ruff.format]
+# Les versions récentes de ruff formatent aussi les blocs de code des fichiers Markdown. Les
+# documents de `docs/` sont de la prose gelée (Décision 026) : leurs extraits de code illustratifs
+# ne sont pas soumis au formateur, pour que la CI ne casse pas au fil des versions de ruff.
+exclude = ["*.md"]
+
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PT", "RUF"]
 ignore = []

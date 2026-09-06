@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy import func, select
 
 from app.db import LLMCallLog, ProductEventLog
+from app.llm import LLMResponse, StructuredCompletionUnsupportedError, estimate_cost_eur
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -49,6 +50,9 @@ class ObservedLLMClient:
         operation_type: str,
         model: str = "unknown",
         provider: str = "anthropic",
+        mission_id: int | None = None,
+        price_in_per_mtok: float = 0.0,
+        price_out_per_mtok: float = 0.0,
     ) -> None:
         self._inner = inner
         self._session = session
@@ -57,6 +61,9 @@ class ObservedLLMClient:
         self._operation_type = operation_type
         self._model = model or "unknown"
         self._provider = provider or "anthropic"
+        self._mission_id = mission_id
+        self._price_in = price_in_per_mtok
+        self._price_out = price_out_per_mtok
 
     def complete(self, prompt: str) -> str:
         """Appelle le vrai client, journalise (succès/erreur + durée), puis relance si erreur."""
@@ -83,7 +90,68 @@ class ObservedLLMClient:
         )
         return response
 
-    def _log(self, prompt: str, response: str, status: str, error: str, duration_ms: int) -> None:
+    def complete_structured(
+        self, *, system: str, prompt: str, call_type: str, max_tokens: int
+    ) -> LLMResponse:
+        """Chemin structuré (OT-V1) : journalise tokens, coût estimé et type d'appel.
+
+        Le client interne doit implémenter `complete_structured` ; sinon une erreur explicite est
+        levée (aucun repli silencieux sur `complete`, qui perdrait l'usage et le system prompt).
+        """
+        inner_structured = getattr(self._inner, "complete_structured", None)
+        if inner_structured is None:
+            raise StructuredCompletionUnsupportedError(
+                f"{type(self._inner).__name__} n'implémente pas complete_structured"
+            )
+        start = time.perf_counter()
+        preview_prompt = f"[system] {system}\n[user] {prompt}"
+        try:
+            response: LLMResponse = inner_structured(
+                system=system, prompt=prompt, call_type=call_type, max_tokens=max_tokens
+            )
+        except Exception as exc:
+            duration_ms = int((time.perf_counter() - start) * 1000)
+            self._log(
+                prompt=preview_prompt,
+                response="",
+                status="error",
+                error=f"{type(exc).__name__}: {exc}",
+                duration_ms=duration_ms,
+                call_type=call_type,
+            )
+            raise
+        duration_ms = int((time.perf_counter() - start) * 1000)
+        cost = estimate_cost_eur(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            self._price_in,
+            self._price_out,
+        )
+        self._log(
+            prompt=preview_prompt,
+            response=response.text,
+            status="success",
+            error="",
+            duration_ms=duration_ms,
+            call_type=call_type,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cost_eur=cost,
+        )
+        return response
+
+    def _log(
+        self,
+        prompt: str,
+        response: str,
+        status: str,
+        error: str,
+        duration_ms: int,
+        call_type: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        cost_eur: float | None = None,
+    ) -> None:
         """Ajoute une ligne `llm_call_logs` à la session (persistée au commit du service)."""
         self._session.add(
             LLMCallLog(
@@ -97,6 +165,11 @@ class ObservedLLMClient:
                 status=status,
                 error=_truncate(error),
                 duration_ms=duration_ms,
+                call_type=call_type,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_eur=cost_eur,
+                mission_id=self._mission_id,
             )
         )
 
@@ -108,6 +181,9 @@ def observed(
     agent_name: str,
     operation_type: str,
     model: str = "unknown",
+    mission_id: int | None = None,
+    price_in_per_mtok: float = 0.0,
+    price_out_per_mtok: float = 0.0,
 ) -> ObservedLLMClient:
     """Fabrique un `ObservedLLMClient` : instrumentation à brancher au niveau service."""
     return ObservedLLMClient(
@@ -117,6 +193,9 @@ def observed(
         agent_name=agent_name,
         operation_type=operation_type,
         model=model,
+        mission_id=mission_id,
+        price_in_per_mtok=price_in_per_mtok,
+        price_out_per_mtok=price_out_per_mtok,
     )
 
 
