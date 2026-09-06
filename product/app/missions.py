@@ -345,10 +345,29 @@ def run_mission(
     try:
         _step_framing(session, run, llm, settings)
         class_info = _escalate_class(session, run)
-        _step_composition(session, run, settings)
-        _step_tour0(session, run, llm, settings)
-        _step_self_qualification(session, run, llm, settings)
-        _step_clerk(session, run, llm, settings)
+        if run.framing is None:
+            # Arrêt réel : sans cadrage valide (panne de parsing ou appel refusé par le budget),
+            # aucune composition fictive, aucun Tour 0, aucune auto-qualification, aucun greffier,
+            # aucun autre appel LLM. Le rapport diagnostic partiel est produit tel quel.
+            _journal(
+                session,
+                run,
+                "mission",
+                "stopped_after_framing_failure",
+                "facilitateur",
+                {
+                    "stop_reason": run.stop_reason,
+                    "framing_error": run.framing_error,
+                    "skipped_steps": ["composition", "tour0", "auto_qualification", "greffier"],
+                    "llm_calls_used": run.ledger.calls_used,
+                    "budget": run.ledger.snapshot(),
+                },
+            )
+        else:
+            _step_composition(session, run, settings)
+            _step_tour0(session, run, llm, settings)
+            _step_self_qualification(session, run, llm, settings)
+            _step_clerk(session, run, llm, settings)
         _finalize(session, run, class_info)
     except Exception as exc:
         mission.status = "failed"

@@ -282,3 +282,59 @@ def test_format_instruction_is_the_only_prompt_change() -> None:
     assert "Fais émerger les DIMENSIONS pertinentes" in FRAMING_SYSTEM
     assert "Ne conteste jamais par principe" in FRAMING_SYSTEM
     assert "N'invente JAMAIS une citation" in EXPERT_SYSTEM
+
+
+# --- Arrêt réel après échec du cadrage (freeze v3.1) ------------------------------------------
+@pytest.mark.parametrize(
+    ("mode", "expected_stop"),
+    [
+        ("truncated", "framing_failed:truncated_output"),
+        ("invalid", "framing_failed:json_invalid"),
+    ],
+)
+def test_framing_failure_stops_everything_without_artificial_composition(
+    client: TestClient, use_llm: Callable[..., FailureModeLLM], mode: str, expected_stop: str
+) -> None:
+    llm = use_llm(FailureModeLLM(framing_mode=mode))
+    mission = _post(client)
+    assert mission["status"] == "failed"
+    assert mission["stop_reason"] == expected_stop
+    # Un seul appel LLM : le cadrage. Rien d'autre n'est appelé ni facturé.
+    assert [c["call_type"] for c in llm.calls] == ["framing"]
+    assert mission["llm_calls_used"] == 1
+    # Aucune composition fictive persistée, aucun expert, aucune cartographie exploitée.
+    assert mission["composition"] is None
+    assert mission["report"]["composition"]["cells"] == []
+    assert mission["report"]["composition"]["experts_total"] == 0
+    assert mission["cartography"]["experts_total"] == 0
+    assert mission["report"]["alternatives"] == []
+    # Le diagnostic est conservé : cause, réponse brute, raison d'arrêt du fournisseur.
+    assert mission["report"]["framing_error"]
+    assert mission["framing"]["raw"]
+    assert mission["framing"]["parsed"] is None
+    # Le journal rend l'arrêt explicite et ne contient aucune étape aval.
+    journal = client.get(f"/missions/{mission['id']}/journal").json()
+    stopped = next(e for e in journal if e["entry_type"] == "stopped_after_framing_failure")
+    assert stopped["payload"]["stop_reason"] == expected_stop
+    assert set(stopped["payload"]["skipped_steps"]) == {
+        "composition",
+        "tour0",
+        "auto_qualification",
+        "greffier",
+    }
+    assert not [e for e in journal if e["step"] in {"composition", "tour0"}]
+    assert not [e for e in journal if e["step"] in {"auto_qualification", "greffier"}]
+    assert not [e for e in journal if e["entry_type"] == "composition_result"]
+
+
+def test_valid_framing_behaviour_unchanged_by_stop_rule(
+    client: TestClient, use_llm: Callable[..., FailureModeLLM]
+) -> None:
+    llm = use_llm(FailureModeLLM())
+    mission = _post(client)
+    assert mission["status"] == "candidate"
+    assert mission["composition"] is not None
+    assert mission["report"]["composition"]["cells"]
+    assert {c["call_type"] for c in llm.calls} >= {"framing", "expert_tour0"}
+    journal = client.get(f"/missions/{mission['id']}/journal").json()
+    assert not [e for e in journal if e["entry_type"] == "stopped_after_framing_failure"]
