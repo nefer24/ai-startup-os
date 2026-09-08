@@ -101,7 +101,7 @@ POSITIONS = {
     "E2": "position synthétique deux : acheter",
     "E3": "position synthétique trois : attendre",
 }
-DEFAULT_OPTIONS: dict[str, tuple[str, str]] = {
+DEFAULT_OPTIONS: dict[str, OptionSpec] = {
     "E1": ("option A", "build"),
     "E2": ("option B", "buy"),
     "E3": ("option C", "wait"),
@@ -136,8 +136,12 @@ FAMILY_RE = re.compile(r"\b(F\d+)\b")
 ScriptValue = dict[str, Any] | Callable[[str, str], dict[str, Any]]
 
 
-def expert_output(expert_id: str, options: dict[str, tuple[str, str]]) -> dict[str, Any]:
-    label, kind = options.get(expert_id, (f"option {expert_id}", "build"))
+OptionSpec = tuple[str, str] | list[tuple[str, str]]
+
+
+def expert_output(expert_id: str, options: dict[str, OptionSpec]) -> dict[str, Any]:
+    spec = options.get(expert_id, (f"option {expert_id}", "build"))
+    specs: list[tuple[str, str]] = spec if isinstance(spec, list) else [spec]
     return {
         "position": POSITIONS.get(expert_id, f"position {expert_id}"),
         "reasoning": f"raisonnement de {expert_id}",
@@ -145,7 +149,9 @@ def expert_output(expert_id: str, options: dict[str, tuple[str, str]]) -> dict[s
         "risks": [f"risque vu par {expert_id}"],
         "unknowns": [f"inconnue vue par {expert_id}"],
         "to_verify": [],
-        "options": [{"label": label, "summary": f"résumé {label}", "kind": kind}],
+        "options": [
+            {"label": label, "summary": f"résumé {label}", "kind": kind} for label, kind in specs
+        ],
         "objections": [],
         "evidence": [
             {"claim": "fait tiré de l'entrée", "source": "entrée §1", "status": "verified"},
@@ -182,7 +188,7 @@ class DeliberationLLM:
         self,
         framing: dict[str, Any] | None = None,
         *,
-        options: dict[str, tuple[str, str]] | None = None,
+        options: dict[str, OptionSpec] | None = None,
         relation: str = "different",
         confrontation: dict[str, dict[str, Any]] | None = None,
         steelman: dict[str, Any] | None = None,
@@ -290,6 +296,13 @@ class DeliberationLLM:
             payload = self.gate
         else:  # pragma: no cover - garde-fou
             raise AssertionError(f"type d'appel inconnu : {call_type}")
+        if isinstance(payload, dict) and "__raw__" in payload:
+            # Réponse brute scriptée (troncature simulée à `max_tokens`, JSON coupé).
+            return LLMResponse(
+                text=payload["__raw__"],
+                usage=LLMUsage(input_tokens=1000, output_tokens=max_tokens),
+                stop_reason=payload.get("__stop__", "max_tokens"),
+            )
         return LLMResponse(
             text=json.dumps(payload, ensure_ascii=False), usage=self.usage, stop_reason="end_turn"
         )
@@ -301,6 +314,14 @@ def families_in(prompt: str) -> list[str]:
         if fid not in seen:
             seen.append(fid)
     return seen
+
+
+def families_to_compare(prompt: str) -> list[str]:
+    """Familles listées dans le bloc « à comparer » du prompt compact (pas celles des preuves)."""
+    block = prompt.split("Familles stratégiques à comparer", 1)[-1].split("Preuves disponibles", 1)[
+        0
+    ]
+    return families_in(block)
 
 
 def default_comparison(prompt: str) -> dict[str, Any]:
@@ -315,10 +336,50 @@ def default_comparison(prompt: str) -> dict[str, Any]:
                     for c in criteria
                 },
             }
-            for fid in families_in(prompt)
+            for fid in families_to_compare(prompt)
         ],
         "notes": "aucun score ; la preuve prime sur la majorité",
     }
+
+
+OPTION_LINE_RE = re.compile(r"^- (?P<id>[A-Za-z0-9_-]+) : (?P<label>.+?)(?: \((?:x\d|\d).*)?$")
+
+
+def stem(label: str) -> str:
+    """Radical d'un libellé : sans parenthèse, casse, accents ni ponctuation (greffier "
+    "compétent)."""
+    from app.mission_consolidation import normalize_label
+
+    return normalize_label(re.sub(r"\(.*?\)", "", label))
+
+
+def competent_clerk(label: str, prompt: str) -> dict[str, Any]:
+    """Greffier scripté : regroupe par radical, variantes = parenthèses, un désaccord interne."""
+    items: list[tuple[str, str]] = []
+    for line in prompt.splitlines():
+        m = OPTION_LINE_RE.match(line.strip())
+        if m:
+            items.append((m.group("id"), m.group("label")))
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for oid, lab in items:
+        groups.setdefault(stem(lab), []).append((oid, lab))
+    families = []
+    for i, (s, members) in enumerate(groups.items(), start=1):
+        variants = [
+            {"option_id": oid, "difference": re.search(r"\((.*?)\)", lab).group(1)}  # type: ignore[union-attr]
+            for oid, lab in members
+            if "(" in lab
+        ]
+        families.append(
+            {
+                "family_id": f"F{i}",
+                "label": s,
+                "option_ids": [oid for oid, _ in members],
+                "variants": variants,
+                "internal_disagreements": ["calendrier"] if len(members) > 2 else [],
+            }
+        )
+    return {"families": families, "not_merged_because": []}
 
 
 def default_synthesis(prompt: str) -> dict[str, Any]:
@@ -359,17 +420,32 @@ class FakeResearchProvider:
 
     name = "fake_external"
 
-    def __init__(self, status: str = "found", reliability: str = "unknown") -> None:
+    def __init__(
+        self,
+        status: str = "found",
+        reliability: str = "unknown",
+        *,
+        answer_found: bool | str | None = "auto",
+        requires_internal_data: bool = False,
+        documents: bool | None = None,
+    ) -> None:
         self.status = status
         self.reliability = reliability
+        # Par défaut : `found` ⇒ documents + verdict de réponse matérielle déclaré ; `None`
+        # explicite = fournisseur sans verdict.
+        self.answer_found: bool | None = (
+            (status == "found") if answer_found == "auto" else answer_found  # type: ignore[assignment]
+        )
+        self.requires_internal_data = requires_internal_data
+        self.documents = (status == "found") if documents is None else documents
         self.questions: list[str] = []
 
     def search(self, question: str, *, max_tokens: int) -> ResearchResult:
         self.questions.append(question)
-        if self.status == "found":
+        if self.documents:
             return ResearchResult(
                 question=question,
-                status="found",
+                status="found" if self.status == "found" else "not_found",
                 provider=self.name,
                 findings=[
                     ResearchFinding(
@@ -381,7 +457,13 @@ class FakeResearchProvider:
                     )
                 ],
                 usage=LLMUsage(input_tokens=300, output_tokens=200),
-                answer_summary="réponse synthétique sourcée",
+                answer_summary=(
+                    "réponse synthétique sourcée"
+                    if self.answer_found
+                    else "aucune source ne répond précisément à la question"
+                ),
+                answer_found=self.answer_found,
+                requires_internal_data=self.requires_internal_data,
             )
         return ResearchResult(
             question=question,
@@ -865,36 +947,48 @@ def test_synonym_options_are_consolidated_into_one_family_with_trace(
 def test_close_but_different_options_are_not_merged(
     client: TestClient, use_llm: Callable[..., DeliberationLLM]
 ) -> None:
-    # Le greffier tente de fusionner une option `build` et une option `buy` : natures différentes,
-    # la fusion est refusée et scindée ; sa non-fusion motivée est conservée telle quelle.
+    # Même libellé, natures différentes (`build` vs `buy`) : jamais dans le même lot, jamais dans
+    # la même famille. Dans une même nature, une non-fusion motivée du greffier est conservée.
+    def clerk(label: str, prompt: str) -> dict[str, Any]:
+        payload = competent_clerk(label, prompt)
+        if "E1-O1" in prompt and "E2-O1" in prompt:
+            payload["families"] = [
+                {"family_id": "F1", "label": "construire A", "option_ids": ["E1-O1"]},
+                {"family_id": "F2", "label": "construire A bis", "option_ids": ["E2-O1"]},
+            ]
+            payload["not_merged_because"] = [
+                {
+                    "option_ids": ["E1-O1", "E2-O1"],
+                    "reason": "périmètres substantiellement différents",
+                }
+            ]
+        return payload
+
     llm = use_llm(
         DeliberationLLM(
-            consolidation={
-                "families": [
-                    {
-                        "family_id": "F1",
-                        "label": "obtenir la capacité",
-                        "kind": "build",
-                        "option_ids": ["E1-O1", "E2-O1"],
-                    }
-                ],
-                "not_merged_because": [
-                    {"option_ids": ["E2-O1", "E3-O1"], "reason": "acheter ≠ attendre"}
-                ],
-            }
+            options={
+                "E1": ("option A", "build"),
+                "E2": ("option A bis", "build"),
+                "E3": ("option A", "buy"),
+            },
+            consolidation=clerk,
         )
     )
     mission = run(client, llm, "proches mais différentes non fusionnées")
     cons = mission["deliberation"]["consolidation"]
+    assert cons["status"] == "ok"
     assert cons["family_count"] == 3
-    kinds = sorted(f["kind"] for f in cons["families"])
-    assert kinds == ["build", "buy", "wait"]
-    assert any("scindée" in n for n in cons["notes"])
+    assert sorted(f["kind"] for f in cons["families"]) == ["build", "build", "buy"]
+    assert all(len({f["kind"]}) == 1 for f in cons["families"])
+    # Aucun lot ne mélange les natures : le lot `build` ne contient pas E3-O1.
+    batch_prompts = [c["prompt"] for c in llm.calls if c["call_type"] == "consolidation"]
+    assert len(batch_prompts) == 1
+    assert "E3-O1" not in batch_prompts[0]
     assert cons["not_merged_because"] == [
-        {"option_ids": ["E2-O1", "E3-O1"], "reason": "acheter ≠ attendre"}
+        {"option_ids": ["E1-O1", "E2-O1"], "reason": "périmètres substantiellement différents"}
     ]
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
-    assert "Non fusionnées E2-O1, E3-O1 : acheter ≠ attendre" in md
+    assert "Non fusionnées E1-O1, E2-O1 : périmètres substantiellement différents" in md
 
 
 # --- 10. Minorité conservée même si la synthèse l'oublie ------------------------------------------
@@ -1032,9 +1126,9 @@ def test_cost_cap_mid_deliberation_stops_explicitly_without_retry(
     client: TestClient, use_llm: Callable[..., DeliberationLLM]
 ) -> None:
     llm = use_llm(DeliberationLLM())
-    mission = run(client, llm, "arrêt coût en délibération", max_cost_eur=0.25)
-    assert mission["max_cost_eur"] == 0.25
-    assert mission["cost_eur"] <= 0.25
+    mission = run(client, llm, "arrêt coût en délibération", max_cost_eur=0.22)
+    assert mission["max_cost_eur"] == 0.22
+    assert mission["cost_eur"] <= 0.22
     assert mission["stop_reason"] == "cost_cap_would_be_exceeded"
     assert mission["report"]["partial"] is True
     assert mission["recommendation"] is None
@@ -1060,11 +1154,14 @@ def test_minimal_cycle_is_financed_and_optional_steps_yield_to_synthesis(
             confrontation={"P1": {"acts": [act("P2", "critique", "solution", "objection à P2")]}}
         )
     )
-    mission = run(client, llm, "cycle minimal sous 14 appels", max_llm_calls=14)
+    # Trois options de natures distinctes : la consolidation n'exige aucun appel (une famille par
+    # nature) ; le cœur de synthèse vaut donc 3 appels (comparaison, synthèse, porte).
+    mission = run(client, llm, "cycle minimal sous 13 appels", max_llm_calls=13)
     assert mission["composition"]["bounds"]["budget_plan"] == "coverage_first"
     assert len(mission["composition"]["experts"]) == 3  # largeur préservée
     assert mission["stop_reason"] == ""
-    assert mission["llm_calls_used"] == 14
+    assert mission["llm_calls_used"] == 13
+    assert mission["deliberation"]["consolidation"]["calls"] == 0
     assert mission["recommendation"]["status"] == "produced"
     assert mission["recommendation"]["gate"]["passed"] is True
     rev_p2 = next(r for r in mission["deliberation"]["revisions"] if r["label"] == "P2")
@@ -1103,8 +1200,8 @@ def test_deliberation_is_not_started_when_budget_cannot_afford_a_minimal_cycle(
         "synthese",
         "porte_qualite",
     }
-    assert d["budget_request"]["minimal_deliberation_calls"] == 7
-    assert d["budget_request"]["additional_calls_estimate"] == 5
+    assert d["budget_request"]["minimal_deliberation_calls"] == 6  # 3 confrontations + cœur 3
+    assert d["budget_request"]["additional_calls_estimate"] == 4
     assert not [
         c
         for c in llm.calls
@@ -1114,7 +1211,7 @@ def test_deliberation_is_not_started_when_budget_cannot_afford_a_minimal_cycle(
     fields = mission["report"]["fourteen_fields"]
     assert len(fields["05_options_examinees"]) == 3
     assert "aucune recommandation" in fields["10_recommandation"]["status"]
-    assert fields["10_recommandation"]["budget_request"]["additional_calls_estimate"] == 5
+    assert fields["10_recommandation"]["budget_request"]["additional_calls_estimate"] == 4
 
 
 # --- 17. Dimension critique non couverte : arrêt explicite + demande de budget --------------------
@@ -1497,3 +1594,410 @@ def test_rejected_strawman_blocks_decision_ready_but_keeps_the_recommendation(
     assert rec["gate"]["checks"]["steelman_done_if_required"] is False
     assert rec["decision_ready"] is False
     assert rec["quality_blocked"] is True
+
+
+# --- Corrections d'audit v1.2 (B1 à B5) -------------------------------------------------------
+# B1 — Intégrité sémantique de la recherche : des documents ne sont pas une réponse.
+FACT_P1_TO_P2 = {
+    "P1": {
+        "acts": [
+            act(
+                "P2",
+                "critique",
+                "fact",
+                "le fait F1 contredit P2",
+                fact_question="Q1 synthétique : le fait F1 est-il établi ?",
+            )
+        ]
+    }
+}
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_status", "expected_provenance", "reason_fragment"),
+    [
+        (FakeResearchProvider(status="found"), "found", "external", "réponse matérielle"),
+        (
+            FakeResearchProvider(status="not_found", documents=True, answer_found=False),
+            "not_found",
+            "non_material",
+            "aucune source ne répond matériellement",
+        ),
+        (
+            FakeResearchProvider(status="not_found", documents=True, answer_found=None),
+            "not_found",
+            "non_material",
+            "aucun verdict",
+        ),
+        (
+            FakeResearchProvider(
+                status="found", documents=True, answer_found=True, requires_internal_data=True
+            ),
+            "requires_internal_data",
+            "non_material",
+            "données internes",
+        ),
+        (FakeResearchProvider(status="not_found", documents=False), "not_found", "unavailable", ""),
+        (FakeResearchProvider(status="error"), "error", "unavailable", ""),
+    ],
+    ids=[
+        "found",
+        "docs_sans_reponse",
+        "docs_sans_verdict",
+        "donnee_interne",
+        "sans_source",
+        "erreur",
+    ],
+)
+def test_research_status_is_semantic_not_document_based(
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    research: Callable[[Any], Any],
+    provider: FakeResearchProvider,
+    expected_status: str,
+    expected_provenance: str,
+    reason_fragment: str,
+) -> None:
+    research(provider)
+    llm = use_llm(DeliberationLLM(confrontation=FACT_P1_TO_P2))
+    mission = run(client, llm, f"intégrité sémantique recherche ({expected_status})")
+    item = mission["deliberation"]["research"][0]
+    assert item["status"] == expected_status
+    assert item["provenance"] == expected_provenance
+    assert reason_fragment in item["reason"]
+    assert item["documents_returned"] == (1 if provider.documents else 0)
+    # Les documents non probants restent tracés comme résultats, jamais comme preuve `found`.
+    if provider.documents and expected_status != "found":
+        assert item["findings"]
+        assert item["source"] == ""
+        assert item["answer_summary"] == ""
+    # Seule une réponse matérielle déclenche une révision sous preuve : P2 reçoit toujours OBJ-1
+    # (objection adressée), mais EV-1 n'est une information nouvelle que si `found`.
+    rev_p2 = next(r for r in mission["deliberation"]["revisions"] if r["label"] == "P2")
+    rev_call = next(c for c in llm.calls if c["call_type"] == "revision" and c["label"] == "P2")
+    if expected_status == "found":
+        assert "EV-1" in rev_p2["new_information_ids"]
+        assert "EV-1" in rev_call["prompt"]
+    else:
+        assert rev_p2["new_information_ids"] == ["OBJ-1"]
+        assert "EV-1" not in rev_call["prompt"]
+    assert all(e["provenance"] != "external" for e in mission["deliberation"]["evidence"]) or (
+        expected_status == "found"
+    )
+
+
+def test_research_verdict_parsing_and_classification_rules() -> None:
+    from app.mission_research import classify_research_outcome, parse_verdict
+
+    assert parse_verdict("texte libre sans verdict") is None
+    verdict = parse_verdict(
+        'Les sources disent… \n{"answer_found": true, "requires_internal_data": false, '
+        '"answer": "oui, établi en 2024"}'
+    )
+    assert verdict == {
+        "answer_found": True,
+        "requires_internal_data": False,
+        "answer": "oui, établi en 2024",
+    }
+    doc = ResearchFinding(source="source-synthetique://fixture/2")
+    # documents + réponse exacte → found
+    ok = ResearchResult("q", "not_found", "p", findings=[doc], answer_found=True)
+    assert classify_research_outcome(ok)[0] == "found"
+    # documents + « aucune donnée répondant à la question » → not_found motivé
+    no_answer = ResearchResult("q", "found", "p", findings=[doc], answer_found=False)
+    status, reason = classify_research_outcome(no_answer)
+    assert status == "not_found"
+    assert "aucune source ne répond" in reason
+    # documents + verdict absent → not_found (jamais `found` par défaut)
+    assert (
+        classify_research_outcome(ResearchResult("q", "found", "p", findings=[doc]))[0]
+        == "not_found"
+    )
+    # donnée intrinsèquement interne → requires_internal_data
+    internal = ResearchResult(
+        "q", "found", "p", findings=[doc], answer_found=True, requires_internal_data=True
+    )
+    assert classify_research_outcome(internal)[0] == "requires_internal_data"
+    # aucune source → not_found ; erreur → error ; indisponible → unavailable
+    assert (
+        classify_research_outcome(ResearchResult("q", "not_found", "p", answer_found=True))[0]
+        == "not_found"
+    )
+    assert classify_research_outcome(ResearchResult("q", "error", "p", note="boom"))[0] == "error"
+    assert classify_research_outcome(ResearchResult("q", "unavailable", "none"))[0] == "unavailable"
+
+
+# B2 / B3 / B5 — Consolidation et comparaison robustes sur un grand Tour 0.
+def large_options() -> dict[str, OptionSpec]:
+    """66 options synthétiques : doublons exacts, variantes, natures distinctes, même libellé de
+    nature différente, non-action ; ≥ 1 désaccord intra-famille (via le greffier scripté)."""
+    kinds = {1: "build", 2: "build", 3: "build", 4: "build", 5: "build", 6: "buy", 7: "test"}
+    specs: dict[str, OptionSpec] = {}
+    for e in (1, 2, 3):
+        rows: list[tuple[str, str]] = []
+        for k in range(1, 8):
+            rows.append((f"Stratégie S{k}", kinds[k]))
+            rows.append((f"stratégie s{k} !", kinds[k]))  # doublon exact après normalisation
+            rows.append((f"Stratégie S{k} (variante {e})", kinds[k]))  # variante
+        specs[f"E{e}"] = rows
+    specs["E1"] = [*specs["E1"], ("ne rien faire", "do_nothing")]
+    specs["E2"] = [*specs["E2"], ("attendre un trimestre", "wait")]
+    specs["E3"] = [*specs["E3"], ("Stratégie S1", "buy")]  # proche mais nature différente
+    return specs
+
+
+def test_large_tour0_is_consolidated_in_bounded_batches_without_truncation(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    llm = use_llm(DeliberationLLM(options=large_options(), consolidation=competent_clerk))
+    mission = run(client, llm, "66 options : consolidation par lots")
+    cons = mission["deliberation"]["consolidation"]
+    assert cons["status"] == "ok"
+    assert cons["atomic_count"] == 66
+    # Précompression déterministe : « Stratégie Sk » ≡ « stratégie sk ! » (3 experts).
+    assert cons["groups_after_premerge"] == 7 * 4 + 3
+    assert any("formulations identiques" in n for n in cons["notes"])
+    # Lots bornés par nature : build 20 groupes → 2 lots + 1 méta ; buy 5 → 1 ; test 4 → 1.
+    assert cons["batches"] == 4
+    assert cons["calls"] == 5
+    assert cons["retries"] == 0
+    assert cons["parse_error"] == ""
+    prompts = [c["prompt"] for c in llm.calls if c["call_type"] == "consolidation"]
+    assert len(prompts) == 5
+    assert all(len([ln for ln in p.splitlines() if ln.startswith("- ")]) <= 16 for p in prompts)
+    assert not any("résumé Stratégie" in p for p in prompts)  # représentation compacte
+    # Aucune troncature : chaque appel est observé complet.
+    done = [e for e in journal(client, mission["id"]) if e["entry_type"] == "call_done"]
+    assert all(e["payload"]["truncated"] is False for e in done)
+    # Familles : 5 build + 2 buy + 1 test + wait + do_nothing ; aucun repli singleton massif.
+    families = cons["families"]
+    assert cons["family_count"] == len(families) == 10
+    assert Counter(f["kind"] for f in families) == {
+        "build": 5,
+        "buy": 2,
+        "test": 1,
+        "wait": 1,
+        "do_nothing": 1,
+    }
+    s1_build = next(f for f in families if f["kind"] == "build" and f["label"] == "strategie s1")
+    assert len(s1_build["option_ids"]) == 9  # 6 formulations identiques + 3 variantes
+    assert len(s1_build["variants"]) == 3
+    assert s1_build["internal_disagreements"] == ["calendrier"]
+    assert s1_build["supporting_experts"] == ["E1", "E2", "E3"]
+    s1_buy = next(f for f in families if f["kind"] == "buy" and f["label"] == "strategie s1")
+    assert s1_buy["option_ids"] == ["E3-O22"]  # même libellé, nature différente : non fusionnée
+    # Traçabilité atomique → famille complète et unique.
+    trace_ids = [t["option_id"] for t in cons["trace"]]
+    assert sorted(trace_ids) == sorted(o["option_id"] for o in mission["cartography"]["options"])
+    assert len(trace_ids) == len(set(trace_ids)) == 66
+    assert cons["unconsolidated_option_ids"] == []
+    # Comparaison sur les familles retenues (≤ 12 : toutes), chaque famille évaluée.
+    comp = mission["deliberation"]["comparison"]
+    assert comp["status"] == "ok"
+    assert comp["retained_family_ids"] == [f["family_id"] for f in families]
+    assert comp["not_compared"] == []
+    for row in comp["rows"]:
+        assert set(row["assessments"]) == set(comp["criteria"])
+        assert all(
+            not re.fullmatch(r"\d+(\.\d+)?", a["value"]) for a in row["assessments"].values()
+        )
+    # Budget : cœur de synthèse recalculé (3 + 5 appels de consolidation), tout tient sous 30.
+    assert mission["llm_calls_used"] == 1 + 3 + 3 + 3 + 5 + 1 + 1 + 1 == 18
+    assert mission["recommendation"]["decision_ready"] is True
+
+
+def test_comparison_selection_keeps_one_family_per_kind_and_minorities() -> None:
+    from app.mission_consolidation import select_families_for_comparison
+
+    families = [
+        {
+            "family_id": f"F{i}",
+            "label": f"famille {i}",
+            "kind": ["build", "buy", "test", "wait", "do_nothing"][i % 5],
+            "supporting_experts": [f"E{j}" for j in range(1, (i % 4) + 1)],
+            "option_ids": [f"E1-O{i}"],
+            "internal_disagreements": ["divergence"] if i == 17 else [],
+        }
+        for i in range(1, 21)
+    ]
+    retained, deferred = select_families_for_comparison(families, cap=8)
+    assert len(retained) == 8
+    assert len(deferred) == 12
+    assert {f["kind"] for f in retained} == {"build", "buy", "test", "wait", "do_nothing"}
+    assert any(f["family_id"] == "F17" for f in retained)  # désaccord interne conservé
+    assert [f["family_id"] for f in retained] == sorted(
+        (f["family_id"] for f in retained), key=lambda x: int(x[1:])
+    )
+    assert all("plafond" in d["reason"] for d in deferred)
+    assert select_families_for_comparison(families[:5], cap=8) == (families[:5], [])
+
+
+def test_consolidation_truncation_retries_once_then_fails_closed(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    truncated = '{"families": [{"family_id": "F1", "label": "coup'  # coupé en plein champ
+    llm = use_llm(
+        DeliberationLLM(
+            options=large_options(),
+            consolidation=lambda label, prompt: {"__raw__": truncated, "__stop__": "max_tokens"},
+        )
+    )
+    mission = run(client, llm, "consolidation tronquée : échec fermé")
+    cons = mission["deliberation"]["consolidation"]
+    assert cons["status"] == "failed"
+    assert cons["parse_error"].startswith("truncated_output")
+    # Une relance par lot au plus (lot scindé en deux) : 4 lots → 4 + 8 appels, jamais plus.
+    assert cons["retries"] == 4
+    assert cons["calls"] == 12
+    entries = journal(client, mission["id"])
+    assert (
+        len([e for e in entries if e["step"] == "consolidation" and e["entry_type"] == "retry"])
+        == 4
+    )
+    assert all(e["payload"]["attempt"] == 1 for e in entries if e["entry_type"] == "retry")
+    assert [e for e in entries if e["entry_type"] == "call_done" and e["payload"]["truncated"]]
+    # Aucun repli singleton massif : seules les natures à un seul groupe forment une famille.
+    assert cons["family_count"] == 2
+    assert sorted(f["kind"] for f in cons["families"]) == ["do_nothing", "wait"]
+    assert len(cons["unconsolidated_option_ids"]) == 64
+    # La recommandation existe pour audit mais reste bloquée qualité.
+    rec = mission["recommendation"]
+    assert rec["status"] == "produced"
+    assert rec["gate"]["passed"] is False
+    assert rec["gate"]["llm_verdict"] is True  # l'instance LLM ne peut pas écraser le veto
+    assert "upstream_stage_failed:consolidation" in rec["gate"]["integrity_failures"]
+    assert rec["quality_blocked"] is True
+    assert rec["decision_ready"] is False
+    assert mission["report"]["budget"]["refusals"] == []
+    md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
+    assert "Consolidation : statut **failed**" in md
+
+
+def test_consolidation_retry_recovers_when_halves_fit(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    seen: list[int] = []
+
+    def flaky_clerk(label: str, prompt: str) -> dict[str, Any]:
+        n = len([ln for ln in prompt.splitlines() if ln.startswith("- ")])
+        seen.append(n)
+        if n >= 16:  # un lot de 16 déborde ; ses deux moitiés (8) et la méta-passe (13) tiennent
+            return {"__raw__": '{"families": [{"family_id": "F1", "la', "__stop__": "max_tokens"}
+        return competent_clerk(label, prompt)
+
+    llm = use_llm(DeliberationLLM(options=large_options(), consolidation=flaky_clerk))
+    mission = run(client, llm, "consolidation : relance compacte réussie")
+    cons = mission["deliberation"]["consolidation"]
+    assert cons["status"] == "ok"
+    assert cons["retries"] == 1  # seul le lot build de 16 groupes a débordé
+    assert cons["calls"] == 5 + 2
+    assert cons["unconsolidated_option_ids"] == []
+    assert cons["family_count"] == 10
+    assert mission["recommendation"]["gate"]["passed"] is True
+    assert mission["recommendation"]["decision_ready"] is True
+
+
+def test_comparison_failure_is_explicit_and_blocks_the_gate(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    llm = use_llm(
+        DeliberationLLM(
+            options=large_options(),
+            consolidation=competent_clerk,
+            comparison=lambda label, prompt: {
+                "__raw__": '{"criteria": ["co',
+                "__stop__": "max_tokens",
+            },
+        )
+    )
+    mission = run(client, llm, "comparaison tronquée : échec explicite")
+    comp = mission["deliberation"]["comparison"]
+    assert comp["status"] == "failed"
+    assert comp["parse_error"].startswith("truncated_output")
+    # Une relance compacte au plus (moitié des familles), journalisée ; artefact conservé.
+    assert [a["families"] for a in comp["attempts"]] == [10, 5]
+    assert len([c for c in llm.calls if c["call_type"] == "comparison"]) == 2
+    assert comp["criteria"] == []
+    assert comp["rows"] == []
+    assert len(comp["not_compared"]) == 5
+    rec = mission["recommendation"]
+    assert rec["status"] == "produced"
+    assert rec["gate"]["passed"] is False
+    assert "upstream_stage_failed:comparaison" in rec["gate"]["integrity_failures"]
+    assert rec["quality_blocked"] is True
+    assert rec["decision_ready"] is False
+    synthesis_prompt = next(c for c in llm.calls if c["call_type"] == "synthesis")["prompt"]
+    assert "Comparaison INVALIDE" in synthesis_prompt
+    md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
+    assert "Comparaison : statut **failed**" in md
+
+
+def test_partial_comparison_is_not_presented_as_valid(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    def half_comparison(label: str, prompt: str) -> dict[str, Any]:
+        payload = default_comparison(prompt)
+        payload["rows"] = payload["rows"][:1]  # une seule famille évaluée sur trois
+        return payload
+
+    llm = use_llm(DeliberationLLM(comparison=half_comparison))
+    mission = run(client, llm, "comparaison partielle")
+    comp = mission["deliberation"]["comparison"]
+    assert comp["status"] == "partial"
+    assert comp["missing_family_ids"] == ["F2", "F3"]
+    assert [r for r in comp["rows"] if r.get("note")]  # familles non évaluées marquées
+    rec = mission["recommendation"]
+    assert rec["gate"]["checks"]["pipeline_integrity"] is False
+    assert rec["decision_ready"] is False
+
+
+# B4 — Porte qualité fail-closed sur l'intégrité du pipeline.
+def test_gate_llm_verdict_cannot_override_upstream_failures(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    # Synthèse invalide : aucune recommandation produite, porte non exécutée, rien de « prêt ».
+    llm = use_llm(
+        DeliberationLLM(
+            synthesis=lambda label, prompt: {
+                "__raw__": '{"problem_understood": "x',
+                "__stop__": "max_tokens",
+            }
+        )
+    )
+    mission = run(client, llm, "synthèse tronquée")
+    rec = mission["recommendation"]
+    assert rec["status"] == "failed"
+    assert rec["error"].startswith("truncated_output")
+    assert mission["report"]["recommendation_produced"] is False
+    assert any(
+        s["step"] == "porte_qualite" and "aucune recommandation" in s["reason"]
+        for s in mission["deliberation"]["steps_skipped"]
+    )
+    # Confrontation invalide (sortie inexploitable pour une perspective) : veto explicite.
+    llm = use_llm(
+        DeliberationLLM(confrontation={"P2": {"__raw__": '{"acts": [', "__stop__": "max_tokens"}})
+    )
+    mission = run(client, llm, "confrontation invalide")
+    rec = mission["recommendation"]
+    assert rec["status"] == "produced"
+    assert rec["gate"]["llm_verdict"] is True
+    assert rec["gate"]["passed"] is False
+    assert any(i.startswith("upstream_stage_failed:confrontation") for i in rec["gate"]["issues"])
+    assert rec["quality_blocked"] is True
+    assert rec["decision_ready"] is False
+
+
+def test_healthy_pipeline_keeps_integrity_and_c1_to_c4_invariants(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    llm = use_llm(DeliberationLLM())
+    mission = run(client, llm, "pipeline sain : intégrité établie")
+    rec = mission["recommendation"]
+    assert rec["gate"]["checks"]["pipeline_integrity"] is True
+    assert rec["gate"]["integrity_failures"] == []
+    assert rec["gate"]["passed"] is True
+    assert rec["decision_ready"] is True
+    assert rec["quality_blocked"] is False
+    assert mission["deliberation"]["consolidation"]["status"] == "ok"
+    assert mission["deliberation"]["comparison"]["status"] == "ok"
+    assert not [c for c in llm.calls if c["call_type"] == "revision"]  # C1 : rien de nouveau

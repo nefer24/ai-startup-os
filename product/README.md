@@ -942,20 +942,32 @@ l'incrément 1, la mission enchaîne (`app/missions.py`, prompts et règles dét
    Chaque résultat conserve question, source, date, extrait, fiabilité (`unknown` tant qu'aucune
    règle ne la qualifie — jamais inventée), claim et positions concernées ; provenance des preuves
    étiquetée `ceo_input` / `external` / `model_knowledge` / `inference` / `hypothesis`.
+   **Intégrité sémantique** : des documents ne sont pas une réponse. Le statut est déterministe :
+   `found` exige des sources **et** un verdict explicite du fournisseur (`answer_found`) ; sinon
+   `not_found` motivé (documents sans réponse matérielle, ou sans verdict),
+   `requires_internal_data`, `error`, `unavailable`. Seule une preuve `found` atteint une révision,
+   et seulement les positions qu'elle concerne.
 4. **Révision** — seuls les experts ayant reçu une **information nouvelle** (objection adressée,
    critique de steelman reconnue, preuve trouvée) sont appelés ; décision `maintain` / `modify` /
    `nuance` / `abandon` avec la cause (`triggered_by`) et la trace position initiale → révisée.
    Le Tour 0 reste immuable dans la cartographie. Un changement sans cause est marqué
    `unexplained_change` ; jamais d'optimisation vers le changement d'avis.
-5. **Consolidation** — le greffier regroupe les options atomiques en **familles stratégiques** ;
-   règles déterministes : identifiants valides, **jamais de fusion entre natures différentes**
-   (une famille `build`+`buy` est scindée et journalisée), variantes et désaccords intra-famille
-   conservés, non-fusions motivées conservées, trace atomique → famille → variante.
-6. **Comparaison** — critères communs (noyau : résultat attendu, coût, délai, risque,
-   réversibilité, dépendances, preuves, inconnues ; le problème peut en appeler d'autres), chaque
+5. **Consolidation** (`app/mission_consolidation.py`) — jamais d'appel monolithique :
+   **précompression** déterministe des doublons exacts, **partition par nature** (une famille ne
+   mêle jamais `build` et `buy` ; une nature à un seul groupe = famille sans appel), **lots
+   bornés** (16 groupes, représentation compacte), **méta-consolidation** par nature découpée ;
+   relance bornée (une par lot, lot scindé, journalisée, budgétée). Variantes, désaccords
+   intra-famille et non-fusions motivées conservés ; trace atomique → famille complète. Après
+   échec : options **non consolidées** listées, `status = failed`, **jamais** de repli « chaque
+   option devient une famille » ; la porte qualité bloque alors la recommandation.
+6. **Comparaison** — sur les familles **retenues** (sélection déterministe, plafond 12 : toutes si
+   possible, sinon les plus soutenues avec au moins une par nature et les désaccords internes ;
+   les autres sont listées « non comparées » avec motif) ; critères communs (noyau : résultat
+   attendu, coût, délai, risque, réversibilité, dépendances, preuves, inconnues), chaque
    appréciation qualitative avec sa **base** (`evidence` / `inference` / `hypothesis` / `unknown` /
-   `ceo_input` / `model_knowledge`). Schéma **sans score ni rang** (testé) ; le nombre de soutiens
-   n'est jamais un critère.
+   `ceo_input` / `model_knowledge`). Schéma **sans score ni rang** (testé). `status` = `ok`
+   (chaque famille retenue évaluée sur tous les critères) / `partial` / `failed` ; relance compacte
+   bornée ; un échec est dit, jamais présenté comme une comparaison valide.
 7. **Synthèse en 14 champs** — synthétiseur distinct des perspectives : problème compris, objectif,
    contraintes, hypothèses, options examinées, preuves étiquetées, arguments pour / contre,
    risques, recommandation (`build` / `buy` / `integrate` / `simplify` / `test` / `wait` /
@@ -966,7 +978,12 @@ l'incrément 1, la mission enchaîne (`app/missions.py`, prompts et règles dét
    lève `ceo_arbitration_required`.
 8. **Porte qualité** — instance distincte : `conclusion_follows_options`, `evidence_labeled`,
    `minorities_preserved`, `steelman_done_if_required`, `no_forced_consensus`, `honest_about_gaps`
-   ; les contrôles déterministes priment sur l'avis de l'instance.
+   ; les contrôles déterministes priment sur l'avis de l'instance. **Fail-closed** sur l'intégrité
+   du pipeline : confrontation valide ∧ steelman valide si requis ∧ consolidation valide ∧
+   comparaison valide ∧ synthèse valide ; toute étape invalide ⇒ `gate.passed = false`,
+   `quality_blocked = true`, `decision_ready = false`, cause `upstream_stage_failed:<étape>`, la
+   recommandation restant conservée pour audit. `decision_ready = gate.passed ∧
+   ¬information_insufficient`.
 
 **Gouvernance (Décision 026)** : les agents **recommandent**, ils ne décident jamais
 (`requires_ceo_decision = true`) ; `structurante` / `critique` ⇒ décision CEO obligatoire ; le

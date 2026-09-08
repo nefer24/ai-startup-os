@@ -339,7 +339,8 @@ CONSOLIDATION_SYSTEM = (
     "une famille réunit uniquement des options réellement équivalentes (même orientation de fond). "
     "Les variantes conservées et les désaccords internes à une famille restent visibles. Deux "
     "options proches mais réellement différentes ne sont PAS fusionnées : indique pourquoi. Tu "
-    "ne classes pas, tu ne préfères pas, tu ne recommandes pas.\n\n"
+    "ne classes pas, tu ne préfères pas, tu ne recommandes pas. Tu n'emploies que les "
+    "identifiants fournis et tu ne recopies pas les libellés au-delà du nécessaire.\n\n"
     + COMPACT
     + ' : {"families": [{"family_id": "F1", "label": "…", "kind": "build|integrate|buy|wait|test|'
     'simplify|do_nothing|other", "option_ids": ["E1-O1"], "variants": [{"option_id": "E2-O1", '

@@ -38,6 +38,20 @@ from app.mission_cartography import (
     residual_ambiguities,
 )
 from app.mission_composition import ExpertSpec, compose
+from app.mission_consolidation import (
+    CONSOLIDATION_BATCH_SIZE,
+    build_batch_prompt,
+    build_compact_comparison_prompt,
+    build_meta_prompt,
+    estimate_consolidation_calls,
+    families_from_batch,
+    finalize_families,
+    merge_families_from_meta,
+    plan_batches,
+    premerge_options,
+    select_families_for_comparison,
+    singleton_family,
+)
 from app.mission_deliberation import (
     COMPARISON_CALL_TYPE,
     COMPARISON_SYSTEM,
@@ -57,9 +71,7 @@ from app.mission_deliberation import (
     STEELMAN_SYSTEM,
     SYNTHESIS_CALL_TYPE,
     SYNTHESIS_SYSTEM,
-    build_comparison_prompt,
     build_confrontation_prompt,
-    build_consolidation_prompt,
     build_gate_prompt,
     build_map_view,
     build_recognition_prompt,
@@ -90,7 +102,11 @@ from app.mission_framing import (
     framing_summary_for_experts,
 )
 from app.mission_report import build_situation_report
-from app.mission_research import RESEARCH_CALL_TYPE, build_research_provider
+from app.mission_research import (
+    RESEARCH_CALL_TYPE,
+    build_research_provider,
+    classify_research_outcome,
+)
 from app.mission_schemas import (
     ClerkOutput,
     ComparisonOutput,
@@ -173,6 +189,8 @@ class _Run:
     steps_done: list[str] = field(default_factory=list)
     steps_skipped: list[dict[str, str]] = field(default_factory=list)
     budget_request: dict[str, Any] = field(default_factory=dict)
+    # Cœur de synthèse effectif : consolidation (lots planifiés) + comparaison + synthèse + porte.
+    core_calls: int = SYNTHESIS_CORE_CALLS
 
 
 def _journal(
@@ -988,7 +1006,13 @@ def _check_deliberation_affordable(session: Session, run: _Run) -> None:
     answered = len(_answered(run))
     if answered < 2:
         return
-    minimal = answered + 4
+    # Le cœur de synthèse dépend de la matière : la consolidation est planifiée en lots bornés
+    # (jamais un appel monolithique), donc son nombre d'appels est estimé ici, avant de délibérer.
+    options = run.cartography.get("options", [])
+    run.core_calls = (SYNTHESIS_CORE_CALLS - 1) + estimate_consolidation_calls(
+        options, CONSOLIDATION_BATCH_SIZE
+    )
+    minimal = answered + run.core_calls
     if run.ledger.remaining_calls >= minimal:
         return
     run.stop_reason = "deliberation_budget_insufficient"
@@ -1031,7 +1055,7 @@ def _can_spend(session: Session, run: _Run, step: str, calls_needed: int, what: 
     le budget le permet) → consolidation, comparaison, synthèse, porte qualité. Un refus est
     journalisé ; il n'y a ni relance ni file d'attente.
     """
-    if run.ledger.remaining_calls - calls_needed >= SYNTHESIS_CORE_CALLS:
+    if run.ledger.remaining_calls - calls_needed >= run.core_calls:
         return True
     _journal(
         session,
@@ -1043,7 +1067,7 @@ def _can_spend(session: Session, run: _Run, step: str, calls_needed: int, what: 
             "skipped": what,
             "calls_needed": calls_needed,
             "remaining_calls": run.ledger.remaining_calls,
-            "synthesis_core_calls": SYNTHESIS_CORE_CALLS,
+            "synthesis_core_calls": run.core_calls,
         },
     )
     return False
@@ -1343,7 +1367,11 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
             result = _research_call(session, run, settings, provider, q["question"])
             if result is None:
                 break
-        first = result.findings[0] if result.findings else None
+        # Intégrité sémantique (B1) : le statut est reclassé déterministement — `found` exige des
+        # sources ET une réponse matérielle déclarée ; des documents génériques restent tracés
+        # comme résultats de recherche, jamais comme preuve.
+        status, reason = classify_research_outcome(result)
+        first = result.findings[0] if (result.findings and status == "found") else None
         # Provenance de débat : objections dont cette question est issue (pour la trace et pour
         # cibler la révision), positions concernées (jamais « tout le monde »).
         q_key = " ".join(q["question"].lower().split())
@@ -1362,16 +1390,24 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
             "target": q["target"],
             "positions": list(q.get("positions", [])),
             "objection_ids": objection_ids,
-            "status": result.status,
+            "status": status,
+            "reason": reason,
+            "documents_returned": len(result.findings),
+            "answer_found": result.answer_found,
+            "requires_internal_data": result.requires_internal_data,
             "provider": result.provider,
             "findings": [f.to_dict() for f in result.findings],
             "source": first.source if first else "",
             "date": first.date if first else "",
             "excerpt": first.excerpt if first else "",
             "reliability": first.reliability if first else "unknown",
-            "provenance": "external" if result.status == "found" else "unavailable",
+            "provenance": (
+                "external"
+                if status == "found"
+                else ("non_material" if result.findings else "unavailable")
+            ),
             "note": result.note,
-            "answer_summary": result.answer_summary,
+            "answer_summary": result.answer_summary if status == "found" else "",
         }
         run.evidence.append(item)
         run.research.append(item)
@@ -1636,81 +1672,51 @@ def _residual_disagreements(run: _Run) -> list[dict[str, Any]]:
 
 
 # --- G. Consolidation ----------------------------------------------------------------------------
-def _normalize_families(
-    options: list[dict[str, Any]], output: ConsolidationOutput | None
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
-    """Familles traçables : identifiants valides, aucune fusion entre natures différentes."""
-    known = {o["option_id"]: o for o in options}
-    assigned: set[str] = set()
-    families: list[dict[str, Any]] = []
-    notes: list[str] = []
-
-    def _add(
-        label: str,
-        kind: str,
-        ids: list[str],
-        variants: list[dict[str, str]],
-        internal: list[str],
-        source: str,
-    ) -> None:
-        families.append(
-            {
-                "family_id": f"F{len(families) + 1}",
-                "label": label,
-                "kind": kind,
-                "option_ids": ids,
-                "variants": [v for v in variants if v["option_id"] in ids],
-                "internal_disagreements": internal,
-                "supporting_experts": sorted({known[i]["expert_id"] for i in ids}),
-                "source": source,
-            }
-        )
-
-    if output is not None:
-        for fam in output.families:
-            ids = [i for i in fam.option_ids if i in known and i not in assigned]
-            if not ids:
-                continue
-            by_kind: dict[str, list[str]] = {}
-            for i in ids:
-                by_kind.setdefault(known[i]["kind"], []).append(i)
-            concrete = [k for k in by_kind if k != "other"]
-            variants = [
-                {"option_id": v.option_id, "difference": v.difference} for v in fam.variants
-            ]
-            if len(concrete) > 1:
-                notes.append(
-                    f"famille « {fam.label} » scindée : natures différentes {sorted(concrete)}"
-                )
-                for kind in concrete:
-                    sub = by_kind[kind] + (by_kind.get("other", []) if kind == concrete[0] else [])
-                    assigned.update(sub)
-                    _add(
-                        f"{fam.label} ({kind})",
-                        kind,
-                        sub,
-                        variants,
-                        fam.internal_disagreements,
-                        "greffier+scission",
-                    )
-                continue
-            assigned.update(ids)
-            kind = concrete[0] if concrete else (fam.kind or "other")
-            _add(fam.label, kind, ids, variants, fam.internal_disagreements, "greffier")
-    for o in options:
-        if o["option_id"] in assigned:
-            continue
-        assigned.add(o["option_id"])
-        _add(o["label"], o["kind"], [o["option_id"]], [], [], "singleton")
-    not_merged = (
-        [{"option_ids": n.option_ids, "reason": n.reason} for n in output.not_merged_because]
-        if output
-        else []
+def _consolidation_output(
+    session: Session,
+    run: _Run,
+    llm: LLMClient,
+    settings: Settings,
+    *,
+    prompt: str,
+    what: str,
+) -> tuple[ConsolidationOutput | None, str, bool]:
+    """Un appel de consolidation sous budget : (sortie, erreur classée, budget_stop)."""
+    response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step="consolidation",
+        actor="Greffier",
+        system=CONSOLIDATION_SYSTEM,
+        prompt=prompt,
+        call_type=CONSOLIDATION_CALL_TYPE,
+        max_tokens=settings.mission_max_tokens_consolidation,
     )
-    return families, not_merged, notes
+    if response is None:
+        return None, "budget", True
+    output, error = parse_structured(response.text, ConsolidationOutput)
+    error = _classify_parse_error(response, error)
+    if output is None:
+        _journal(
+            session,
+            run,
+            "consolidation",
+            "parse_failed",
+            "Greffier",
+            {"what": what, "parse_error": error},
+        )
+    return output, error, False
 
 
 def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    """Familles stratégiques : précompression déterministe → lots bornés par nature → méta-passe.
+
+    Aucun appel monolithique ; une relance au plus par lot (lot scindé en deux, journalisée,
+    budgétée) ; jamais de repli « chaque option devient une famille » après erreur : un lot
+    irrécupérable laisse ses options non consolidées et le statut devient `failed`.
+    """
     step = "consolidation"
     if run.stop_reason:
         _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
@@ -1719,51 +1725,131 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
     if not options:
         _skip(session, run, step, "aucune option proposée")
         return
-    error = ""
-    notes: list[str] = []
+    groups = premerge_options(options)
+    batches, singletons = plan_batches(groups, CONSOLIDATION_BATCH_SIZE)
+    families_raw: list[dict[str, Any]] = [singleton_family(g) for g in singletons]
     not_merged: list[dict[str, Any]] = []
-    if len(options) == 1:
-        families, not_merged, notes = _normalize_families(options, None)
-    else:
-        response = _call(
-            session,
-            run,
-            llm,
-            settings,
-            step=step,
-            actor="Greffier",
-            system=CONSOLIDATION_SYSTEM,
-            prompt=build_consolidation_prompt(
-                options=options,
-                revised_positions=[
-                    (run.labels[eid], pos) for eid, pos in run.current_positions.items()
-                ],
-            ),
-            call_type=CONSOLIDATION_CALL_TYPE,
-            max_tokens=settings.mission_max_tokens_consolidation,
-        )
-        if response is None:
-            return
-        output, error = parse_structured(response.text, ConsolidationOutput)
-        error = _classify_parse_error(response, error)
-        families, not_merged, notes = _normalize_families(options, output)
-    trace = [
+    notes: list[str] = []
+    unconsolidated: list[str] = []
+    calls = 0
+    retries = 0
+    last_error = ""
+    status = "ok"
+    by_kind_families: dict[str, list[dict[str, Any]]] = {}
+    kinds_batched: dict[str, int] = {}
+    premerged = sum(1 for g in groups if len(g["member_ids"]) > 1)
+    if premerged:
+        notes.append(f"{premerged} groupe(s) de formulations identiques fusionnés avant appel")
+    _journal(
+        session,
+        run,
+        step,
+        "plan",
+        "facilitateur",
         {
-            "option_id": oid,
-            "family_id": f["family_id"],
-            "role": "variant" if any(v["option_id"] == oid for v in f["variants"]) else "member",
-        }
-        for f in families
-        for oid in f["option_ids"]
-    ]
+            "atomic_count": len(options),
+            "groups_after_premerge": len(groups),
+            "batches": [{"kind": k, "size": len(items)} for k, items in batches],
+            "singleton_kinds": [g["kind"] for g in singletons],
+            "batch_size": CONSOLIDATION_BATCH_SIZE,
+        },
+    )
+    budget_stop = False
+    for kind, items in batches:
+        if budget_stop or run.stop_reason:
+            unconsolidated += [m for g in items for m in g["member_ids"]]
+            continue
+        kinds_batched[kind] = kinds_batched.get(kind, 0) + 1
+        pending: list[list[dict[str, Any]]] = [items]
+        attempt = 0
+        while pending:
+            chunk = pending.pop(0)
+            calls += 1
+            output, error, budget_stop = _consolidation_output(
+                session,
+                run,
+                llm,
+                settings,
+                prompt=build_batch_prompt(kind, chunk),
+                what=f"lot {kind} ({len(chunk)} groupe(s))",
+            )
+            if budget_stop:
+                unconsolidated += [m for g in chunk for m in g["member_ids"]]
+                unconsolidated += [m for c in pending for g in c for m in g["member_ids"]]
+                break
+            if output is None:
+                last_error = error
+                if attempt == 0 and len(chunk) >= 2:
+                    # Relance compacte bornée : le lot est scindé en deux, une seule fois.
+                    attempt = 1
+                    retries += 1
+                    half = len(chunk) // 2
+                    pending = [chunk[:half], chunk[half:], *pending]
+                    _journal(
+                        session,
+                        run,
+                        step,
+                        "retry",
+                        "facilitateur",
+                        {
+                            "kind": kind,
+                            "attempt": attempt,
+                            "split_into": [half, len(chunk) - half],
+                            "reason": error,
+                        },
+                    )
+                    continue
+                status = "failed"
+                unconsolidated += [m for g in chunk for m in g["member_ids"]]
+                continue
+            fams, nm = families_from_batch(output, chunk, kind)
+            by_kind_families.setdefault(kind, []).extend(fams)
+            not_merged += nm
+    # Méta-consolidation : une passe par nature découpée en plusieurs lots.
+    for kind, fams in by_kind_families.items():
+        if kinds_batched.get(kind, 0) > 1 and len(fams) > 1 and not budget_stop:
+            for i, f in enumerate(fams, start=1):
+                f["temp_id"] = f"{kind.upper()}-T{i}"
+            calls += 1
+            output, error, budget_stop = _consolidation_output(
+                session,
+                run,
+                llm,
+                settings,
+                prompt=build_meta_prompt(kind, fams),
+                what=f"méta-consolidation {kind} ({len(fams)} famille(s))",
+            )
+            if output is not None:
+                merged = merge_families_from_meta(output, fams)
+                notes.append(f"méta-consolidation {kind} : {len(fams)} → {len(merged)} famille(s)")
+                fams = merged
+            else:
+                last_error = error or last_error
+                if not budget_stop:
+                    status = "partial" if status == "ok" else status
+                    notes.append(
+                        f"méta-consolidation {kind} non exploitable : familles des lots conservées"
+                    )
+                for f in fams:
+                    f.pop("temp_id", None)
+        families_raw.extend(fams)
+    if budget_stop:
+        status = "failed"
+    families, trace = finalize_families(families_raw, options)
     run.consolidation = {
+        "status": status,
         "families": families,
         "not_merged_because": not_merged,
         "trace": trace,
         "atomic_count": len(options),
+        "groups_after_premerge": len(groups),
         "family_count": len(families),
+        "unconsolidated_option_ids": unconsolidated,
+        "batches": len(batches),
+        "calls": calls,
+        "retries": retries,
         "notes": notes,
-        "parse_error": error,
+        "parse_error": last_error,
     }
     _journal(
         session,
@@ -1771,14 +1857,10 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         step,
         "result",
         "Greffier",
-        {
-            "atomic_count": len(options),
-            "family_count": len(families),
-            "notes": notes,
-            "parse_error": error,
-        },
+        {k: v for k, v in run.consolidation.items() if k not in {"families", "trace"}},
     )
-    run.steps_done.append(step)
+    if not budget_stop:
+        run.steps_done.append(step)
 
 
 def _evidence_for_synthesis(run: _Run) -> list[dict[str, Any]]:
@@ -1815,42 +1897,13 @@ def _evidence_for_synthesis(run: _Run) -> list[dict[str, Any]]:
 
 
 # --- Comparaison ---------------------------------------------------------------------------------
-def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
-    step = "comparaison"
-    if run.stop_reason:
-        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
-        return
-    families = run.consolidation.get("families", [])
-    if not families or run.framing is None:
-        _skip(session, run, step, "aucune famille stratégique à comparer")
-        return
-    unknowns = list(run.framing.global_unknowns) + [
-        u["text"] for u in run.cartography.get("unknowns", [])
-    ]
-    response = _call(
-        session,
-        run,
-        llm,
-        settings,
-        step=step,
-        actor="Synthétiseur",
-        system=COMPARISON_SYSTEM,
-        prompt=build_comparison_prompt(
-            problem=run.framing.problem_understood,
-            constraints=list(run.framing.constraints),
-            families=families,
-            evidence=_evidence_for_synthesis(run),
-            unknowns=unknowns,
-        ),
-        call_type=COMPARISON_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_comparison,
-    )
-    if response is None:
-        return
-    output, error = parse_structured(response.text, ComparisonOutput)
-    error = _classify_parse_error(response, error)
+def _comparison_rows(
+    output: ComparisonOutput | None, retained: list[dict[str, Any]]
+) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+    """Lignes validées : familles retenues seulement ; renvoie (critères, lignes, manquantes)."""
+    criteria = list(output.criteria) if output else []
     rows: list[dict[str, Any]] = []
-    known = {f["family_id"] for f in families}
+    known = {f["family_id"] for f in retained}
     seen: set[str] = set()
     if output is not None:
         for row in output.rows:
@@ -1863,11 +1916,119 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
                     "assessments": {k: v.model_dump() for k, v in row.assessments.items()},
                 }
             )
-    for fid in sorted(known - seen):
-        rows.append({"family_id": fid, "assessments": {}, "note": "non évaluée par la comparaison"})
+    missing = sorted(known - seen)
+    if criteria:
+        for built in rows:
+            if any(c not in built["assessments"] for c in criteria):
+                missing.append(built["family_id"])
+    return criteria, rows, sorted(set(missing))
+
+
+def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    """Comparaison des familles sérieuses (sélection déterministe bornée), artefact conservé.
+
+    Une relance compacte au plus (moitié des familles retenues, journalisée, budgétée). Si la
+    comparaison échoue ou reste incomplète, `status` le dit (`failed` / `partial`) : aucune
+    prétention à une comparaison valide, et la porte qualité bloque la recommandation.
+    """
+    step = "comparaison"
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    families = run.consolidation.get("families", [])
+    if not families or run.framing is None:
+        _skip(session, run, step, "aucune famille stratégique à comparer")
+        return
+    retained, deferred = select_families_for_comparison(families)
+    unknowns = list(run.framing.global_unknowns) + [
+        u["text"] for u in run.cartography.get("unknowns", [])
+    ]
+    evidence = _evidence_for_synthesis(run)
+    attempts: list[dict[str, Any]] = []
+    output: ComparisonOutput | None = None
+    error = ""
+    compared = retained
+    for attempt in (1, 2):
+        response = _call(
+            session,
+            run,
+            llm,
+            settings,
+            step=step,
+            actor="Synthétiseur",
+            system=COMPARISON_SYSTEM,
+            prompt=build_compact_comparison_prompt(
+                problem=run.framing.problem_understood,
+                constraints=list(run.framing.constraints),
+                families=compared,
+                evidence=evidence,
+                unknowns=unknowns,
+            ),
+            call_type=COMPARISON_CALL_TYPE,
+            max_tokens=settings.mission_max_tokens_comparison,
+        )
+        if response is None:
+            run.comparison = {
+                "status": "failed",
+                "criteria": [],
+                "rows": [],
+                "retained_family_ids": [f["family_id"] for f in retained],
+                "not_compared": deferred,
+                "attempts": attempts,
+                "parse_error": "budget",
+            }
+            return
+        output, error = parse_structured(response.text, ComparisonOutput)
+        error = _classify_parse_error(response, error)
+        attempts.append({"attempt": attempt, "families": len(compared), "parse_error": error})
+        if output is not None or len(compared) < 2 or attempt == 2:
+            break
+        # Relance compacte bornée : moitié des familles retenues (les plus soutenues d'abord).
+        half = max(2, len(compared) // 2)
+        kept = sorted(
+            compared,
+            key=lambda f: (-len(f.get("supporting_experts", [])), f["family_id"]),
+        )[:half]
+        kept_ids = {f["family_id"] for f in kept}
+        deferred = deferred + [
+            {
+                "family_id": f["family_id"],
+                "label": f["label"],
+                "kind": f["kind"],
+                "reason": "écartée de la relance compacte après sortie non exploitable",
+            }
+            for f in compared
+            if f["family_id"] not in kept_ids
+        ]
+        compared = sorted(kept, key=lambda f: int(f["family_id"][1:]))
+        _journal(
+            session,
+            run,
+            step,
+            "retry",
+            "facilitateur",
+            {"attempt": 2, "families": len(compared), "reason": error},
+        )
+    criteria, rows, missing = _comparison_rows(output, compared)
+    if output is None:
+        status = "failed"
+    elif missing or not criteria or not rows:
+        status = "partial"
+    else:
+        status = "ok"
+    if output is not None:
+        for fid in missing:
+            rows.append(
+                {"family_id": fid, "assessments": {}, "note": "non évaluée par la comparaison"}
+            )
     run.comparison = {
-        "criteria": list(output.criteria) if output else [],
+        "status": status,
+        "criteria": criteria,
         "rows": rows,
+        "retained_family_ids": [f["family_id"] for f in compared],
+        "not_compared": deferred,
+        "missing_family_ids": missing,
+        "attempts": attempts,
         "notes": output.notes if output else "",
         "parse_error": error,
     }
@@ -1877,7 +2038,16 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         step,
         "result",
         "Synthétiseur",
-        {"criteria": run.comparison["criteria"], "rows": len(rows), "parse_error": error},
+        {
+            "status": status,
+            "criteria": criteria,
+            "rows": len(rows),
+            "retained": len(compared),
+            "not_compared": len(deferred),
+            "missing": missing,
+            "attempts": attempts,
+            "parse_error": error,
+        },
     )
     run.steps_done.append(step)
 
@@ -1919,6 +2089,21 @@ def _synthesis_matter(run: _Run, residual: list[dict[str, Any]]) -> str:
                 if fam.get("internal_disagreements")
                 else ""
             )
+        )
+    if run.consolidation.get("unconsolidated_option_ids"):
+        parts.append(
+            "Options NON consolidées (échec technique de consolidation, à ne pas présenter comme "
+            "familles) : " + ", ".join(run.consolidation["unconsolidated_option_ids"])
+        )
+    if run.comparison.get("status") and run.comparison["status"] != "ok":
+        parts.append(
+            f"Comparaison INVALIDE ou incomplète (statut {run.comparison['status']}) : aucune "
+            "prétention à une comparaison valide."
+        )
+    if run.comparison.get("not_compared"):
+        parts.append(
+            "Familles non comparées (plafond de comparaison) : "
+            + ", ".join(f["family_id"] for f in run.comparison["not_compared"])
         )
     if run.comparison.get("rows"):
         parts.append("Comparaison (" + ", ".join(run.comparison.get("criteria", [])) + ") :")
@@ -2031,6 +2216,56 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
     run.steps_done.append(step)
 
 
+def _pipeline_integrity_failures(run: _Run) -> list[tuple[str, str]]:
+    """Étapes obligatoires invalides : (étape, cause). Vide = intégrité du pipeline établie.
+
+    required_pipeline_integrity = confrontation valide ∧ steelman valide si requis ∧
+    consolidation valide ∧ comparaison valide ∧ synthèse valide.
+    """
+    failures: list[tuple[str, str]] = []
+    if "confrontation" not in run.steps_done:
+        failures.append(("confrontation", "étape non réalisée"))
+    else:
+        broken = [
+            run.labels.get(eid, eid) for eid, out in run.confrontations.items() if out is None
+        ]
+        if broken:
+            failures.append(("confrontation", f"sortie non exploitable pour {', '.join(broken)}"))
+    st = run.steelman
+    if st.get("required") and st.get("status") not in {"accepted", "accepted_partial"}:
+        failures.append(("steelman", f"requis ({st.get('reason')}) : {st.get('status')}"))
+    cons = run.consolidation
+    if cons.get("status") != "ok":
+        failures.append(
+            (
+                "consolidation",
+                f"statut {cons.get('status', 'absente')}"
+                + (
+                    f" ; {len(cons.get('unconsolidated_option_ids', []))} option(s) non "
+                    f"consolidée(s)"
+                    if cons.get("unconsolidated_option_ids")
+                    else ""
+                ),
+            )
+        )
+    comp = run.comparison
+    if comp.get("status") != "ok":
+        failures.append(
+            (
+                "comparaison",
+                f"statut {comp.get('status', 'absente')}"
+                + (
+                    f" ; familles sans évaluation : {', '.join(comp.get('missing_family_ids', []))}"
+                    if comp.get("missing_family_ids")
+                    else ""
+                ),
+            )
+        )
+    if run.recommendation.get("status") != "produced":
+        failures.append(("synthese", f"statut {run.recommendation.get('status', 'absente')}"))
+    return failures
+
+
 def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
     step = "porte_qualite"
     if run.stop_reason:
@@ -2082,9 +2317,21 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
     checks["no_forced_consensus"] = checks.get("no_forced_consensus", True) and len(
         rec_residual
     ) >= len(residual)
+    # Veto déterministe d'intégrité du pipeline (fail-closed) : les étapes obligatoires doivent
+    # être valides ; l'instance LLM de porte ne peut jamais écraser ce veto.
+    integrity_failures = _pipeline_integrity_failures(run)
+    checks["pipeline_integrity"] = not integrity_failures
+    issues += [f"upstream_stage_failed:{stage} — {why}" for stage, why in integrity_failures]
     passed = bool(output.passed) if output else False
     passed = passed and all(checks.values())
-    run.gate = {"passed": passed, "checks": checks, "issues": issues, "parse_error": error}
+    run.gate = {
+        "passed": passed,
+        "checks": checks,
+        "issues": issues,
+        "integrity_failures": [f"upstream_stage_failed:{s}" for s, _ in integrity_failures],
+        "llm_verdict": bool(output.passed) if output else None,
+        "parse_error": error,
+    }
     rec = run.recommendation
     rec["gate"] = run.gate
     # La porte conditionne réellement `decision_ready` : la proposition est conservée pour audit

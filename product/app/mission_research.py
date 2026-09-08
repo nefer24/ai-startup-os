@@ -13,20 +13,58 @@ Le fournisseur est une **capacité** derrière une interface (`ResearchProvider`
     `not_found`. La fiabilité n'est jamais inventée : elle est `unknown` tant qu'une règle explicite
     ne la qualifie pas.
 
+Intégrité sémantique (audit v1.2, B1) : **des documents retournés ne sont pas une réponse**. Le
+statut distingue recherche exécutée, documents retournés, réponse matérielle trouvée (`found`,
+seulement sur verdict explicite du fournisseur), aucune réponse (`not_found` avec motif), question
+exigeant des données internes (`requires_internal_data`), panne (`error`). Seul `found` produit une
+preuve susceptible de déclencher une révision.
+
 Chaque résultat conserve : question, source, date (si disponible), extrait, fiabilité, claim auquel
 il répond et positions concernées (ces deux derniers champs sont posés par l'orchestrateur).
 """
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Protocol
 
 from app.config import Settings
 from app.llm import LLMUsage
 
-ResearchStatus = Literal["found", "not_found", "unavailable", "error"]
+ResearchStatus = Literal["found", "not_found", "requires_internal_data", "unavailable", "error"]
 RESEARCH_CALL_TYPE = "research"
+
+# Verdict de réponse demandé au fournisseur en fin de texte (technologiquement neutre : n'importe
+# quel fournisseur peut produire cette ligne). Sans verdict explicite `answer_found = true`, une
+# recherche n'est JAMAIS une preuve `found`, quels que soient les documents retournés.
+VERDICT_INSTRUCTION = (
+    "Termine IMPÉRATIVEMENT ta réponse par une ligne JSON de verdict, seule sur sa ligne : "
+    '{"answer_found": true|false, "requires_internal_data": true|false, "answer": "réponse '
+    'matérielle en une phrase ou vide"}. answer_found = true SEULEMENT si les sources citées '
+    "répondent matériellement et précisément à la question posée (pas des pages génériques sur "
+    "le sujet). requires_internal_data = true si la question ne peut être tranchée qu'avec des "
+    "données internes ou non publiques du demandeur."
+)
+_VERDICT_RE = re.compile(r"\{[^{}]*\"answer_found\"[^{}]*\}", re.DOTALL)
+
+
+def parse_verdict(text: str) -> dict[str, Any] | None:
+    """Extrait le dernier verdict JSON `{"answer_found": …}` d'un texte ; None s'il n'y en a pas."""
+    matches = _VERDICT_RE.findall(text or "")
+    for raw in reversed(matches):
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and "answer_found" in data:
+            return {
+                "answer_found": bool(data.get("answer_found")),
+                "requires_internal_data": bool(data.get("requires_internal_data", False)),
+                "answer": str(data.get("answer", "") or "")[:600],
+            }
+    return None
 
 
 @dataclass
@@ -54,6 +92,16 @@ class ResearchResult:
     note: str = ""
     usage: LLMUsage | None = None
     answer_summary: str = ""
+    # Intégrité sémantique (B1) : des documents retournés ne sont pas une réponse. Le fournisseur
+    # déclare s'il a trouvé une réponse MATÉRIELLE à la question (`answer_found`) et si la question
+    # exige des données internes. `None` = non déclaré ⇒ jamais `found`.
+    answer_found: bool | None = None
+    requires_internal_data: bool = False
+    reason: str = ""
+
+    @property
+    def documents_returned(self) -> int:
+        return len(self.findings)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +109,10 @@ class ResearchResult:
             "status": self.status,
             "provider": self.provider,
             "findings": [f.to_dict() for f in self.findings],
+            "documents_returned": self.documents_returned,
+            "answer_found": self.answer_found,
+            "requires_internal_data": self.requires_internal_data,
+            "reason": self.reason,
             "note": self.note,
             "answer_summary": self.answer_summary,
             "usage": (
@@ -69,6 +121,42 @@ class ResearchResult:
                 else None
             ),
         }
+
+
+def classify_research_outcome(result: ResearchResult) -> tuple[ResearchStatus, str]:
+    """Statut déterministe d'une recherche : `found` exige une réponse matérielle déclarée.
+
+    Distingue : recherche exécutée sans source (`not_found`) ; documents retournés mais aucune
+    réponse matérielle (`not_found`, motif explicite) ; question exigeant des données internes
+    (`requires_internal_data`) ; réponse matérielle sourcée (`found`) ; panne (`error`) ;
+    fournisseur absent (`unavailable`). Les documents non probants restent tracés comme résultats
+    de recherche mais ne deviennent jamais une preuve `found`.
+    """
+    if result.status == "error":
+        return "error", result.reason or (result.note or "erreur du fournisseur")
+    if result.status == "unavailable":
+        return "unavailable", result.reason or "aucun fournisseur de recherche configuré"
+    if result.requires_internal_data:
+        return (
+            "requires_internal_data",
+            "la question exige des données internes ou non publiques : aucune source externe ne "
+            "peut y répondre",
+        )
+    if not result.findings:
+        return "not_found", result.reason or "aucune source citée"
+    if result.answer_found is None:
+        return (
+            "not_found",
+            f"{len(result.findings)} document(s) retourné(s) mais aucun verdict de réponse "
+            "déclaré par le fournisseur : non probant",
+        )
+    if not result.answer_found:
+        return (
+            "not_found",
+            f"{len(result.findings)} document(s) retourné(s) mais le fournisseur déclare "
+            "qu'aucune source ne répond matériellement à la question",
+        )
+    return "found", "réponse matérielle sourcée"
 
 
 class ResearchProvider(Protocol):
@@ -90,6 +178,7 @@ class UnavailableResearchProvider:
             status="unavailable",
             provider=self.name,
             note="aucun fournisseur de recherche configuré : la question reste une inconnue",
+            reason="aucun fournisseur de recherche configuré",
         )
 
 
@@ -118,7 +207,7 @@ class AnthropicWebSearchProvider:
                 system=(
                     "Tu réponds à UNE question factuelle en t'appuyant exclusivement sur des "
                     "sources web que tu cites. Si tu ne trouves pas de source, dis-le. N'invente "
-                    "aucune source, aucun chiffre, aucune date."
+                    "aucune source, aucun chiffre, aucune date. " + VERDICT_INSTRUCTION
                 ),
                 tools=[
                     {
@@ -135,6 +224,7 @@ class AnthropicWebSearchProvider:
                 status="error",
                 provider=self.name,
                 note=f"{type(exc).__name__}: {str(exc)[:200]}",
+                reason=f"{type(exc).__name__}",
             )
         usage_obj = getattr(message, "usage", None)
         usage = LLMUsage(
@@ -173,14 +263,22 @@ class AnthropicWebSearchProvider:
                             date=str(getattr(item, "page_age", "") or ""),
                         )
                     )
-        return ResearchResult(
+        full_text = "".join(texts)
+        verdict = parse_verdict(full_text)
+        result = ResearchResult(
             question=question,
-            status="found" if findings else "not_found",
+            status="not_found",
             provider=self.name,
             findings=findings,
             usage=usage,
-            answer_summary="".join(texts)[:1500],
+            answer_summary=(verdict["answer"] if verdict and verdict["answer"] else full_text)[
+                :1500
+            ],
+            answer_found=verdict["answer_found"] if verdict else None,
+            requires_internal_data=bool(verdict and verdict["requires_internal_data"]),
         )
+        result.status, result.reason = classify_research_outcome(result)
+        return result
 
 
 def build_research_provider(settings: Settings) -> ResearchProvider:

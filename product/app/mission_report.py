@@ -355,6 +355,10 @@ def _deliberation_summary(delib: dict[str, Any]) -> dict[str, Any]:
             }
             for f in delib.get("consolidation", {}).get("families", [])
         ],
+        "consolidation_status": delib.get("consolidation", {}).get("status", ""),
+        "unconsolidated_option_ids": delib.get("consolidation", {}).get(
+            "unconsolidated_option_ids", []
+        ),
         "not_merged_because": delib.get("consolidation", {}).get("not_merged_because", []),
         "consolidation_notes": delib.get("consolidation", {}).get("notes", []),
         "comparison": delib.get("comparison", {}),
@@ -453,6 +457,20 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
     )
     families = d.get("families", [])
     lines += ["", f"## 16. Familles stratégiques ({len(families)}) et comparaison"]
+    if d.get("consolidation_status") and d["consolidation_status"] != "ok":
+        lines.append(
+            f"- ⚠ Consolidation : statut **{d['consolidation_status']}**"
+            + (
+                f" — options non consolidées : {', '.join(d['unconsolidated_option_ids'])}"
+                if d.get("unconsolidated_option_ids")
+                else ""
+            )
+        )
+    comp_status = (d.get("comparison") or {}).get("status")
+    if comp_status and comp_status != "ok":
+        lines.append(f"- ⚠ Comparaison : statut **{comp_status}** (aucune comparaison valide)")
+    for nc in (d.get("comparison") or {}).get("not_compared", []):
+        lines.append(f"- Non comparée {nc['family_id']} {nc['label']} : {nc['reason']}")
     for f in families:
         lines.append(
             f"- **{f['family_id']}** {f['label']} [{f['kind']}] — options "
