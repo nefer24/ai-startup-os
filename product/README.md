@@ -895,21 +895,115 @@ parce qu'il améliore de façon mesurable T02, T04, T05, T06, T10, T13, T14, T23
    budget ; 14 champs présents, ceux non produisibles honnêtement marqués « non encore délibéré ».
    Aucune recommandation. Approbation / révision / rejet = actions CEO explicites, sans exécution.
 
-**Budget (défauts CEO)** : 12 appels LLM et 2,00 € par mission, `max_tokens` par type d'appel
-(plafonds de sortie dimensionnés avec marge : cadrage 8 000, expert 6 000, auto-qualification
-1 500, greffier 3 000 — une sortie coupée à `max_tokens` rend le JSON invalide ; le `stop_reason`
-du fournisseur est journalisé et une panne de cadrage met la mission en `failed` au lieu de
-produire un rapport `candidate` vide),
-**estimation avant chaque appel** et refus/arrêt propre si le plafond pourrait être dépassé, tokens et
-coût réels journalisés (`llm_call_logs` : colonnes `input_tokens`, `output_tokens`, `cost_eur`,
-`call_type`, `mission_id`). Un arrêt produit un **rapport partiel** cohérent.
+**Budget (incrément 1, historique)** : 12 appels LLM et 2,00 € par mission ; remplacé à
+l'incrément 2 par des **plafonds durs par classe** (voir ci-dessous). Inchangés : `max_tokens` par
+type d'appel (plafonds de sortie dimensionnés avec marge : cadrage 8 000, expert 6 000,
+auto-qualification 1 500, greffier 3 000 — une sortie coupée à `max_tokens` rend le JSON invalide ;
+le `stop_reason` du fournisseur est journalisé et une panne de cadrage met la mission en `failed`
+au lieu de produire un rapport `candidate` vide), **estimation avant chaque appel** et refus/arrêt
+propre si le plafond pourrait être dépassé, tokens et coût réels journalisés (`llm_call_logs` :
+colonnes `input_tokens`, `output_tokens`, `cost_eur`, `call_type`, `mission_id`). Un arrêt produit
+un **rapport partiel** cohérent.
 
 **Endpoints** : `POST /missions`, `GET /missions`, `GET /missions/{id}`,
 `GET /missions/{id}/journal`, `GET /missions/{id}/report/markdown`,
 `POST /missions/{id}/approve|request-revision|reject`. Onglet Streamlit « Missions (cadrage) ».
 
-**Ce que l'incrément ne fait pas** : recherche externe, tours de critique, steelman, révision sous
-preuve, porte qualité indépendante, classification automatique complète, exécution d'actions.
+**Ce que l'incrément 1 ne faisait pas** (couvert à l'incrément 2 ci-dessous) : recherche externe,
+tours de critique, steelman, révision sous preuve, porte qualité indépendante. Toujours hors
+périmètre : classification automatique complète, exécution d'actions.
+
+## OT-V1 — Incrément 2 : délibération probante → recommandation décisionnelle
+
+Second incrément construit à rebours des tests d'acceptation : il vise T06, T07, T08, T09, T10 et
+T11 en préservant T02, T04, T05, T12, T13, T14, T15, T23, T25 et T26. Après la cartographie de
+l'incrément 1, la mission enchaîne (`app/missions.py`, prompts et règles déterministes dans
+`app/mission_deliberation.py`, recherche dans `app/mission_research.py`) :
+
+1. **Confrontation** — chaque expert voit la carte (positions anonymisées P1…Pn, hypothèses,
+   objections, inconnues, preuves, options) et produit des **actes adressés à une position
+   identifiable** : `critique`, `defend`, `complement`, `refute`, `third_way`, ou `none`
+   (légitime : une convergence déclarée n'est pas un désaccord fabriqué). Les actes d'objection
+   forment un registre (`OBJ-n`, statut `open` / `addressed` / `inadmissible_strawman`). Aucune
+   instance multi-persona : un appel = une perspective.
+2. **Steelman** — requis pour `structurante` / `critique`, ou en cas de **convergence prématurée**
+   (aucune objection, divergence nulle, classe ≥ importante). Un contradicteur désigné **hors de la
+   position dominante** (angle critique de préférence) reconstruit la meilleure version de la
+   position, puis, séparément, ses scénarios d'échec et sa critique ; le tenant **reconnaît** (ou
+   non) la reformulation. Contrôles déterministes de strawman (trop court, sans force attribuée,
+   identique à la critique, vocabulaire dépréciatif) + reconnaissance `no` ⇒ `rejected_strawman` :
+   la critique devient inadmissible et la porte qualité échoue sur `steelman_done_if_required`.
+3. **Recherche ciblée** — déclenchée **uniquement** lorsqu'un acte de confrontation dépend d'un
+   fait vérifiable (`depends_on_fact` + `fact_question`) ou qu'une objection typée « fait » du
+   Tour 0 le demande ; questions dédoublonnées et plafonnées (`MISSION_MAX_RESEARCH_TASKS`).
+   Capacité générique derrière un **fournisseur remplaçable** (`MISSION_RESEARCH_PROVIDER` :
+   `none` par défaut = recherche déclarée indisponible, aucun appel, aucun coût ;
+   `anthropic_web_search` = outil web du fournisseur, résultats limités aux citations réelles).
+   Chaque résultat conserve question, source, date, extrait, fiabilité (`unknown` tant qu'aucune
+   règle ne la qualifie — jamais inventée), claim et positions concernées ; provenance des preuves
+   étiquetée `ceo_input` / `external` / `model_knowledge` / `inference` / `hypothesis`.
+4. **Révision** — seuls les experts ayant reçu une **information nouvelle** (objection adressée,
+   critique de steelman reconnue, preuve trouvée) sont appelés ; décision `maintain` / `modify` /
+   `nuance` / `abandon` avec la cause (`triggered_by`) et la trace position initiale → révisée.
+   Le Tour 0 reste immuable dans la cartographie. Un changement sans cause est marqué
+   `unexplained_change` ; jamais d'optimisation vers le changement d'avis.
+5. **Consolidation** — le greffier regroupe les options atomiques en **familles stratégiques** ;
+   règles déterministes : identifiants valides, **jamais de fusion entre natures différentes**
+   (une famille `build`+`buy` est scindée et journalisée), variantes et désaccords intra-famille
+   conservés, non-fusions motivées conservées, trace atomique → famille → variante.
+6. **Comparaison** — critères communs (noyau : résultat attendu, coût, délai, risque,
+   réversibilité, dépendances, preuves, inconnues ; le problème peut en appeler d'autres), chaque
+   appréciation qualitative avec sa **base** (`evidence` / `inference` / `hypothesis` / `unknown` /
+   `ceo_input` / `model_knowledge`). Schéma **sans score ni rang** (testé) ; le nombre de soutiens
+   n'est jamais un critère.
+7. **Synthèse en 14 champs** — synthétiseur distinct des perspectives : problème compris, objectif,
+   contraintes, hypothèses, options examinées, preuves étiquetées, arguments pour / contre,
+   risques, recommandation (`build` / `buy` / `integrate` / `simplify` / `test` / `wait` /
+   `do_nothing` / `abandon` / `other` — jamais obligé de recommander de construire), confiance
+   justifiée, désaccords résiduels, conditions de changement, prochaine action,
+   `information_insufficient`. Les désaccords résiduels du facilitateur sont **réinjectés
+   déterministement** : la synthèse ne peut pas les faire disparaître ; un désaccord de **valeurs**
+   lève `ceo_arbitration_required`.
+8. **Porte qualité** — instance distincte : `conclusion_follows_options`, `evidence_labeled`,
+   `minorities_preserved`, `steelman_done_if_required`, `no_forced_consensus`, `honest_about_gaps`
+   ; les contrôles déterministes priment sur l'avis de l'instance.
+
+**Gouvernance (Décision 026)** : les agents **recommandent**, ils ne décident jamais
+(`requires_ceo_decision = true`) ; `structurante` / `critique` ⇒ décision CEO obligatoire ; le
+rapport reste `candidate` ; aucune exécution, aucune chaîne Capability → Tool → Execution.
+
+**Budget adaptatif** : plafonds **durs** par classe, configurables (`MISSION_CEILING_CALLS_*`,
+`MISSION_CEILING_COST_*` ; défauts : courante 16 appels / 1,50 €, importante 30 / 3 €,
+structurante 60 / 8 €, critique 90 / 15 € — **écart déclaré** par rapport aux a priori du
+document canonique §6.1 pour `courante` et `importante`, à ratifier ou corriger par le CEO) ;
+surcharge CEO par mission **absolue** (l'escalade de classe ne la relève pas) ; sinon l'escalade au
+cadrage relève les plafonds jusqu'au couloir de la nouvelle classe. Plan à deux niveaux à la
+composition : `full_deliberation` (3 appels planifiés par expert + étapes transverses) ou
+`coverage_first` (la largeur du Tour 0 prime, la délibération ira aussi loin que possible).
+Cycle minimal vérifié avant de délibérer (une confrontation par position + 4 appels de synthèse),
+sinon arrêt explicite `deliberation_budget_insufficient` avec **demande de budget chiffrée** ;
+steelman, recherche et révision ne sont financés que si le cœur de synthèse reste finançable
+(`budget_reserved_for_synthesis`, journalisé). **Dimension critique non couverte** ⇒ arrêt
+`critical_dimension_uncovered` + demande de budget, jamais une fausse couverture. Aucune relance
+illimitée ; un refus = un arrêt propre + rapport partiel.
+
+**Arrêt de la délibération** (`deliberation.stop.reason`) : `converged`, `no_new_information`,
+`residual_only`, `ceo_decision_needed` (valeurs), `missing_external_info`, `budget`,
+`framing_failed`, `not_deliberated`.
+
+**Journal** : chaque appel (`call_planned` avec prompt complet et SHA-256, `call_done` avec tokens,
+coût, `stop_reason`), chaque acte, steelman / reconnaissance, recherche, révision, consolidation,
+comparaison, synthèse, porte, sauts d'étape et refus budgétaires.
+
+**Artefacts** : `Mission.deliberation_json`, `Mission.recommendation_json` (colonnes nullable
+ajoutées au démarrage) ; `GET /missions/{id}` expose `deliberation` et `recommendation` ; le
+rapport de situation remplit les 14 champs à partir de la recommandation lorsqu'elle existe
+(sinon marqueurs explicites) et ajoute les sections « Délibération (trace) », « Familles
+stratégiques et comparaison » ; encart de recommandation dans l'onglet Streamlit.
+
+**Ce que l'incrément 2 ne fait pas** : classification automatique complète (T16), protocole de
+profondeur, exécution d'actions, mémoire inter-missions, fournisseur de recherche autre que
+l'outil web du fournisseur (non exercé en CI : aucun réseau).
 
 **Client LLM** : `complete(prompt)` inchangé pour les phases 0–18 ; nouveau chemin
 `complete_structured(system, prompt, call_type, max_tokens)` retournant l'usage. Barème de coût

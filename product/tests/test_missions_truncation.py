@@ -8,7 +8,7 @@ Reproduit techniquement l'échec observé en évaluation : le fournisseur coupe 
   invalide) ;
 * n'enchaîne pas sur un cadrage fictif : la mission est `failed`, le rapport partiel, la réponse
   brute conservée ;
-* respecte toujours les plafonds de mission (12 appels, 2,00 €) avec les nouvelles marges de sortie.
+* respecte toujours les plafonds durs de la classe avec les marges de sortie par type d'appel.
 
 Fixtures purement synthétiques ; aucun cas réel, aucun banc d'essai.
 """
@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from app.config import Settings
 from app.llm import LLMClient, LLMResponse, LLMUsage
-from app.mission_budget import BudgetLedger
+from app.mission_budget import BudgetExceededError, BudgetLedger, class_ceilings
 from app.mission_exploration import EXPERT_SYSTEM
 from app.mission_framing import FRAMING_SYSTEM
 from app.mission_schemas import FramingOutput, parse_structured
@@ -120,7 +120,22 @@ class FailureModeLLM:
             return self._respond(self.expert_mode, EXPERT_OK, max_tokens)
         if call_type == "self_qualification":
             return self._respond("ok", {"relations": []}, max_tokens)
-        return self._respond("ok", {"groups": [], "disagreements": []}, max_tokens)
+        if call_type == "clerk":
+            return self._respond("ok", {"groups": [], "disagreements": []}, max_tokens)
+        # Incrément 2 : réponses neutres et valides pour les étapes de délibération.
+        return self._respond("ok", NEUTRAL_DELIBERATION[call_type], max_tokens)
+
+
+NEUTRAL_DELIBERATION: dict[str, dict[str, Any]] = {
+    "confrontation": {"acts": [], "convergence_note": "rien à opposer"},
+    "steelman": {"steelman": "x" * 100, "strengths": ["f"], "critique": "c"},
+    "steelman_recognition": {"recognized": "yes"},
+    "revision": {"decision": "maintain"},
+    "consolidation": {"families": []},
+    "comparison": {"criteria": [], "rows": []},
+    "synthesis": {"recommendation": {"kind": "test", "statement": "s"}},
+    "quality_gate": {"passed": True},
+}
 
 
 _CURRENT: dict[str, FailureModeLLM] = {}
@@ -233,44 +248,68 @@ def test_expert_truncation_is_labelled_and_mission_continues(
 
 
 # --- Marges de sortie et budget --------------------------------------------------------------
-def test_output_limits_leave_margin_and_budget_defaults_unchanged() -> None:
+def test_output_limits_leave_margin_and_class_ceilings_are_the_defaults() -> None:
     settings = Settings.model_construct()
-    assert settings.mission_max_llm_calls == 12
-    assert settings.mission_max_cost_eur == 2.0
+    # Incrément 2 : plafonds durs par classe (plus de plafond unique 12 appels / 2 €). Le couloir
+    # de la classe initiale « importante provisoire » est celui d'« importante ».
+    assert class_ceilings(settings, "importante_provisoire") == (30, 3.0)
+    assert class_ceilings(settings, "courante") == (16, 1.5)
+    assert class_ceilings(settings, "structurante") == (60, 8.0)
+    assert class_ceilings(settings, "critique") == (90, 15.0)
     assert settings.mission_max_tokens_framing >= 8000
     assert settings.mission_max_tokens_expert >= 6000
 
 
-def test_worst_case_upper_bounds_fit_in_two_euros() -> None:
-    """Même avec les marges de sortie élargies, une mission complète tient sous le plafond CEO."""
+def test_worst_case_upper_bounds_of_a_full_importante_deliberation_fit_in_the_ceiling() -> None:
+    """Même avec les marges de sortie, une délibération complète tient sous le plafond de classe."""
     settings = Settings.model_construct()
+    max_calls, max_cost = class_ceilings(settings, "importante_provisoire")
     ledger = BudgetLedger(
-        max_calls=settings.mission_max_llm_calls,
-        max_cost_eur=settings.mission_max_cost_eur,
+        max_calls=max_calls,
+        max_cost_eur=max_cost,
         price_in_per_mtok=settings.llm_price_input_eur_per_mtok,
         price_out_per_mtok=settings.llm_price_output_eur_per_mtok,
     )
     long_prompt = "x" * 12_000  # entrée + dossier généreux (≈ 4 000 tokens estimés)
+    # Plan « importante » : 5 experts sur tout le cycle (exposé, auto-qualification,
+    # confrontation, révision), greffier, steelman de contrôle de convergence + reconnaissance,
+    # 3 recherches, consolidation, comparaison, synthèse, porte qualité = 30 appels.
+    experts = 5
     plan = (
         [(FRAMING_SYSTEM, settings.mission_max_tokens_framing)]
-        + [(EXPERT_SYSTEM, settings.mission_max_tokens_expert)] * 5
-        + [("s", settings.mission_max_tokens_self_qualification)] * 5
+        + [(EXPERT_SYSTEM, settings.mission_max_tokens_expert)] * experts
+        + [("s", settings.mission_max_tokens_self_qualification)] * experts
         + [("c", settings.mission_max_tokens_clerk)]
+        + [("conf", settings.mission_max_tokens_confrontation)] * experts
+        + [
+            ("st", settings.mission_max_tokens_steelman),
+            ("rec", settings.mission_max_tokens_recognition),
+        ]
+        + [("res", settings.mission_max_tokens_research)] * settings.mission_max_research_tasks
+        + [("rev", settings.mission_max_tokens_revision)] * (experts - 1)
+        + [
+            ("cons", settings.mission_max_tokens_consolidation),
+            ("comp", settings.mission_max_tokens_comparison),
+            ("syn", settings.mission_max_tokens_synthesis),
+            ("gate", settings.mission_max_tokens_gate),
+        ]
     )
-    assert len(plan) == 12
+    assert len(plan) == 30 == max_calls
     total_upper_bound = sum(
         ledger.estimate_call_cost_eur(system, long_prompt, max_tokens)
         for system, max_tokens in plan
     )
-    assert total_upper_bound < settings.mission_max_cost_eur
-    # Et l'estimation avant appel reste bloquante : un 13e appel est refusé.
+    assert total_upper_bound < max_cost
+    # Et l'estimation avant appel reste bloquante : le 31e appel est refusé.
     for system, max_tokens in plan:
         ledger.check_before_call(
             system=system, prompt=long_prompt, max_tokens=max_tokens, call_type="t"
         )
         ledger.record(LLMUsage(input_tokens=4000, output_tokens=max_tokens // 2))
     assert ledger.remaining_calls == 0
-    assert ledger.cost_eur <= settings.mission_max_cost_eur
+    assert ledger.cost_eur <= max_cost
+    with pytest.raises(BudgetExceededError):
+        ledger.check_before_call(system="s", prompt="p", max_tokens=10, call_type="t")
 
 
 def test_format_instruction_is_the_only_prompt_change() -> None:

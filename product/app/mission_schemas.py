@@ -197,3 +197,205 @@ def parse_structured[T: BaseModel](raw: str, model: type[T]) -> tuple[T | None, 
         return model.model_validate(data), ""
     except ValueError as exc:  # pydantic.ValidationError hérite de ValueError
         return None, f"schema_invalide: {str(exc)[:300]}"
+
+
+# =====================================================================================
+# Incrément 2 — délibération probante : confrontation, steelman, recherche, révision,
+# consolidation, comparaison, recommandation, porte qualité.
+# =====================================================================================
+ConfrontationAct = Literal["critique", "defend", "complement", "refute", "third_way", "none"]
+RevisionDecision = Literal["maintain", "modify", "nuance", "abandon"]
+Recognition = Literal["yes", "partial", "no"]
+RecommendationKind = Literal[
+    "build", "buy", "integrate", "simplify", "test", "wait", "do_nothing", "abandon", "other"
+]
+Provenance = Literal["ceo_input", "external", "model_knowledge", "inference", "hypothesis"]
+Basis = Literal["evidence", "inference", "hypothesis", "unknown", "ceo_input", "model_knowledge"]
+Confidence = Literal["low", "medium", "high"]
+
+
+class ConfrontationActOut(_Lenient):
+    """Un acte de confrontation adressé à une position identifiable (ou `none`)."""
+
+    act: ConfrontationAct = "none"
+    target: str = ""  # label de position anonymisé (P2…) ou "" pour `none` / `third_way`
+    nature: DisagreementNature = "other"
+    text: str = ""
+    depends_on_fact: bool = False
+    fact_question: str = ""
+
+
+class ConfrontationOutput(_Lenient):
+    """Sortie de la confrontation d'un expert : zéro acte est une sortie légitime."""
+
+    acts: list[ConfrontationActOut] = Field(default_factory=list)
+    convergence_note: str = ""
+
+    @property
+    def objections(self) -> list[ConfrontationActOut]:
+        """Actes qui contestent une position (critique, réfutation, troisième voie)."""
+        return [a for a in self.acts if a.act in {"critique", "refute", "third_way"}]
+
+
+class SteelmanOutput(_Lenient):
+    """Steelman : meilleure version de la position dominante, PUIS critique — séparés."""
+
+    target: str = ""
+    steelman: str = ""
+    strengths: list[str] = Field(default_factory=list)
+    failure_scenarios: list[str] = Field(default_factory=list)
+    critique: str = ""
+
+
+class RecognitionOutput(_Lenient):
+    """Le tenant de la position dit si le steelman la représente fidèlement."""
+
+    recognized: Recognition = "no"
+    missing_points: list[str] = Field(default_factory=list)
+    comment: str = ""
+
+
+class RevisionOutput(_Lenient):
+    """Révision d'une position après confrontation / preuve : maintenir, modifier, nuancer,
+    abandonner.
+    """
+
+    decision: RevisionDecision = "maintain"
+    revised_position: str = ""
+    reason: str = ""
+    triggered_by: list[str] = Field(default_factory=list)
+
+
+class VariantOut(_Lenient):
+    """Variante conservée à l'intérieur d'une famille stratégique."""
+
+    option_id: str
+    difference: str = ""
+
+
+class StrategyFamilyOut(_Lenient):
+    """Famille stratégique : options réellement équivalentes, variantes et désaccords internes."""
+
+    family_id: str = ""
+    label: str
+    kind: OptionKind = "other"
+    option_ids: list[str] = Field(default_factory=list)
+    variants: list[VariantOut] = Field(default_factory=list)
+    internal_disagreements: list[str] = Field(default_factory=list)
+
+
+class NotMergedOut(_Lenient):
+    """Deux options proches mais réellement différentes, non fusionnées — avec la raison."""
+
+    option_ids: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+
+class ConsolidationOutput(_Lenient):
+    """Consolidation traçable : propositions atomiques → familles → variantes."""
+
+    families: list[StrategyFamilyOut] = Field(default_factory=list)
+    not_merged_because: list[NotMergedOut] = Field(default_factory=list)
+
+
+class CriterionAssessmentOut(_Lenient):
+    """Appréciation qualitative d'un critère, avec la base de l'appréciation."""
+
+    value: str = ""
+    basis: Basis = "unknown"
+
+
+class ComparisonRowOut(_Lenient):
+    """Ligne de comparaison d'une famille sur les critères communs."""
+
+    family_id: str
+    assessments: dict[str, CriterionAssessmentOut] = Field(default_factory=dict)
+
+
+class ComparisonOutput(_Lenient):
+    """Comparaison sur critères communs. Aucun score numérique : des appréciations fondées."""
+
+    criteria: list[str] = Field(default_factory=list)
+    rows: list[ComparisonRowOut] = Field(default_factory=list)
+    notes: str = ""
+
+
+class AssumptionOut(_Lenient):
+    text: str
+    status: Literal["verified", "unverified"] = "unverified"
+
+
+class EvidenceRefOut(_Lenient):
+    claim: str
+    source: str = ""
+    reliability: str = ""
+    provenance: Provenance = "model_knowledge"
+
+    @model_validator(mode="after")
+    def _external_requires_source(self) -> EvidenceRefOut:
+        if self.provenance == "external" and not self.source.strip():
+            self.provenance = "model_knowledge"
+        return self
+
+
+class RecommendedOptionOut(_Lenient):
+    family_id: str = ""
+    label: str = ""
+    kind: OptionKind = "other"
+
+
+class RecommendationCoreOut(_Lenient):
+    kind: RecommendationKind = "other"
+    family_id: str = ""
+    statement: str = ""
+    rationale: str = ""
+
+
+class ConfidenceOut(_Lenient):
+    level: Confidence = "low"
+    justification: str = ""
+
+
+class ResidualDisagreementOut(_Lenient):
+    between: list[str] = Field(default_factory=list)
+    nature: DisagreementNature = "other"
+    description: str = ""
+
+
+class RecommendationOutput(_Lenient):
+    """Contrat canonique en 14 champs (Décision 026 / document canonique §6.3)."""
+
+    problem_understood: str = ""
+    objective: str = ""
+    constraints: list[str] = Field(default_factory=list)
+    assumptions: list[AssumptionOut] = Field(default_factory=list)
+    options: list[RecommendedOptionOut] = Field(default_factory=list)
+    evidence: list[EvidenceRefOut] = Field(default_factory=list)
+    advantages: list[str] = Field(default_factory=list)
+    disadvantages: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommendation: RecommendationCoreOut = Field(default_factory=RecommendationCoreOut)
+    confidence: ConfidenceOut = Field(default_factory=ConfidenceOut)
+    residual_disagreements: list[ResidualDisagreementOut] = Field(default_factory=list)
+    change_conditions: list[str] = Field(default_factory=list)
+    next_action: str = ""
+    information_insufficient: bool = False
+
+
+class GateOutput(_Lenient):
+    """Porte qualité tenue par une instance distincte de la synthèse : contrôle, pas réécriture."""
+
+    passed: bool = False
+    checks: dict[str, bool] = Field(default_factory=dict)
+    issues: list[str] = Field(default_factory=list)
+
+
+FORBIDDEN_COMPARISON_FIELDS = frozenset({"score", "scores", "rank", "ranking", "winner", "best"})
+
+
+def comparison_schema_field_names() -> set[str]:
+    """Noms de champs (récursifs) du schéma de comparaison — pour attester l'absence de scores."""
+    names: set[str] = set()
+    for model in (ComparisonOutput, ComparisonRowOut, CriterionAssessmentOut):
+        names.update(model.model_fields.keys())
+    return names

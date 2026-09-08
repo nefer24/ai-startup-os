@@ -101,6 +101,16 @@ class BudgetLedger:
         available = self.remaining_calls - reserved_calls
         return max(0, available // max(1, calls_per_expert))
 
+    def raise_caps(self, max_calls: int, max_cost_eur: float) -> dict[str, Any]:
+        """Relève les plafonds (jamais à la baisse) — escalade de classe sans surcharge CEO."""
+        before = {"max_calls": self.max_calls, "max_cost_eur": self.max_cost_eur}
+        self.max_calls = max(self.max_calls, max_calls)
+        self.max_cost_eur = max(self.max_cost_eur, max_cost_eur)
+        return {
+            "before": before,
+            "after": {"max_calls": self.max_calls, "max_cost_eur": self.max_cost_eur},
+        }
+
     def snapshot(self) -> dict[str, Any]:
         """État du budget pour le journal et le rapport."""
         return {
@@ -114,3 +124,69 @@ class BudgetLedger:
             "remaining_cost_eur": self.remaining_cost_eur,
             "refusals": list(self.refusals),
         }
+
+
+# =====================================================================================
+# Incrément 2 — budget adaptatif : plafonds durs par classe, réservation des étapes aval.
+# =====================================================================================
+# Appels par expert planifiés pour une délibération complète : exposé (Tour 0),
+# auto-qualification, confrontation. La révision est conditionnelle (seulement si une information
+# nouvelle est adressée à la perspective) : elle est financée sur le budget restant, sous réserve du
+# cœur de synthèse (`SYNTHESIS_CORE_CALLS`). Les étapes transverses (greffier, steelman +
+# reconnaissance, recherches, consolidation, comparaison, synthèse, porte qualité) sont réservées
+# à part.
+CALLS_PER_EXPERT = 3
+# Cœur de synthèse : consolidation, comparaison, synthèse, porte qualité. Les étapes optionnelles
+# (steelman, recherche, révision) ne sont financées que si ce cœur reste finançable après elles.
+SYNTHESIS_CORE_CALLS = 4
+CLASS_ORDER = ["courante", "importante", "structurante", "critique"]
+
+
+def normalize_class(effective_class: str) -> str:
+    """`importante_provisoire` est traitée comme `importante` pour les plafonds."""
+    return "importante" if effective_class == "importante_provisoire" else effective_class
+
+
+def class_ceilings(settings: Any, effective_class: str) -> tuple[int, float]:
+    """Plafonds durs (appels, euros) de la classe — configurables, jamais dépassés."""
+    cls = normalize_class(effective_class)
+    calls = int(getattr(settings, f"mission_ceiling_calls_{cls}", 30))
+    cost = float(getattr(settings, f"mission_ceiling_cost_{cls}", 3.0))
+    return calls, cost
+
+
+def plan_budget(
+    *,
+    effective_class: str,
+    settings: Any,
+    override_calls: int | None,
+    override_cost: float | None,
+) -> tuple[int, float, str]:
+    """Plafonds de la mission : surcharge CEO absolue si fournie, sinon plafonds de la classe.
+
+    Le budget **tient compte de la classe** (et donc de son escalade au cadrage) ; la divergence,
+    l'incertitude et le besoin de recherche jouent ensuite à l'intérieur de ce couloir (étapes
+    déclenchées ou non), jamais au-delà. Ce ne sont pas des cibles à consommer.
+    """
+    ceiling_calls, ceiling_cost = class_ceilings(settings, effective_class)
+    if override_calls is not None or override_cost is not None:
+        return (
+            override_calls if override_calls is not None else ceiling_calls,
+            override_cost if override_cost is not None else ceiling_cost,
+            "ceo_override",
+        )
+    return ceiling_calls, ceiling_cost, "class_ceiling"
+
+
+def reserved_downstream_calls(effective_class: str, research_cap: int) -> int:
+    """Appels réservés aux étapes transverses, selon la classe (ordre de grandeur, pas une
+    cible).
+    """
+    cls = normalize_class(effective_class)
+    reserved = 1  # greffier (cartographie)
+    if cls in {"structurante", "critique"}:
+        reserved += 2  # steelman + reconnaissance
+    if cls != "courante":
+        reserved += max(0, research_cap)
+    reserved += SYNTHESIS_CORE_CALLS
+    return reserved

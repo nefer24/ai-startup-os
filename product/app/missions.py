@@ -19,9 +19,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.db import Mission, MissionJournalEntry
+from app.db import LLMCallLog, Mission, MissionJournalEntry
 from app.llm import LLMClient, LLMResponse
-from app.mission_budget import BudgetExceededError, BudgetLedger
+from app.mission_budget import (
+    CALLS_PER_EXPERT,
+    SYNTHESIS_CORE_CALLS,
+    BudgetExceededError,
+    BudgetLedger,
+    plan_budget,
+    reserved_downstream_calls,
+)
 from app.mission_cartography import (
     anonymize_labels,
     build_cartography,
@@ -30,6 +37,39 @@ from app.mission_cartography import (
     residual_ambiguities,
 )
 from app.mission_composition import ExpertSpec, compose
+from app.mission_deliberation import (
+    COMPARISON_CALL_TYPE,
+    COMPARISON_SYSTEM,
+    CONFRONTATION_CALL_TYPE,
+    CONFRONTATION_SYSTEM,
+    CONSOLIDATION_CALL_TYPE,
+    CONSOLIDATION_SYSTEM,
+    CRITICAL_ANGLE_TITLES,
+    GATE_CALL_TYPE,
+    GATE_SYSTEM,
+    RECOGNITION_CALL_TYPE,
+    RECOGNITION_SYSTEM,
+    REVISION_CALL_TYPE,
+    REVISION_SYSTEM,
+    STEELMAN_CALL_TYPE,
+    STEELMAN_CLASSES,
+    STEELMAN_SYSTEM,
+    SYNTHESIS_CALL_TYPE,
+    SYNTHESIS_SYSTEM,
+    build_comparison_prompt,
+    build_confrontation_prompt,
+    build_consolidation_prompt,
+    build_gate_prompt,
+    build_map_view,
+    build_recognition_prompt,
+    build_revision_prompt,
+    build_steelman_prompt,
+    build_synthesis_prompt,
+    is_premature_convergence,
+    material_fact_questions,
+    select_contradictor,
+    strawman_flags,
+)
 from app.mission_exploration import (
     CLERK_CALL_TYPE,
     CLERK_SYSTEM,
@@ -49,11 +89,20 @@ from app.mission_framing import (
     framing_summary_for_experts,
 )
 from app.mission_report import build_situation_report
+from app.mission_research import RESEARCH_CALL_TYPE, build_research_provider
 from app.mission_schemas import (
     ClerkOutput,
+    ComparisonOutput,
+    ConfrontationOutput,
+    ConsolidationOutput,
     ExpertOutput,
     FramingOutput,
+    GateOutput,
+    RecognitionOutput,
+    RecommendationOutput,
+    RevisionOutput,
     SelfQualificationOutput,
+    SteelmanOutput,
     parse_structured,
 )
 from app.observability import observed
@@ -106,6 +155,23 @@ class _Run:
     self_qual: dict[str, SelfQualificationOutput | None] = field(default_factory=dict)
     clerk: ClerkOutput | None = None
     stop_reason: str = ""
+    budget_source: str = "class_ceiling"
+    cartography: dict[str, Any] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
+    confrontations: dict[str, ConfrontationOutput | None] = field(default_factory=dict)
+    objections: list[dict[str, Any]] = field(default_factory=list)
+    steelman: dict[str, Any] = field(default_factory=dict)
+    research: list[dict[str, Any]] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
+    revisions: list[dict[str, Any]] = field(default_factory=list)
+    current_positions: dict[str, str] = field(default_factory=dict)
+    consolidation: dict[str, Any] = field(default_factory=dict)
+    comparison: dict[str, Any] = field(default_factory=dict)
+    recommendation: dict[str, Any] = field(default_factory=dict)
+    gate: dict[str, Any] = field(default_factory=dict)
+    steps_done: list[str] = field(default_factory=list)
+    steps_skipped: list[dict[str, str]] = field(default_factory=list)
+    budget_request: dict[str, Any] = field(default_factory=dict)
 
 
 def _journal(
@@ -314,9 +380,15 @@ def run_mission(
         effective_class=declared or PROVISIONAL_CLASS,
         class_is_provisional=not declared,
         status="running",
-        max_llm_calls=request.max_llm_calls or settings.mission_max_llm_calls,
-        max_cost_eur=request.max_cost_eur or settings.mission_max_cost_eur,
     )
+    planned_calls, planned_cost, budget_source = plan_budget(
+        effective_class=mission.effective_class,
+        settings=settings,
+        override_calls=request.max_llm_calls,
+        override_cost=request.max_cost_eur,
+    )
+    mission.max_llm_calls = planned_calls
+    mission.max_cost_eur = planned_cost
     session.add(mission)
     session.commit()
     session.refresh(mission)
@@ -328,6 +400,7 @@ def run_mission(
             price_in_per_mtok=settings.llm_price_input_eur_per_mtok,
             price_out_per_mtok=settings.llm_price_output_eur_per_mtok,
         ),
+        budget_source=budget_source,
     )
     _journal(
         session,
@@ -339,12 +412,14 @@ def run_mission(
             "input_type": mission.input_type,
             "effective_class": mission.effective_class,
             "class_is_provisional": mission.class_is_provisional,
+            "budget_source": budget_source,
             "budget": run.ledger.snapshot(),
         },
     )
     try:
         _step_framing(session, run, llm, settings)
         class_info = _escalate_class(session, run)
+        _apply_budget_plan_after_escalation(session, run, settings)
         if run.framing is None:
             # Arrêt réel : sans cadrage valide (panne de parsing ou appel refusé par le budget),
             # aucune composition fictive, aucun Tour 0, aucune auto-qualification, aucun greffier,
@@ -365,9 +440,21 @@ def run_mission(
             )
         else:
             _step_composition(session, run, settings)
+            _check_uncovered_critical_dimension(session, run)
             _step_tour0(session, run, llm, settings)
             _step_self_qualification(session, run, llm, settings)
             _step_clerk(session, run, llm, settings)
+            _build_interim_cartography(run)
+            # Incrément 2 — délibération probante (chaque étape se saute proprement sous budget).
+            _check_deliberation_affordable(session, run)
+            _step_confrontation(session, run, llm, settings)
+            _step_steelman(session, run, llm, settings)
+            _step_research(session, run, llm, settings)
+            _step_revision(session, run, llm, settings)
+            _step_consolidation(session, run, llm, settings)
+            _step_comparison(session, run, llm, settings)
+            _step_synthesis(session, run, llm, settings)
+            _step_gate(session, run, llm, settings)
         _finalize(session, run, class_info)
     except Exception as exc:
         mission.status = "failed"
@@ -457,7 +544,24 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
 def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
     m = run.mission
     framing = run.framing or FramingOutput(problem_understood=m.input_text[:500])
-    max_experts = run.ledger.max_affordable_experts(reserved_calls=1)
+    # Plan budgétaire à deux niveaux (incrément 2). Niveau 1 : réserver toute la délibération
+    # (4 appels par expert + étapes transverses de la classe). Si ce niveau ne finance pas au
+    # moins une perspective par dimension émergente (et deux au total), la couverture du Tour 0
+    # prime : niveau 2 = réservation minimale de l'incrément 1 (greffier ; 2 appels par expert),
+    # et la délibération n'ira qu'aussi loin que le budget le permet — arrêt partiel explicite,
+    # jamais une « délibération » d'une seule perspective présentée comme probante.
+    reserved_full = reserved_downstream_calls(
+        m.effective_class, settings.mission_max_research_tasks
+    )
+    n_full = run.ledger.max_affordable_experts(
+        reserved_calls=reserved_full, calls_per_expert=CALLS_PER_EXPERT
+    )
+    n_coverage = run.ledger.max_affordable_experts(reserved_calls=1, calls_per_expert=2)
+    needed = max(2, len(framing.dimensions))
+    if n_full >= needed:
+        max_experts, budget_plan = n_full, "full_deliberation"
+    else:
+        max_experts, budget_plan = n_coverage, "coverage_first"
     result = compose(
         framing,
         effective_class=m.effective_class,
@@ -465,8 +569,35 @@ def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
         max_angles_per_cell=settings.mission_max_angles_per_cell,
         max_experts=max_experts,
     )
+    result.bounds.update(
+        {
+            "budget_plan": budget_plan,
+            "reserved_downstream_calls": reserved_full,
+            "calls_per_expert_full_deliberation": CALLS_PER_EXPERT,
+            "max_experts_full_deliberation": n_full,
+            "max_experts_coverage_first": n_coverage,
+        }
+    )
     run.experts = result.experts
     run.composition = result.to_dict()
+    if budget_plan == "coverage_first":
+        _journal(
+            session,
+            run,
+            "composition",
+            "budget_plan_coverage_first",
+            "facilitateur",
+            {
+                "detail": (
+                    "le plafond ne finance pas une délibération complète sur toutes les "
+                    "dimensions émergentes : la couverture du Tour 0 est privilégiée ; la "
+                    "délibération ira aussi loin que le budget le permet (arrêt partiel explicite)"
+                ),
+                "max_experts_full_deliberation": n_full,
+                "max_experts_coverage_first": n_coverage,
+                "budget": run.ledger.snapshot(),
+            },
+        )
     if not result.experts and not run.stop_reason:
         run.stop_reason = "budget_insufficient_for_exploration"
         _journal(
@@ -692,10 +823,15 @@ def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings)
 
 def _finalize(session: Session, run: _Run, class_info: dict[str, Any]) -> None:
     m = run.mission
-    answered = [r for r in run.expert_results if r["output"] is not None]
-    labels = anonymize_labels([r["expert_id"] for r in answered])
-    cartography = build_cartography(
-        expert_results=run.expert_results, self_qual=run.self_qual, clerk=run.clerk, labels=labels
+    if not run.cartography:
+        _build_interim_cartography(run)
+    cartography = run.cartography
+    deliberation = _deliberation_payload(run)
+    m.deliberation_json = json.dumps(deliberation, ensure_ascii=False, default=str)
+    m.recommendation_json = (
+        json.dumps(run.recommendation, ensure_ascii=False, default=str)
+        if run.recommendation
+        else ""
     )
     report = build_situation_report(
         mission_id=m.id,
@@ -708,6 +844,8 @@ def _finalize(session: Session, run: _Run, class_info: dict[str, Any]) -> None:
         cartography=cartography,
         budget=run.ledger.snapshot(),
         stop_reason=run.stop_reason,
+        deliberation=deliberation,
+        recommendation=run.recommendation or None,
     )
     # Une panne de cadrage n'est pas un rapport candidat : la mission est `failed`, le rapport
     # partiel et la réponse brute restent disponibles pour le diagnostic.
@@ -731,6 +869,1156 @@ def _finalize(session: Session, run: _Run, class_info: dict[str, Any]) -> None:
             "budget": run.ledger.snapshot(),
         },
     )
+
+
+# =====================================================================================
+# Incrément 2 — délibération probante → recommandation décisionnelle
+# =====================================================================================
+BUDGET_STOP_REASONS = frozenset(
+    {
+        "max_calls_reached",
+        "cost_cap_would_be_exceeded",
+        "budget_insufficient_for_exploration",
+        "deliberation_budget_insufficient",
+    }
+)
+OBJECTION_ACTS = frozenset({"critique", "refute", "third_way", "steelman_critique"})
+
+
+def _apply_budget_plan_after_escalation(session: Session, run: _Run, settings: Settings) -> None:
+    """Après escalade de classe, relever les plafonds jusqu'au couloir de la nouvelle classe.
+
+    Jamais à la baisse ; jamais au-delà d'une surcharge CEO (absolue).
+    """
+    m = run.mission
+    if run.budget_source == "ceo_override":
+        return
+    calls, cost, _ = plan_budget(
+        effective_class=m.effective_class,
+        settings=settings,
+        override_calls=None,
+        override_cost=None,
+    )
+    if calls > run.ledger.max_calls or cost > run.ledger.max_cost_eur:
+        change = run.ledger.raise_caps(calls, cost)
+        m.max_llm_calls = run.ledger.max_calls
+        m.max_cost_eur = run.ledger.max_cost_eur
+        session.commit()
+        _journal(
+            session,
+            run,
+            "budget",
+            "caps_raised_after_escalation",
+            "facilitateur",
+            {"effective_class": m.effective_class, **change},
+        )
+
+
+def _skip(session: Session, run: _Run, step: str, reason: str) -> None:
+    run.steps_skipped.append({"step": step, "reason": reason})
+    _journal(session, run, step, "skipped", "facilitateur", {"reason": reason})
+
+
+def _answered(run: _Run) -> list[dict[str, Any]]:
+    return [r for r in run.expert_results if r["output"] is not None]
+
+
+def _check_uncovered_critical_dimension(session: Session, run: _Run) -> None:
+    """Une dimension critique non couverte faute de budget n'est jamais une fausse couverture."""
+    if run.stop_reason or run.framing is None:
+        return
+    critical = {d.name for d in run.framing.dimensions if d.presumed_criticality == "high"}
+    uncovered = [d for d in run.composition.get("uncovered_dimensions", []) if d in critical]
+    if not uncovered:
+        return
+    run.stop_reason = "critical_dimension_uncovered"
+    run.budget_request = {
+        "uncovered_critical_dimensions": uncovered,
+        "additional_calls_estimate": len(uncovered) * CALLS_PER_EXPERT,
+        "current_max_calls": run.ledger.max_calls,
+        "current_max_cost_eur": run.ledger.max_cost_eur,
+        "advice": (
+            "relever le plafond de la mission ou réduire son périmètre ; la mission s'arrête "
+            "plutôt que d'ignorer silencieusement une dimension critique"
+        ),
+    }
+    _journal(
+        session,
+        run,
+        "composition",
+        "critical_dimension_uncovered",
+        "facilitateur",
+        {**run.budget_request, "budget": run.ledger.snapshot()},
+    )
+
+
+def _build_interim_cartography(run: _Run) -> None:
+    answered = _answered(run)
+    run.labels = anonymize_labels([r["expert_id"] for r in answered])
+    run.cartography = build_cartography(
+        expert_results=run.expert_results,
+        self_qual=run.self_qual,
+        clerk=run.clerk,
+        labels=run.labels,
+    )
+    run.current_positions = {r["expert_id"]: r["output"].position for r in answered}
+
+
+def _needs_two_positions(session: Session, run: _Run, step: str) -> bool:
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return False
+    if len(_answered(run)) < 2:
+        _skip(session, run, step, "moins de deux positions : rien à confronter")
+        return False
+    return True
+
+
+def _check_deliberation_affordable(session: Session, run: _Run) -> None:
+    """Avant d'entamer la délibération : le budget restant finance-t-il un cycle minimal ?
+
+    Cycle minimal = une confrontation par position exprimée + consolidation, comparaison,
+    synthèse et porte qualité. Sinon la délibération n'est pas entamée « pour voir » : arrêt
+    partiel explicite (`deliberation_budget_insufficient`), rapport de situation conservé, et
+    la demande de budget chiffrée est journalisée. Aucune relance illimitée.
+    """
+    if run.stop_reason:
+        return
+    answered = len(_answered(run))
+    if answered < 2:
+        return
+    minimal = answered + 4
+    if run.ledger.remaining_calls >= minimal:
+        return
+    run.stop_reason = "deliberation_budget_insufficient"
+    for step in (
+        "confrontation",
+        "steelman",
+        "recherche",
+        "revision",
+        "consolidation",
+        "comparaison",
+        "synthese",
+        "porte_qualite",
+    ):
+        run.steps_skipped.append({"step": step, "reason": "budget insuffisant pour délibérer"})
+    run.budget_request = {
+        "minimal_deliberation_calls": minimal,
+        "remaining_calls": run.ledger.remaining_calls,
+        "additional_calls_estimate": minimal - run.ledger.remaining_calls,
+        "current_max_calls": run.ledger.max_calls,
+        "current_max_cost_eur": run.ledger.max_cost_eur,
+        "advice": (
+            "relever le plafond d'appels de la mission pour délibérer sur les positions "
+            "rassemblées ; le rapport de situation (Tour 0) reste exploitable tel quel"
+        ),
+    }
+    _journal(
+        session,
+        run,
+        "deliberation",
+        "budget_insufficient",
+        "facilitateur",
+        {**run.budget_request, "budget": run.ledger.snapshot()},
+    )
+
+
+def _can_spend(session: Session, run: _Run, step: str, calls_needed: int, what: str) -> bool:
+    """Une étape optionnelle n'est financée que si le cœur de synthèse reste finançable après.
+
+    Priorité explicite : largeur du Tour 0 → confrontation → (steelman, recherche, révision si
+    le budget le permet) → consolidation, comparaison, synthèse, porte qualité. Un refus est
+    journalisé ; il n'y a ni relance ni file d'attente.
+    """
+    if run.ledger.remaining_calls - calls_needed >= SYNTHESIS_CORE_CALLS:
+        return True
+    _journal(
+        session,
+        run,
+        step,
+        "budget_reserved_for_synthesis",
+        "facilitateur",
+        {
+            "skipped": what,
+            "calls_needed": calls_needed,
+            "remaining_calls": run.ledger.remaining_calls,
+            "synthesis_core_calls": SYNTHESIS_CORE_CALLS,
+        },
+    )
+    return False
+
+
+# --- C. Confrontation -----------------------------------------------------------------------
+def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "confrontation"
+    if not _needs_two_positions(session, run, step):
+        return
+    label_to_expert = {v: k for k, v in run.labels.items()}
+    for r in _answered(run):
+        if run.stop_reason:
+            break
+        own_label = run.labels[r["expert_id"]]
+        prompt = build_confrontation_prompt(
+            own_label=own_label,
+            own_position=r["output"].position,
+            map_view=build_map_view(run.cartography, exclude_label=own_label),
+        )
+        response = _call(
+            session,
+            run,
+            llm,
+            settings,
+            step=step,
+            actor=r["expert_id"],
+            system=CONFRONTATION_SYSTEM,
+            prompt=prompt,
+            call_type=CONFRONTATION_CALL_TYPE,
+            max_tokens=settings.mission_max_tokens_confrontation,
+        )
+        if response is None:
+            break
+        output, error = parse_structured(response.text, ConfrontationOutput)
+        error = _classify_parse_error(response, error)
+        run.confrontations[r["expert_id"]] = output
+        registered: list[str] = []
+        if output is not None:
+            for act in output.acts:
+                if act.act == "none" or not act.text.strip():
+                    continue
+                obj_id = f"OBJ-{len(run.objections) + 1}"
+                run.objections.append(
+                    {
+                        "id": obj_id,
+                        "from": own_label,
+                        "from_expert": r["expert_id"],
+                        "target": act.target,
+                        "target_expert": label_to_expert.get(act.target, ""),
+                        "act": act.act,
+                        "nature": act.nature,
+                        "text": act.text,
+                        "depends_on_fact": act.depends_on_fact,
+                        "fact_question": act.fact_question,
+                        "status": "open" if act.act in OBJECTION_ACTS else "n/a",
+                    }
+                )
+                registered.append(obj_id)
+        _journal(
+            session,
+            run,
+            step,
+            "result",
+            r["expert_id"],
+            {
+                "parse_error": error,
+                "acts_registered": registered,
+                "act_count": len(output.acts) if output else 0,
+                "convergence_note": output.convergence_note if output else "",
+            },
+        )
+    run.steps_done.append(step)
+
+
+# --- D. Steelman ------------------------------------------------------------------------------
+def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "steelman"
+    m = run.mission
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    answered = _answered(run)
+    open_objections = [o for o in run.objections if o["status"] == "open"]
+    required_by_class = m.effective_class in STEELMAN_CLASSES
+    premature = is_premature_convergence(
+        effective_class=m.effective_class,
+        divergence_index=float(run.cartography.get("divergence_index", 0.0)),
+        objection_count=len(open_objections),
+    )
+    run.steelman = {
+        "required": required_by_class or premature,
+        "reason": (
+            "classe structurante/critique"
+            if required_by_class
+            else ("convergence prématurée" if premature else "")
+        ),
+        "status": "not_required",
+    }
+    if not run.steelman["required"]:
+        _journal(session, run, step, "not_required", "facilitateur", dict(run.steelman))
+        return
+    if len(answered) < 2:
+        run.steelman["status"] = "impossible_single_position"
+        _skip(session, run, step, "une seule position : aucun contradicteur possible")
+        return
+    if not _can_spend(session, run, step, 2, "steelman + reconnaissance"):
+        run.steelman["status"] = "budget_reserved_for_synthesis"
+        _skip(session, run, step, "budget réservé au cœur de synthèse : steelman non financé")
+        return
+    clusters = run.cartography.get("position_clusters") or [[r["expert_id"] for r in answered]]
+    dominant = list(clusters[0])
+    target_expert = dominant[0]
+    experts_view = [{"expert_id": r["expert_id"], "angle": r["angle"]} for r in answered]
+    contradictor = select_contradictor(experts_view, dominant, run.labels)
+    if contradictor is None:
+        # Unanimité : le contradicteur est désigné hors du tenant, angle critique de préférence.
+        others = [e for e in experts_view if e["expert_id"] != target_expert]
+        critical = [e for e in others if e["angle"] in CRITICAL_ANGLE_TITLES]
+        contradictor = str((critical or others)[0]["expert_id"])
+    target = next(r for r in answered if r["expert_id"] == target_expert)
+    target_args = " ; ".join(
+        [target["output"].reasoning, *list(target["output"].assumptions)]
+    ).strip(" ;")
+    run.steelman.update(
+        {
+            "target_expert": target_expert,
+            "target": run.labels[target_expert],
+            "contradictor_expert": contradictor,
+            "contradictor": run.labels[contradictor],
+            "dominant_cluster": [run.labels[e] for e in dominant],
+        }
+    )
+    response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor=contradictor,
+        system=STEELMAN_SYSTEM,
+        prompt=build_steelman_prompt(
+            contradictor_label=run.labels[contradictor],
+            target_label=run.labels[target_expert],
+            target_position=target["output"].position,
+            target_arguments=target_args,
+        ),
+        call_type=STEELMAN_CALL_TYPE,
+        max_tokens=settings.mission_max_tokens_steelman,
+    )
+    if response is None:
+        run.steelman["status"] = "budget_stop"
+        return
+    output, error = parse_structured(response.text, SteelmanOutput)
+    error = _classify_parse_error(response, error)
+    if output is None:
+        run.steelman.update({"status": "failed", "parse_error": error})
+        _journal(session, run, step, "failed", contradictor, {"parse_error": error})
+        return
+    flags = strawman_flags(output)
+    run.steelman.update(
+        {
+            "steelman": output.steelman,
+            "strengths": output.strengths,
+            "failure_scenarios": output.failure_scenarios,
+            "critique": output.critique,
+            "strawman_flags": flags,
+        }
+    )
+    _journal(
+        session,
+        run,
+        step,
+        "steelman_result",
+        contradictor,
+        {
+            "target": run.labels[target_expert],
+            "strawman_flags": flags,
+            "critique_present": bool(output.critique),
+        },
+    )
+    # Reconnaissance par le tenant de la position : la reformulation le représente-t-elle ?
+    rec_response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor=target_expert,
+        system=RECOGNITION_SYSTEM,
+        prompt=build_recognition_prompt(
+            own_label=run.labels[target_expert],
+            own_position=target["output"].position,
+            steelman=output.steelman,
+            strengths=output.strengths,
+        ),
+        call_type=RECOGNITION_CALL_TYPE,
+        max_tokens=settings.mission_max_tokens_recognition,
+    )
+    recognition = "no"
+    missing: list[str] = []
+    if rec_response is not None:
+        rec_out, rec_err = parse_structured(rec_response.text, RecognitionOutput)
+        if rec_out is not None:
+            recognition = rec_out.recognized
+            missing = rec_out.missing_points
+        run.steelman["recognition_parse_error"] = _classify_parse_error(rec_response, rec_err)
+    else:
+        run.steelman["recognition_parse_error"] = "reconnaissance non exécutée (budget)"
+    if flags or recognition == "no":
+        status = "rejected_strawman"
+    elif recognition == "partial":
+        status = "accepted_partial"
+    else:
+        status = "accepted"
+    run.steelman.update({"recognition": recognition, "missing_points": missing, "status": status})
+    if output.critique.strip():
+        run.objections.append(
+            {
+                "id": f"OBJ-{len(run.objections) + 1}",
+                "from": run.labels[contradictor],
+                "from_expert": contradictor,
+                "target": run.labels[target_expert],
+                "target_expert": target_expert,
+                "act": "steelman_critique",
+                "nature": "solution",
+                "text": output.critique,
+                "depends_on_fact": False,
+                "fact_question": "",
+                "status": "open" if status != "rejected_strawman" else "inadmissible_strawman",
+                "failure_scenarios": output.failure_scenarios,
+            }
+        )
+    _journal(
+        session,
+        run,
+        step,
+        "recognition_result",
+        target_expert,
+        {"recognized": recognition, "missing_points": missing, "steelman_status": status},
+    )
+    run.steps_done.append(step)
+
+
+# --- E. Recherche ciblée -------------------------------------------------------------------------
+def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "recherche"
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    questions = material_fact_questions(
+        run.confrontations, run.cartography, run.labels, cap=settings.mission_max_research_tasks
+    )
+    if not questions:
+        _skip(session, run, step, "aucun désaccord pertinent ne dépend d'un fait vérifiable")
+        return
+    provider = build_research_provider(settings)
+    for q in questions:
+        if run.stop_reason:
+            break
+        if provider.name == "none":
+            result = provider.search(q["question"], max_tokens=0)  # aucun appel, aucun coût
+        else:
+            if not _can_spend(session, run, step, 1, f"recherche « {q['question'][:80]} »"):
+                break
+            try:
+                run.ledger.check_before_call(
+                    system="recherche ciblée",
+                    prompt=q["question"],
+                    max_tokens=settings.mission_max_tokens_research,
+                    call_type=RESEARCH_CALL_TYPE,
+                )
+            except BudgetExceededError as exc:
+                run.stop_reason = exc.reason
+                _journal(
+                    session,
+                    run,
+                    step,
+                    "budget_stop",
+                    "facilitateur",
+                    {"reason": exc.reason, **exc.detail, "budget": run.ledger.snapshot()},
+                )
+                break
+            result = provider.search(q["question"], max_tokens=settings.mission_max_tokens_research)
+            if result.usage is not None:
+                cost = run.ledger.record(result.usage)
+                _sync_budget(session, run)
+                session.add(
+                    LLMCallLog(
+                        phase=PHASE,
+                        agent_name="Recherche",
+                        operation_type=RESEARCH_CALL_TYPE,
+                        model=settings.anthropic_model,
+                        prompt_preview=q["question"][:500],
+                        response_preview=result.answer_summary[:500],
+                        status="success" if result.status != "error" else "error",
+                        error=result.note[:500] if result.status == "error" else "",
+                        call_type=RESEARCH_CALL_TYPE,
+                        input_tokens=result.usage.input_tokens,
+                        output_tokens=result.usage.output_tokens,
+                        cost_eur=cost,
+                        mission_id=run.mission.id,
+                    )
+                )
+                session.commit()
+        first = result.findings[0] if result.findings else None
+        item = {
+            "id": f"EV-{len(run.evidence) + 1}",
+            "question": q["question"],
+            "claim": q["claim"],
+            "raised_by": q["raised_by"],
+            "target": q["target"],
+            "status": result.status,
+            "provider": result.provider,
+            "findings": [f.to_dict() for f in result.findings],
+            "source": first.source if first else "",
+            "date": first.date if first else "",
+            "excerpt": first.excerpt if first else "",
+            "reliability": first.reliability if first else "unknown",
+            "provenance": "external" if result.status == "found" else "unavailable",
+            "note": result.note,
+            "answer_summary": result.answer_summary,
+        }
+        run.evidence.append(item)
+        run.research.append(item)
+        _journal(
+            session,
+            run,
+            step,
+            "result",
+            "Recherche",
+            {k: v for k, v in item.items() if k != "answer_summary"},
+        )
+    run.steps_done.append(step)
+
+
+# --- F. Révision -------------------------------------------------------------------------------
+def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "revision"
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    answered = _answered(run)
+    if not answered:
+        _skip(session, run, step, "aucune position à réviser")
+        return
+    found_evidence = [e for e in run.evidence if e["status"] == "found"]
+    for r in answered:
+        if run.stop_reason:
+            break
+        eid = r["expert_id"]
+        label = run.labels[eid]
+        previous = run.current_positions.get(eid, r["output"].position)
+        my_objections = [
+            o for o in run.objections if o["target_expert"] == eid and o["status"] == "open"
+        ]
+        steelman_critique = ""
+        if run.steelman.get("target_expert") == eid and run.steelman.get("status") in {
+            "accepted",
+            "accepted_partial",
+        }:
+            steelman_critique = str(run.steelman.get("critique", ""))
+        new_ids = [o["id"] for o in my_objections] + [e["id"] for e in found_evidence]
+        if steelman_critique:
+            new_ids.append("STEELMAN")
+        if not new_ids:
+            run.revisions.append(
+                {
+                    "expert_id": eid,
+                    "label": label,
+                    "previous_position": previous,
+                    "decision": "maintain",
+                    "revised_position": previous,
+                    "reason": "aucune information nouvelle : pas de révision demandée",
+                    "triggered_by": [],
+                    "new_information_ids": [],
+                    "called": False,
+                }
+            )
+            _journal(session, run, step, "no_new_information", eid, {"label": label})
+            continue
+        if not _can_spend(session, run, step, 1, f"révision de {label}"):
+            run.revisions.append(
+                {
+                    "expert_id": eid,
+                    "label": label,
+                    "previous_position": previous,
+                    "decision": "maintain",
+                    "revised_position": previous,
+                    "reason": "budget réservé au cœur de synthèse : révision non financée",
+                    "triggered_by": [],
+                    "new_information_ids": new_ids,
+                    "called": False,
+                    "budget_reserved": True,
+                }
+            )
+            continue
+        prompt = build_revision_prompt(
+            own_label=label,
+            own_position=previous,
+            objections=[
+                {"id": o["id"], "nature": o["nature"], "from": o["from"], "text": o["text"]}
+                for o in my_objections
+                if o["act"] != "steelman_critique"
+            ],
+            steelman_critique=steelman_critique,
+            new_evidence=[
+                {
+                    "id": e["id"],
+                    "claim": e.get("answer_summary") or e["question"],
+                    "source": e["source"],
+                    "reliability": e["reliability"],
+                    "status": e["status"],
+                }
+                for e in found_evidence
+            ],
+        )
+        response = _call(
+            session,
+            run,
+            llm,
+            settings,
+            step=step,
+            actor=eid,
+            system=REVISION_SYSTEM,
+            prompt=prompt,
+            call_type=REVISION_CALL_TYPE,
+            max_tokens=settings.mission_max_tokens_revision,
+        )
+        if response is None:
+            break
+        output, error = parse_structured(response.text, RevisionOutput)
+        error = _classify_parse_error(response, error)
+        decision = output.decision if output else "maintain"
+        revised = previous
+        if output and decision != "maintain" and output.revised_position.strip():
+            revised = output.revised_position.strip()
+        triggered = list(output.triggered_by) if output else []
+        entry = {
+            "expert_id": eid,
+            "label": label,
+            "previous_position": previous,
+            "decision": decision,
+            "revised_position": revised,
+            "reason": output.reason if output else "",
+            "triggered_by": triggered,
+            "new_information_ids": new_ids,
+            "called": True,
+            "parse_error": error,
+            "unexplained_change": decision != "maintain" and not triggered,
+        }
+        run.revisions.append(entry)
+        run.current_positions[eid] = revised
+        if decision != "maintain":
+            for o in my_objections:
+                by_steelman = "STEELMAN" in triggered and o["act"] == "steelman_critique"
+                if o["id"] in triggered or by_steelman:
+                    o["status"] = "addressed"
+        _journal(session, run, step, "result", eid, entry)
+    run.steps_done.append(step)
+
+
+def _residual_disagreements(run: _Run) -> list[dict[str, Any]]:
+    """Objections restées ouvertes après révision : conservées, jamais lissées."""
+    residual: list[dict[str, Any]] = []
+    for o in run.objections:
+        if o["status"] != "open" or o["act"] not in OBJECTION_ACTS:
+            continue
+        residual.append(
+            {
+                "id": o["id"],
+                "between": [o["from"], o["target"]] if o["target"] else [o["from"]],
+                "nature": o["nature"],
+                "description": o["text"],
+                "depends_on_fact": o.get("depends_on_fact", False),
+            }
+        )
+    return residual
+
+
+# --- G. Consolidation ----------------------------------------------------------------------------
+def _normalize_families(
+    options: list[dict[str, Any]], output: ConsolidationOutput | None
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    """Familles traçables : identifiants valides, aucune fusion entre natures différentes."""
+    known = {o["option_id"]: o for o in options}
+    assigned: set[str] = set()
+    families: list[dict[str, Any]] = []
+    notes: list[str] = []
+
+    def _add(
+        label: str,
+        kind: str,
+        ids: list[str],
+        variants: list[dict[str, str]],
+        internal: list[str],
+        source: str,
+    ) -> None:
+        families.append(
+            {
+                "family_id": f"F{len(families) + 1}",
+                "label": label,
+                "kind": kind,
+                "option_ids": ids,
+                "variants": [v for v in variants if v["option_id"] in ids],
+                "internal_disagreements": internal,
+                "supporting_experts": sorted({known[i]["expert_id"] for i in ids}),
+                "source": source,
+            }
+        )
+
+    if output is not None:
+        for fam in output.families:
+            ids = [i for i in fam.option_ids if i in known and i not in assigned]
+            if not ids:
+                continue
+            by_kind: dict[str, list[str]] = {}
+            for i in ids:
+                by_kind.setdefault(known[i]["kind"], []).append(i)
+            concrete = [k for k in by_kind if k != "other"]
+            variants = [
+                {"option_id": v.option_id, "difference": v.difference} for v in fam.variants
+            ]
+            if len(concrete) > 1:
+                notes.append(
+                    f"famille « {fam.label} » scindée : natures différentes {sorted(concrete)}"
+                )
+                for kind in concrete:
+                    sub = by_kind[kind] + (by_kind.get("other", []) if kind == concrete[0] else [])
+                    assigned.update(sub)
+                    _add(
+                        f"{fam.label} ({kind})",
+                        kind,
+                        sub,
+                        variants,
+                        fam.internal_disagreements,
+                        "greffier+scission",
+                    )
+                continue
+            assigned.update(ids)
+            kind = concrete[0] if concrete else (fam.kind or "other")
+            _add(fam.label, kind, ids, variants, fam.internal_disagreements, "greffier")
+    for o in options:
+        if o["option_id"] in assigned:
+            continue
+        assigned.add(o["option_id"])
+        _add(o["label"], o["kind"], [o["option_id"]], [], [], "singleton")
+    not_merged = (
+        [{"option_ids": n.option_ids, "reason": n.reason} for n in output.not_merged_because]
+        if output
+        else []
+    )
+    return families, not_merged, notes
+
+
+def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "consolidation"
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    options = run.cartography.get("options", [])
+    if not options:
+        _skip(session, run, step, "aucune option proposée")
+        return
+    error = ""
+    notes: list[str] = []
+    not_merged: list[dict[str, Any]] = []
+    if len(options) == 1:
+        families, not_merged, notes = _normalize_families(options, None)
+    else:
+        response = _call(
+            session,
+            run,
+            llm,
+            settings,
+            step=step,
+            actor="Greffier",
+            system=CONSOLIDATION_SYSTEM,
+            prompt=build_consolidation_prompt(
+                options=options,
+                revised_positions=[
+                    (run.labels[eid], pos) for eid, pos in run.current_positions.items()
+                ],
+            ),
+            call_type=CONSOLIDATION_CALL_TYPE,
+            max_tokens=settings.mission_max_tokens_consolidation,
+        )
+        if response is None:
+            return
+        output, error = parse_structured(response.text, ConsolidationOutput)
+        error = _classify_parse_error(response, error)
+        families, not_merged, notes = _normalize_families(options, output)
+    trace = [
+        {
+            "option_id": oid,
+            "family_id": f["family_id"],
+            "role": "variant" if any(v["option_id"] == oid for v in f["variants"]) else "member",
+        }
+        for f in families
+        for oid in f["option_ids"]
+    ]
+    run.consolidation = {
+        "families": families,
+        "not_merged_because": not_merged,
+        "trace": trace,
+        "atomic_count": len(options),
+        "family_count": len(families),
+        "notes": notes,
+        "parse_error": error,
+    }
+    _journal(
+        session,
+        run,
+        step,
+        "result",
+        "Greffier",
+        {
+            "atomic_count": len(options),
+            "family_count": len(families),
+            "notes": notes,
+            "parse_error": error,
+        },
+    )
+    run.steps_done.append(step)
+
+
+def _evidence_for_synthesis(run: _Run) -> list[dict[str, Any]]:
+    """Toutes les preuves, étiquetées par provenance : entrée CEO, externe, modèle, hypothèse."""
+    items: list[dict[str, Any]] = []
+    provenance_by_status = {
+        "verified": "ceo_input",
+        "model_knowledge": "model_knowledge",
+        "unverified": "hypothesis",
+    }
+    for i, e in enumerate(run.cartography.get("evidence", []), start=1):
+        items.append(
+            {
+                "id": f"T0-EV-{i}",
+                "claim": e["claim"],
+                "source": e["source"],
+                "reliability": "n/a",
+                "provenance": provenance_by_status.get(e["status"], "hypothesis"),
+                "expert_id": e["expert_id"],
+            }
+        )
+    for e in run.evidence:
+        items.append(
+            {
+                "id": e["id"],
+                "claim": e.get("answer_summary") or e["question"],
+                "source": e["source"],
+                "reliability": e["reliability"],
+                "provenance": e["provenance"],
+                "status": e["status"],
+            }
+        )
+    return items
+
+
+# --- Comparaison ---------------------------------------------------------------------------------
+def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "comparaison"
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    families = run.consolidation.get("families", [])
+    if not families or run.framing is None:
+        _skip(session, run, step, "aucune famille stratégique à comparer")
+        return
+    unknowns = list(run.framing.global_unknowns) + [
+        u["text"] for u in run.cartography.get("unknowns", [])
+    ]
+    response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor="Synthétiseur",
+        system=COMPARISON_SYSTEM,
+        prompt=build_comparison_prompt(
+            problem=run.framing.problem_understood,
+            constraints=list(run.framing.constraints),
+            families=families,
+            evidence=_evidence_for_synthesis(run),
+            unknowns=unknowns,
+        ),
+        call_type=COMPARISON_CALL_TYPE,
+        max_tokens=settings.mission_max_tokens_comparison,
+    )
+    if response is None:
+        return
+    output, error = parse_structured(response.text, ComparisonOutput)
+    error = _classify_parse_error(response, error)
+    rows: list[dict[str, Any]] = []
+    known = {f["family_id"] for f in families}
+    seen: set[str] = set()
+    if output is not None:
+        for row in output.rows:
+            if row.family_id not in known or row.family_id in seen:
+                continue
+            seen.add(row.family_id)
+            rows.append(
+                {
+                    "family_id": row.family_id,
+                    "assessments": {k: v.model_dump() for k, v in row.assessments.items()},
+                }
+            )
+    for fid in sorted(known - seen):
+        rows.append({"family_id": fid, "assessments": {}, "note": "non évaluée par la comparaison"})
+    run.comparison = {
+        "criteria": list(output.criteria) if output else [],
+        "rows": rows,
+        "notes": output.notes if output else "",
+        "parse_error": error,
+    }
+    _journal(
+        session,
+        run,
+        step,
+        "result",
+        "Synthétiseur",
+        {"criteria": run.comparison["criteria"], "rows": len(rows), "parse_error": error},
+    )
+    run.steps_done.append(step)
+
+
+# --- Synthèse et porte qualité -------------------------------------------------------------------
+def _synthesis_matter(run: _Run, residual: list[dict[str, Any]]) -> str:
+    f = run.framing
+    m = run.mission
+    parts: list[str] = [
+        f"Classe de décision : {m.effective_class}",
+        f"Problème compris : {f.problem_understood if f else ''}",
+        f"Objectif supposé : {f.assumed_objective if f else ''}",
+    ]
+    if f and f.constraints:
+        parts.append("Contraintes : " + " ; ".join(f.constraints))
+    if f and f.assumptions:
+        parts.append("Hypothèses de la demande (non vérifiées) : " + " ; ".join(f.assumptions))
+    if f and f.contestation.status == "raised":
+        parts.append(
+            f"Contestation soulevée au cadrage : {f.contestation.target} — "
+            f"{f.contestation.argument}"
+        )
+    parts.append("Positions (initiale → après révision) :")
+    for rev in run.revisions:
+        parts.append(
+            f"- {rev['label']} : « {rev['previous_position']} » → {rev['decision']} → "
+            f"« {rev['revised_position']} » ({rev['reason']})"
+        )
+    if not run.revisions:
+        for eid, pos in run.current_positions.items():
+            parts.append(f"- {run.labels.get(eid, eid)} : {pos}")
+    parts.append("Familles stratégiques :")
+    for fam in run.consolidation.get("families", []):
+        parts.append(
+            f"- {fam['family_id']} {fam['label']} [{fam['kind']}] — options "
+            + ", ".join(fam["option_ids"])
+            + (
+                f" — désaccords internes : {' ; '.join(fam['internal_disagreements'])}"
+                if fam.get("internal_disagreements")
+                else ""
+            )
+        )
+    if run.comparison.get("rows"):
+        parts.append("Comparaison (" + ", ".join(run.comparison.get("criteria", [])) + ") :")
+        for row in run.comparison["rows"]:
+            cells = " ; ".join(
+                f"{k}: {v['value']} [{v['basis']}]" for k, v in row["assessments"].items()
+            )
+            parts.append(f"- {row['family_id']} : {cells or row.get('note', '')}")
+    parts.append("Preuves (provenance) :")
+    for e in _evidence_for_synthesis(run):
+        parts.append(
+            f"- {e['id']} [{e['provenance']}] {e['claim']} — source : "
+            f"{e.get('source') or 'aucune'} — fiabilité {e.get('reliability', 'unknown')}"
+        )
+    unavailable = [e for e in run.research if e["status"] in {"unavailable", "not_found", "error"}]
+    if unavailable:
+        parts.append(
+            "Questions factuelles NON résolues (recherche indisponible ou sans résultat) : "
+            + " ; ".join(e["question"] for e in unavailable)
+        )
+    st = run.steelman
+    if st.get("required"):
+        parts.append(
+            f"Steelman : requis ({st.get('reason')}) — statut {st.get('status')} ; cible "
+            f"{st.get('target', '')} ; critique : {st.get('critique', '') or '(aucune)'}"
+        )
+    parts.append("Désaccords résiduels (à conserver) :")
+    if residual:
+        for d in residual:
+            parts.append(
+                f"- {d['id']} [{d['nature']}] {' / '.join(d['between'])} : {d['description']}"
+            )
+    else:
+        parts.append("- aucun")
+    parts.append(
+        "Rappels : la preuve prime sur la majorité ; aucune obligation de recommander de "
+        "construire ; si l'information manque, information_insufficient = true."
+    )
+    return "\n".join(parts)
+
+
+def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "synthese"
+    m = run.mission
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    if not run.consolidation.get("families"):
+        _skip(session, run, step, "aucune matière consolidée")
+        return
+    residual = _residual_disagreements(run)
+    response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor="Synthétiseur",
+        system=SYNTHESIS_SYSTEM,
+        prompt=build_synthesis_prompt(matter=_synthesis_matter(run, residual)),
+        call_type=SYNTHESIS_CALL_TYPE,
+        max_tokens=settings.mission_max_tokens_synthesis,
+    )
+    if response is None:
+        return
+    output, error = parse_structured(response.text, RecommendationOutput)
+    error = _classify_parse_error(response, error)
+    if output is None:
+        run.recommendation = {"status": "failed", "error": error}
+        _journal(session, run, step, "failed", "Synthétiseur", {"parse_error": error})
+        return
+    rec: dict[str, Any] = output.model_dump()
+    # Déterministe : les désaccords résiduels du facilitateur ne peuvent pas disparaître.
+    known_desc = {d["description"] for d in rec["residual_disagreements"]}
+    for d in residual:
+        if d["description"] not in known_desc:
+            rec["residual_disagreements"].append(
+                {"between": d["between"], "nature": d["nature"], "description": d["description"]}
+            )
+    rec["status"] = "produced"
+    rec["class"] = m.effective_class
+    rec["requires_ceo_decision"] = True  # les agents recommandent ; ils ne décident jamais
+    rec["ceo_decision_mandatory_by_class"] = m.effective_class in STEELMAN_CLASSES
+    rec["ceo_arbitration_required"] = any(
+        d["nature"] == "value" for d in rec["residual_disagreements"]
+    )
+    rec["decision_ready"] = not rec["information_insufficient"]
+    rec["families_count"] = len(run.consolidation.get("families", []))
+    run.recommendation = rec
+    _journal(
+        session,
+        run,
+        step,
+        "result",
+        "Synthétiseur",
+        {
+            "kind": rec["recommendation"]["kind"],
+            "family_id": rec["recommendation"]["family_id"],
+            "confidence": rec["confidence"]["level"],
+            "information_insufficient": rec["information_insufficient"],
+            "residual_disagreements": len(rec["residual_disagreements"]),
+            "ceo_arbitration_required": rec["ceo_arbitration_required"],
+            "parse_error": error,
+        },
+    )
+    run.steps_done.append(step)
+
+
+def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    step = "porte_qualite"
+    if run.stop_reason:
+        _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
+        return
+    if run.recommendation.get("status") != "produced":
+        _skip(session, run, step, "aucune recommandation à contrôler")
+        return
+    residual = _residual_disagreements(run)
+    st = run.steelman
+    steelman_required = bool(st.get("required"))
+    steelman_done = st.get("status") in {"accepted", "accepted_partial"}
+    unknowns = list(run.framing.global_unknowns) if run.framing else []
+    response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor="Porte qualité",
+        system=GATE_SYSTEM,
+        prompt=build_gate_prompt(
+            recommendation_json=json.dumps(run.recommendation, ensure_ascii=False),
+            families=run.consolidation.get("families", []),
+            residual=residual,
+            steelman_required=steelman_required,
+            steelman_done=steelman_done,
+            unknowns=unknowns,
+        ),
+        call_type=GATE_CALL_TYPE,
+        max_tokens=settings.mission_max_tokens_gate,
+    )
+    if response is None:
+        return
+    output, error = parse_structured(response.text, GateOutput)
+    error = _classify_parse_error(response, error)
+    checks: dict[str, bool] = dict(output.checks) if output else {}
+    issues: list[str] = (
+        list(output.issues) if output else [f"porte qualité non exploitable : {error}"]
+    )
+    # Contrôles déterministes : ils priment sur l'avis de l'instance.
+    checks["steelman_done_if_required"] = (not steelman_required) or steelman_done
+    if steelman_required and not steelman_done:
+        issues.append(
+            f"steelman requis ({st.get('reason')}) mais non réalisé/reconnu : {st.get('status')}"
+        )
+    rec_residual = run.recommendation.get("residual_disagreements", [])
+    checks["minorities_preserved"] = len(rec_residual) >= len(residual)
+    checks["no_forced_consensus"] = checks.get("no_forced_consensus", True) and len(
+        rec_residual
+    ) >= len(residual)
+    passed = bool(output.passed) if output else False
+    passed = passed and all(checks.values())
+    run.gate = {"passed": passed, "checks": checks, "issues": issues, "parse_error": error}
+    run.recommendation["gate"] = run.gate
+    _journal(session, run, step, "result", "Porte qualité", run.gate)
+    run.steps_done.append(step)
+
+
+def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, Any]:
+    reason: str
+    if run.stop_reason.startswith("framing_failed"):
+        reason = "framing_failed"
+    elif (
+        run.stop_reason in BUDGET_STOP_REASONS or run.stop_reason == "critical_dimension_uncovered"
+    ):
+        reason = "budget"
+    elif any(e["status"] in {"unavailable", "not_found", "error"} for e in run.research):
+        reason = "missing_external_info"
+    elif any(d["nature"] == "value" for d in residual):
+        reason = "ceo_decision_needed"
+    elif residual:
+        reason = "residual_only"
+    elif "revision" in run.steps_done:
+        called = any(r.get("called") for r in run.revisions)
+        reason = "converged" if called else "no_new_information"
+    else:
+        reason = "not_deliberated"
+    return {"reason": reason, "stop_reason": run.stop_reason, "steps_done": list(run.steps_done)}
+
+
+def _deliberation_payload(run: _Run) -> dict[str, Any]:
+    residual = _residual_disagreements(run)
+    return {
+        "steps_done": list(run.steps_done),
+        "steps_skipped": list(run.steps_skipped),
+        "confrontation": {
+            "objections": run.objections,
+            "outputs": {
+                eid: (out.model_dump() if out else None) for eid, out in run.confrontations.items()
+            },
+        },
+        "steelman": run.steelman,
+        "research": run.research,
+        "evidence": _evidence_for_synthesis(run),
+        "revisions": run.revisions,
+        "positions_after": {run.labels.get(k, k): v for k, v in run.current_positions.items()},
+        "consolidation": run.consolidation,
+        "comparison": run.comparison,
+        "gate": run.gate,
+        "residual_disagreements": residual,
+        "stop": _deliberation_stop(run, residual),
+        "budget_request": run.budget_request,
+    }
 
 
 # --- Lectures et actions CEO --------------------------------------------------------------
@@ -808,4 +2096,6 @@ def mission_payload(mission: Mission) -> dict[str, Any]:
         "composition": _load(mission.composition_json),
         "cartography": _load(mission.cartography_json),
         "report": _load(mission.report_json),
+        "deliberation": _load(mission.deliberation_json),
+        "recommendation": _load(mission.recommendation_json),
     }

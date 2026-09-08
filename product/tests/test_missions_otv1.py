@@ -202,9 +202,38 @@ class ScriptedStructuredLLM:
                     {"between": ["P1", "P3"], "nature": "fact", "description": "un fait diverge"}
                 ],
             }
+        elif call_type in NEUTRAL_DELIBERATION_ANSWERS:
+            # Incrément 2 : réponses neutres (aucun désaccord fabriqué, aucune révision) pour que
+            # les tests de l'incrément 1 restent centrés sur le cadrage, la composition et le
+            # Tour 0. Les comportements de délibération sont testés dans
+            # `test_missions_deliberation.py`.
+            payload = NEUTRAL_DELIBERATION_ANSWERS[call_type]
         else:  # pragma: no cover - garde-fou
             raise AssertionError(f"type d'appel inconnu : {call_type}")
         return LLMResponse(text=json.dumps(payload, ensure_ascii=False), usage=self.usage)
+
+
+NEUTRAL_DELIBERATION_ANSWERS: dict[str, dict[str, Any]] = {
+    "confrontation": {"acts": [], "convergence_note": "rien de substantiel à opposer"},
+    "steelman": {
+        "target": "P1",
+        "steelman": "reformulation synthétique fidèle de la position visée, " * 4,
+        "strengths": ["force synthétique"],
+        "failure_scenarios": ["scénario d'échec synthétique"],
+        "critique": "critique synthétique distincte du steelman",
+    },
+    "steelman_recognition": {"recognized": "yes", "missing_points": [], "comment": ""},
+    "revision": {"decision": "maintain", "revised_position": "", "reason": "rien de nouveau"},
+    "consolidation": {"families": [], "not_merged_because": []},
+    "comparison": {"criteria": [], "rows": [], "notes": ""},
+    "synthesis": {
+        "problem_understood": "synthèse synthétique",
+        "recommendation": {"kind": "test", "family_id": "F1", "statement": "s", "rationale": "r"},
+        "confidence": {"level": "low", "justification": "fixture"},
+        "next_action": "n",
+    },
+    "quality_gate": {"passed": True, "checks": {}, "issues": []},
+}
 
 
 def _expert_id_from_prompt(prompt: str) -> str:
@@ -314,10 +343,15 @@ def test_no_fixed_number_of_experts_is_doctrine(
     bounds = mission["composition"]["bounds"]
     assert "expérimentale" in bounds["max_angles_per_cell_nature"]
     assert "non doctrinale" in bounds["max_angles_per_cell_nature"]
-    # Le plafond de 12 appels borne économiquement le Tour 0 (1 + N + N + 1 ≤ 12 → N ≤ 5).
-    assert bounds["max_experts_by_budget"] == 5
-    assert len(mission["composition"]["experts"]) <= 5
-    assert mission["llm_calls_used"] <= 12
+    # Le plafond de la classe borne économiquement la composition : le cas M est escaladé en
+    # `structurante` (60 appels) ; réservation aval 10 ; 3 appels planifiés par expert →
+    # (59 - 10) // 3 = 16 experts finançables. Le nombre effectif (6) émerge des dimensions et
+    # de leur criticité (3 + 2 + 1), pas de la classe ni du budget.
+    assert mission["effective_class"] == "structurante"
+    assert bounds["budget_plan"] == "full_deliberation"
+    assert bounds["max_experts_by_budget"] == (60 - 1 - 10) // 3 == 16
+    assert len(mission["composition"]["experts"]) == 6
+    assert mission["llm_calls_used"] <= mission["max_llm_calls"] == 60
 
 
 def test_t26_pertinent_need_uses_existing_critical_angle(
@@ -496,7 +530,7 @@ def test_clerk_called_only_on_residual_ambiguity(
     assert len(clerk_calls) == 1
     assert mission["cartography"]["clerk_used"] is True
     assert any(g["source"] == "greffier" for g in mission["cartography"]["option_groups"])
-    assert mission["llm_calls_used"] <= 12
+    assert mission["llm_calls_used"] <= mission["max_llm_calls"]
 
 
 def test_clerk_schema_has_no_preference_ranking_or_recommendation_field() -> None:
@@ -523,8 +557,14 @@ def test_report_marks_unverified_evidence(
     assert any(u["text"] == "chiffre précis sans source" for u in unverified)
     assert all(u["status"] in {"unverified", "model_knowledge"} for u in unverified)
     fields = mission["report"]["fourteen_fields"]
-    assert "non encore délibéré" in fields["07_arguments_pour"]
-    assert "aucune recommandation" in fields["10_recommandation"]["status"]
+    proofs = fields["06_preuves"]
+    assert any(
+        u["text"] == "chiffre précis sans source" for u in proofs["unverified_or_model_knowledge"]
+    )
+    # Quelle que soit la suite (délibérée ou non), la décision reste réservée au CEO.
+    assert fields["10_recommandation"].get("requires_ceo_decision") is True or (
+        "aucune recommandation" in fields["10_recommandation"]["status"]
+    )
 
 
 # --- Budget : tokens/coût journalisés, arrêt dur, rapport partiel -----------------------------
@@ -586,7 +626,7 @@ def test_hard_stop_before_exceeding_max_calls(
 @pytest.fixture
 def expensive_output_price(monkeypatch: pytest.MonkeyPatch) -> None:
     """Barème de sortie très élevé : le plafond de 2 € est atteint en quelques appels."""
-    monkeypatch.setenv("LLM_PRICE_OUTPUT_EUR_PER_MTOK", "600")
+    monkeypatch.setenv("LLM_PRICE_OUTPUT_EUR_PER_MTOK", "200")
 
 
 def test_hard_stop_before_exceeding_cost_cap(
@@ -595,12 +635,14 @@ def test_hard_stop_before_exceeding_cost_cap(
     use_llm: Callable[..., ScriptedStructuredLLM],
 ) -> None:
     llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
-    mission = _post_mission(client)
+    mission = _post_mission(client, max_cost_eur=2.0)
+    # La surcharge CEO est absolue : l'escalade en `structurante` ne relève pas le plafond.
+    assert mission["effective_class"] == "structurante"
     assert mission["max_cost_eur"] == 2.0
     assert mission["cost_eur"] <= 2.0
     assert mission["stop_reason"] == "cost_cap_would_be_exceeded"
     # Chaque appel effectué avait, avant lancement, un coût majoré compatible avec le plafond.
-    assert len(llm.calls) < 12
+    assert len(llm.calls) < mission["max_llm_calls"]
     refusals = mission["report"]["budget"]["refusals"]
     assert refusals
     assert refusals[-1]["reason"] == "cost_cap_would_be_exceeded"
@@ -622,12 +664,18 @@ def test_partial_report_is_coherent_after_budget_stop(
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
     assert "partiel" in md
     assert "budget_insufficient_for_exploration" in md
-    # Budget intermédiaire : la composition se contraint d'elle-même (aucun arrêt nécessaire).
+    # Budget intermédiaire : la composition se contraint d'elle-même (couverture du Tour 0
+    # privilégiée : 2 experts), puis la délibération n'est pas entamée « pour voir » — arrêt
+    # partiel explicite avec demande de budget chiffrée, sans aucun appel gaspillé.
     use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client, max_llm_calls=6)
-    assert mission["stop_reason"] == ""
-    assert mission["llm_calls_used"] <= 6
+    assert mission["composition"]["bounds"]["budget_plan"] == "coverage_first"
     assert len(mission["composition"]["experts"]) == 2
+    assert mission["llm_calls_used"] <= 6
+    assert mission["stop_reason"] == "deliberation_budget_insufficient"
+    assert mission["report"]["partial"] is True
+    assert mission["deliberation"]["budget_request"]["additional_calls_estimate"] >= 1
+    assert mission["report"]["composition"]["experts_answered"] == 2
 
 
 # --- Gouvernance : rapport candidate, actions CEO, aucune exécution -------------------------
