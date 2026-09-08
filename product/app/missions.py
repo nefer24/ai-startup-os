@@ -12,6 +12,7 @@ jusqu'à une action CEO explicite.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.db import LLMCallLog, Mission, MissionJournalEntry
-from app.llm import LLMClient, LLMResponse
+from app.llm import LLMClient, LLMResponse, LLMUsage
 from app.mission_budget import (
     CALLS_PER_EXPERT,
     SYNTHESIS_CORE_CALLS,
@@ -1079,12 +1080,36 @@ def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: S
             break
         output, error = parse_structured(response.text, ConfrontationOutput)
         error = _classify_parse_error(response, error)
-        run.confrontations[r["expert_id"]] = output
         registered: list[str] = []
+        rejected: list[dict[str, Any]] = []
+        valid_acts = []
         if output is not None:
             for act in output.acts:
                 if act.act == "none" or not act.text.strip():
                     continue
+                # Intégrité des cibles (déterministe) : un acte adressé doit viser une position
+                # existante et distincte de la sienne ; sinon il est rejeté et journalisé, sans
+                # créer d'objection, sans atteindre la recherche, la révision ni la synthèse.
+                # `third_way` peut rester sans cible (une cible invalide y est simplement effacée).
+                target_ok = act.target in label_to_expert and act.target != own_label
+                if act.act == "third_way":
+                    if act.target and not target_ok:
+                        act = act.model_copy(update={"target": ""})
+                elif not target_ok:
+                    rejected.append(
+                        {
+                            "act": act.act,
+                            "target": act.target,
+                            "nature": act.nature,
+                            "text": act.text[:300],
+                            "reason": (
+                                "cible inexistante ou égale à sa propre position "
+                                f"(labels valides : {sorted(label_to_expert)})"
+                            ),
+                        }
+                    )
+                    continue
+                valid_acts.append(act)
                 obj_id = f"OBJ-{len(run.objections) + 1}"
                 run.objections.append(
                     {
@@ -1102,6 +1127,12 @@ def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: S
                     }
                 )
                 registered.append(obj_id)
+        # Seuls les actes valides sont conservés en aval (recherche, charge utile de délibération).
+        run.confrontations[r["expert_id"]] = (
+            output.model_copy(update={"acts": valid_acts}) if output is not None else None
+        )
+        for bad in rejected:
+            _journal(session, run, step, "act_rejected", r["expert_id"], bad)
         _journal(
             session,
             run,
@@ -1111,6 +1142,7 @@ def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: S
             {
                 "parse_error": error,
                 "acts_registered": registered,
+                "acts_rejected": len(rejected),
                 "act_count": len(output.acts) if output else 0,
                 "convergence_note": output.convergence_note if output else "",
             },
@@ -1308,53 +1340,28 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
         else:
             if not _can_spend(session, run, step, 1, f"recherche « {q['question'][:80]} »"):
                 break
-            try:
-                run.ledger.check_before_call(
-                    system="recherche ciblée",
-                    prompt=q["question"],
-                    max_tokens=settings.mission_max_tokens_research,
-                    call_type=RESEARCH_CALL_TYPE,
-                )
-            except BudgetExceededError as exc:
-                run.stop_reason = exc.reason
-                _journal(
-                    session,
-                    run,
-                    step,
-                    "budget_stop",
-                    "facilitateur",
-                    {"reason": exc.reason, **exc.detail, "budget": run.ledger.snapshot()},
-                )
+            result = _research_call(session, run, settings, provider, q["question"])
+            if result is None:
                 break
-            result = provider.search(q["question"], max_tokens=settings.mission_max_tokens_research)
-            if result.usage is not None:
-                cost = run.ledger.record(result.usage)
-                _sync_budget(session, run)
-                session.add(
-                    LLMCallLog(
-                        phase=PHASE,
-                        agent_name="Recherche",
-                        operation_type=RESEARCH_CALL_TYPE,
-                        model=settings.anthropic_model,
-                        prompt_preview=q["question"][:500],
-                        response_preview=result.answer_summary[:500],
-                        status="success" if result.status != "error" else "error",
-                        error=result.note[:500] if result.status == "error" else "",
-                        call_type=RESEARCH_CALL_TYPE,
-                        input_tokens=result.usage.input_tokens,
-                        output_tokens=result.usage.output_tokens,
-                        cost_eur=cost,
-                        mission_id=run.mission.id,
-                    )
-                )
-                session.commit()
         first = result.findings[0] if result.findings else None
+        # Provenance de débat : objections dont cette question est issue (pour la trace et pour
+        # cibler la révision), positions concernées (jamais « tout le monde »).
+        q_key = " ".join(q["question"].lower().split())
+        objection_ids = [
+            o["id"]
+            for o in run.objections
+            if o.get("depends_on_fact")
+            and " ".join(str(o.get("fact_question", "")).lower().split()) == q_key
+        ]
         item = {
             "id": f"EV-{len(run.evidence) + 1}",
             "question": q["question"],
             "claim": q["claim"],
             "raised_by": q["raised_by"],
+            "raised_by_all": q.get("raised_by_all", [q["raised_by"]]),
             "target": q["target"],
+            "positions": list(q.get("positions", [])),
+            "objection_ids": objection_ids,
             "status": result.status,
             "provider": result.provider,
             "findings": [f.to_dict() for f in result.findings],
@@ -1379,6 +1386,106 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
     run.steps_done.append(step)
 
 
+RESEARCH_SYSTEM_LABEL = "recherche ciblée"
+
+
+def _research_call(
+    session: Session, run: _Run, settings: Settings, provider: Any, question: str
+) -> Any:
+    """Appel réseau de recherche sous la même chaîne d'audit qu'un appel LLM ordinaire.
+
+    Avant : estimation budgétaire (refus = arrêt), `call_planned` (question complète, SHA-256,
+    fournisseur, `max_tokens`, majorant). Après : enregistrement au registre, ligne
+    `llm_call_logs`, `call_done` (usage, coût, statut, fournisseur, nombre de résultats).
+    Retourne None si le budget interdit l'appel.
+    """
+    step = "recherche"
+    max_tokens = settings.mission_max_tokens_research
+    try:
+        estimate = run.ledger.check_before_call(
+            system=RESEARCH_SYSTEM_LABEL,
+            prompt=question,
+            max_tokens=max_tokens,
+            call_type=RESEARCH_CALL_TYPE,
+        )
+    except BudgetExceededError as exc:
+        run.stop_reason = exc.reason
+        _journal(
+            session,
+            run,
+            step,
+            "budget_stop",
+            "facilitateur",
+            {"reason": exc.reason, **exc.detail, "budget": run.ledger.snapshot()},
+        )
+        return None
+    _journal(
+        session,
+        run,
+        step,
+        "call_planned",
+        "Recherche",
+        {
+            "call_type": RESEARCH_CALL_TYPE,
+            "provider": provider.name,
+            "max_tokens": max_tokens,
+            "estimated_cost_eur_upper_bound": estimate,
+            "prompt_sha256": prompt_fingerprint(RESEARCH_SYSTEM_LABEL, question),
+            "prompt_text": question,
+            "system_text": RESEARCH_SYSTEM_LABEL,
+        },
+    )
+    start = time.perf_counter()
+    result = provider.search(question, max_tokens=max_tokens)
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    # Un appel réseau tenté est compté et facturé sur l'usage rapporté (0 si le fournisseur n'en
+    # rapporte pas, par exemple sur exception) : aucun appel externe n'échappe au registre.
+    usage = result.usage or LLMUsage(input_tokens=0, output_tokens=0)
+    cost = run.ledger.record(usage)
+    _sync_budget(session, run)
+    session.add(
+        LLMCallLog(
+            phase=PHASE,
+            agent_name="Recherche",
+            operation_type=RESEARCH_CALL_TYPE,
+            provider=provider.name,
+            model=settings.anthropic_model,
+            prompt_preview=question[:500],
+            response_preview=result.answer_summary[:500],
+            status="success" if result.status != "error" else "error",
+            error=result.note[:500] if result.status == "error" else "",
+            duration_ms=duration_ms,
+            call_type=RESEARCH_CALL_TYPE,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_eur=cost,
+            mission_id=run.mission.id,
+        )
+    )
+    session.commit()
+    _journal(
+        session,
+        run,
+        step,
+        "call_done",
+        "Recherche",
+        {
+            "call_type": RESEARCH_CALL_TYPE,
+            "provider": provider.name,
+            "input_tokens": usage.input_tokens,
+            "output_tokens": usage.output_tokens,
+            "max_tokens": max_tokens,
+            "stop_reason": result.status,
+            "truncated": False,
+            "findings_count": len(result.findings),
+            "duration_ms": duration_ms,
+            "cost_eur": cost,
+            "budget": run.ledger.snapshot(),
+        },
+    )
+    return result
+
+
 # --- F. Révision -------------------------------------------------------------------------------
 def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
     step = "revision"
@@ -1389,7 +1496,6 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
     if not answered:
         _skip(session, run, step, "aucune position à réviser")
         return
-    found_evidence = [e for e in run.evidence if e["status"] == "found"]
     for r in answered:
         if run.stop_reason:
             break
@@ -1398,6 +1504,12 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
         previous = run.current_positions.get(eid, r["output"].position)
         my_objections = [
             o for o in run.objections if o["target_expert"] == eid and o["status"] == "open"
+        ]
+        # Preuve ciblée uniquement : une preuve n'atteint que les positions qu'elle concerne
+        # (provenance de débat : cible de l'objection factuelle, ou auteur d'une objection
+        # factuelle du Tour 0). Jamais de diffusion globale.
+        found_evidence = [
+            e for e in run.evidence if e["status"] == "found" and label in e.get("positions", [])
         ]
         steelman_critique = ""
         if run.steelman.get("target_expert") == eid and run.steelman.get("status") in {
@@ -1893,7 +2005,11 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
     rec["ceo_arbitration_required"] = any(
         d["nature"] == "value" for d in rec["residual_disagreements"]
     )
-    rec["decision_ready"] = not rec["information_insufficient"]
+    # `decision_ready` n'est jamais vrai avant la porte qualité : information suffisante ET porte
+    # passée. Une porte non exécutée (budget) laisse la recommandation « bloquée qualité ».
+    rec["decision_ready"] = False
+    rec["quality_blocked"] = True
+    rec["quality_gate_status"] = "pending"
     rec["families_count"] = len(run.consolidation.get("families", []))
     run.recommendation = rec
     _journal(
@@ -1969,8 +2085,25 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
     passed = bool(output.passed) if output else False
     passed = passed and all(checks.values())
     run.gate = {"passed": passed, "checks": checks, "issues": issues, "parse_error": error}
-    run.recommendation["gate"] = run.gate
-    _journal(session, run, step, "result", "Porte qualité", run.gate)
+    rec = run.recommendation
+    rec["gate"] = run.gate
+    # La porte conditionne réellement `decision_ready` : la proposition est conservée pour audit
+    # même si la porte échoue, mais elle ne peut pas être présentée comme prête à décider.
+    rec["quality_gate_status"] = "passed" if passed else "failed"
+    rec["quality_blocked"] = not passed
+    rec["decision_ready"] = bool(passed) and not bool(rec.get("information_insufficient"))
+    _journal(
+        session,
+        run,
+        step,
+        "result",
+        "Porte qualité",
+        {
+            **run.gate,
+            "decision_ready": rec["decision_ready"],
+            "quality_blocked": rec["quality_blocked"],
+        },
+    )
     run.steps_done.append(step)
 
 

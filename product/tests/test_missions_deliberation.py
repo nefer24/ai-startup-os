@@ -741,6 +741,10 @@ def test_external_evidence_changes_position_with_trace(
     rev_call = next(c for c in llm.calls if c["call_type"] == "revision" and c["label"] == "P2")
     assert "EV-1" in rev_call["prompt"]
     assert "source-synthetique://fixture/1" in rev_call["prompt"]
+    # Preuve ciblée : P1 et P3 (auteurs des objections) ne reçoivent pas EV-1 ; seul P2 est révisé.
+    assert [c["label"] for c in llm.calls if c["call_type"] == "revision"] == ["P2"]
+    assert item["positions"] == ["P2"]
+    assert item["objection_ids"] == ["OBJ-1", "OBJ-2"]
     rev = next(r for r in mission["deliberation"]["revisions"] if r["label"] == "P2")
     assert rev["decision"] == "modify"
     assert rev["triggered_by"] == ["OBJ-1", "EV-1"]
@@ -1202,3 +1206,294 @@ def test_journal_traces_every_deliberation_call_with_prompt_fingerprint(
     assert len(fields) == 14
     assert fields["10_recommandation"]["requires_ceo_decision"] is True
     assert mission["report"]["recommendation_produced"] is True
+
+
+# --- Corrections d'audit v1.1 (C1 à C4) -------------------------------------------------------
+# C1 — Révision : une preuve n'atteint que les positions qu'elle concerne.
+def test_targeted_evidence_reaches_only_the_concerned_position(
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    research: Callable[[Any], Any],
+) -> None:
+    research(FakeResearchProvider(status="found"))
+    llm = use_llm(
+        DeliberationLLM(
+            confrontation={
+                "P1": {
+                    "acts": [
+                        act(
+                            "P2",
+                            "critique",
+                            "fact",
+                            "le fait F1 contredit P2",
+                            fact_question="Q1 synthétique : le fait F1 est-il établi ?",
+                        )
+                    ]
+                }
+            }
+        )
+    )
+    mission = run(client, llm, "preuve ciblée (P2 seul)")
+    item = mission["deliberation"]["research"][0]
+    assert item["status"] == "found"
+    assert item["positions"] == ["P2"]
+    assert item["raised_by"] == "P1"
+    assert item["objection_ids"] == ["OBJ-1"]
+    # Seule P2 est éligible à révision ; P1 et P3 ne sont pas appelés pour cette seule preuve.
+    revision_calls = [c for c in llm.calls if c["call_type"] == "revision"]
+    assert [c["label"] for c in revision_calls] == ["P2"]
+    assert "EV-1" in revision_calls[0]["prompt"]
+    revisions = {r["label"]: r for r in mission["deliberation"]["revisions"]}
+    assert revisions["P2"]["called"] is True
+    assert "EV-1" in revisions["P2"]["new_information_ids"]
+    assert revisions["P1"]["called"] is False
+    assert revisions["P1"]["new_information_ids"] == []
+    assert revisions["P3"]["called"] is False
+    assert revisions["P3"]["new_information_ids"] == []
+    # La preuve reste visible de la synthèse (étiquetée externe), sans diffusion en révision.
+    assert any(e["provenance"] == "external" for e in mission["deliberation"]["evidence"])
+
+
+def test_tour0_fact_objection_evidence_targets_its_author(
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    research: Callable[[Any], Any],
+) -> None:
+    from app.mission_deliberation import material_fact_questions
+    from app.mission_schemas import ConfrontationOutput
+
+    # Objection factuelle du Tour 0 : la position concernée est celle de son auteur.
+    cartography = {
+        "disagreements": [
+            {
+                "source": "E3",
+                "between": ["P3"],
+                "nature": "fact",
+                "description": "le fait F2 diverge",
+                "target": "Q2 synthétique ?",
+            }
+        ]
+    }
+    labels = {"E1": "P1", "E2": "P2", "E3": "P3"}
+    confrontations: dict[str, ConfrontationOutput | None] = {
+        "E1": ConfrontationOutput.model_validate(
+            {"acts": [act("P2", "critique", "fact", "F1", fact_question="Q1 synthétique ?")]}
+        ),
+        "E3": ConfrontationOutput.model_validate(
+            {"acts": [act("P1", "critique", "fact", "F1 bis", fact_question="q1 SYNTHÉTIQUE ?")]}
+        ),
+    }
+    questions = material_fact_questions(confrontations, cartography, labels, cap=3)
+    assert [q["question"] for q in questions] == ["Q1 synthétique ?", "Q2 synthétique ?"]
+    assert questions[0]["positions"] == ["P2", "P1"]  # cibles réunies, dédoublonnées
+    assert questions[0]["raised_by_all"] == ["P1", "P3"]
+    assert questions[1]["positions"] == ["P3"]
+    assert questions[1]["raised_by"] == "P3"
+
+
+# C2 — Intégrité des cibles de confrontation.
+def test_confrontation_target_integrity(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    llm = use_llm(
+        DeliberationLLM(
+            confrontation={
+                "P1": {
+                    "acts": [
+                        act("P2", "critique", "solution", "cible valide"),
+                        act(
+                            "P99",
+                            "critique",
+                            "fact",
+                            "cible inexistante",
+                            fact_question="Q-fantôme : ne doit jamais être recherchée",
+                        ),
+                        act("P1", "refute", "solution", "cible = soi-même"),
+                        act("", "third_way", "solution", "voie tierce sans cible"),
+                        act("P42", "third_way", "solution", "voie tierce à cible invalide"),
+                    ]
+                }
+            }
+        )
+    )
+    mission = run(client, llm, "intégrité des cibles")
+    objections = mission["deliberation"]["confrontation"]["objections"]
+    assert [(o["act"], o["target"], o["text"]) for o in objections] == [
+        ("critique", "P2", "cible valide"),
+        ("third_way", "", "voie tierce sans cible"),
+        ("third_way", "", "voie tierce à cible invalide"),
+    ]
+    assert all(o["target_expert"] for o in objections if o["act"] != "third_way")
+    # Les actes invalides sont journalisés comme rejetés, sans objection ouverte.
+    entries = journal(client, mission["id"])
+    rejected = [e for e in entries if e["entry_type"] == "act_rejected"]
+    assert [(e["payload"]["act"], e["payload"]["target"]) for e in rejected] == [
+        ("critique", "P99"),
+        ("refute", "P1"),
+    ]
+    result = next(
+        e for e in entries if e["step"] == "confrontation" and e["entry_type"] == "result"
+    )
+    assert result["payload"]["acts_rejected"] == 2
+    assert result["payload"]["acts_registered"] == ["OBJ-1", "OBJ-2", "OBJ-3"]
+    # Ni recherche (la question fantôme est écartée), ni résiduel, ni synthèse pour P99.
+    assert mission["deliberation"]["research"] == []
+    assert any(s["step"] == "recherche" for s in mission["deliberation"]["steps_skipped"])
+    residual = mission["deliberation"]["residual_disagreements"]
+    assert all("P99" not in d["between"] for d in residual)
+    assert all(d["description"] != "cible inexistante" for d in residual)
+    outputs = mission["deliberation"]["confrontation"]["outputs"]
+    assert [a["target"] for a in outputs["E1"]["acts"]] == ["P2", "", ""]
+    synthesis_prompt = next(c for c in llm.calls if c["call_type"] == "synthesis")["prompt"]
+    assert "P99" not in synthesis_prompt
+    assert "cible inexistante" not in synthesis_prompt
+    # Seule la cible valide est révisée.
+    assert [c["label"] for c in llm.calls if c["call_type"] == "revision"] == ["P2"]
+
+
+# C3 — Observabilité canonique de la recherche.
+@pytest.mark.parametrize("status", ["found", "not_found"])
+def test_research_call_has_the_canonical_audit_chain(
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    research: Callable[[Any], Any],
+    session_factory: sessionmaker[Session],
+    status: str,
+) -> None:
+    from app.mission_exploration import prompt_fingerprint
+
+    provider = research(FakeResearchProvider(status=status))
+    llm = use_llm(DeliberationLLM(confrontation=FACT_CONFRONTATION))
+    mission = run(client, llm, f"chaîne d'audit recherche ({status})")
+    entries = [e for e in journal(client, mission["id"]) if e["step"] == "recherche"]
+    kinds = [e["entry_type"] for e in entries]
+    assert kinds == ["call_planned", "call_done", "result"]
+    planned, done, result = entries
+    question = "Q1 synthétique : le fait F1 est-il établi ?"
+    assert provider.questions == [question]
+    assert planned["actor"] == "Recherche"
+    assert planned["payload"]["call_type"] == "research"
+    assert planned["payload"]["provider"] == "fake_external"
+    assert planned["payload"]["prompt_text"] == question
+    assert planned["payload"]["prompt_sha256"] == prompt_fingerprint("recherche ciblée", question)
+    assert planned["payload"]["max_tokens"] == 4000
+    assert planned["payload"]["estimated_cost_eur_upper_bound"] > 0
+    assert done["payload"]["provider"] == "fake_external"
+    assert done["payload"]["input_tokens"] == 300
+    assert done["payload"]["stop_reason"] == status
+    assert done["payload"]["findings_count"] == (1 if status == "found" else 0)
+    assert done["payload"]["cost_eur"] > 0
+    assert result["payload"]["status"] == status
+    assert result["payload"]["source"] == (
+        "source-synthetique://fixture/1" if status == "found" else ""
+    )
+    # Cohérence avec `llm_call_logs` et le registre de budget.
+    with session_factory() as session:
+        rows = list(
+            session.execute(select(LLMCallLog).where(LLMCallLog.mission_id == mission["id"]))
+            .scalars()
+            .all()
+        )
+    research_rows = [r for r in rows if r.call_type == "research"]
+    assert len(research_rows) == 1
+    row = research_rows[0]
+    assert row.provider == "fake_external"
+    assert row.input_tokens == done["payload"]["input_tokens"]
+    assert row.output_tokens == done["payload"]["output_tokens"]
+    assert row.cost_eur == pytest.approx(done["payload"]["cost_eur"])
+    assert row.status == "success"
+    assert len(rows) == mission["llm_calls_used"] == len(llm.calls) + 1
+    assert (
+        done["payload"]["budget"]["llm_calls_used"]
+        == len(
+            [
+                c
+                for c in llm.calls
+                if c["call_type"]
+                in {"framing", "expert_tour0", "self_qualification", "confrontation"}
+            ]
+        )
+        + 1
+    )
+    assert mission["cost_eur"] == pytest.approx(sum(r.cost_eur or 0.0 for r in rows), abs=1e-6)
+
+
+def test_unavailable_research_provider_has_no_call_chain_and_no_cost(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    llm = use_llm(DeliberationLLM(confrontation=FACT_CONFRONTATION))
+    mission = run(client, llm, "recherche indisponible : zéro appel")
+    entries = [e for e in journal(client, mission["id"]) if e["step"] == "recherche"]
+    assert [e["entry_type"] for e in entries] == ["result"]
+    assert entries[0]["payload"]["status"] == "unavailable"
+    assert mission["llm_calls_used"] == len(llm.calls)
+
+
+# C4 — La porte qualité conditionne réellement `decision_ready`.
+def test_decision_ready_requires_sufficient_information_and_a_passed_gate(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    # (a) synthèse correcte + porte passée + information suffisante → prête.
+    llm = use_llm(DeliberationLLM())
+    ok = run(client, llm, "decision_ready : porte passée")
+    rec = ok["recommendation"]
+    assert rec["gate"]["passed"] is True
+    assert rec["information_insufficient"] is False
+    assert rec["decision_ready"] is True
+    assert rec["quality_blocked"] is False
+    assert rec["quality_gate_status"] == "passed"
+
+    # (b) information insuffisante + porte passée → non prête.
+    def waiting(label: str, prompt: str) -> dict[str, Any]:
+        payload = default_synthesis(prompt)
+        payload["information_insufficient"] = True
+        payload["recommendation"]["kind"] = "wait"
+        return payload
+
+    llm = use_llm(DeliberationLLM(synthesis=waiting))
+    insufficient = run(client, llm, "decision_ready : information insuffisante")
+    rec = insufficient["recommendation"]
+    assert rec["gate"]["passed"] is True
+    assert rec["decision_ready"] is False
+    assert rec["quality_blocked"] is False
+    # (c) information suffisante + porte échouée → non prête, proposition conservée pour audit.
+    llm = use_llm(
+        DeliberationLLM(
+            gate={"passed": False, "checks": {"evidence_labeled": False}, "issues": ["source ?"]}
+        )
+    )
+    failed = run(client, llm, "decision_ready : porte échouée")
+    rec = failed["recommendation"]
+    assert rec["status"] == "produced"
+    assert rec["recommendation"]["kind"] == "test"
+    assert rec["gate"]["passed"] is False
+    assert rec["information_insufficient"] is False
+    assert rec["decision_ready"] is False
+    assert rec["quality_blocked"] is True
+    assert rec["quality_gate_status"] == "failed"
+    fields = failed["report"]["fourteen_fields"]["10_recommandation"]
+    assert fields["decision_ready"] is False
+    assert fields["quality_blocked"] is True
+    md = client.get(f"/missions/{failed['id']}/report/markdown").json()["markdown"]
+    assert "Prête pour décision (decision_ready) : False — bloquée par la porte qualité" in md
+    gate_entry = next(
+        e
+        for e in journal(client, failed["id"])
+        if e["step"] == "porte_qualite" and e["entry_type"] == "result"
+    )
+    assert gate_entry["payload"]["decision_ready"] is False
+    assert gate_entry["payload"]["quality_blocked"] is True
+
+
+def test_rejected_strawman_blocks_decision_ready_but_keeps_the_recommendation(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    llm = use_llm(DeliberationLLM(steelman=STRAWMAN_SHORT))
+    mission = run(client, llm, "strawman → decision_ready false", declared_class="structurante")
+    rec = mission["recommendation"]
+    assert mission["deliberation"]["steelman"]["status"] == "rejected_strawman"
+    assert rec["status"] == "produced"  # conservée pour audit
+    assert rec["gate"]["passed"] is False
+    assert rec["gate"]["checks"]["steelman_done_if_required"] is False
+    assert rec["decision_ready"] is False
+    assert rec["quality_blocked"] is True

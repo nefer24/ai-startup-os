@@ -165,6 +165,8 @@ def build_situation_report(
                 "ceo_decision_mandatory_by_class": rec.get("ceo_decision_mandatory_by_class"),
                 "ceo_arbitration_required": rec.get("ceo_arbitration_required"),
                 "decision_ready": rec.get("decision_ready"),
+                "quality_blocked": rec.get("quality_blocked"),
+                "quality_gate_status": rec.get("quality_gate_status"),
                 "information_insufficient": rec.get("information_insufficient"),
                 "quality_gate": rec.get("gate", {}),
             },
@@ -630,7 +632,10 @@ def render_situation_report_markdown(report: dict[str, Any]) -> str:
             )
             + (" — **arbitrage de valeurs requis**" if rec.get("ceo_arbitration_required") else ""),
             f"- Information suffisante pour décider : {not rec.get('information_insufficient')}",
-            f"- Porte qualité : {rec.get('quality_gate', {}).get('passed', 'non exécutée')}",
+            f"- Porte qualité : {rec.get('quality_gate', {}).get('passed', 'non exécutée')} "
+            f"(statut {rec.get('quality_gate_status', 'pending')})",
+            f"- Prête pour décision (decision_ready) : {bool(rec.get('decision_ready'))}"
+            + (" — bloquée par la porte qualité" if rec.get("quality_blocked") else ""),
             f"- Niveau de confiance : {conf.get('level', '')} — {conf.get('justification', '')}",
             "- Arguments pour :",
         ]

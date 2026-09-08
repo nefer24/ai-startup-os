@@ -2341,7 +2341,9 @@ def _render_mission_recommendation(mission: dict[str, Any]) -> None:
     st.markdown(
         f"**Recommandation ({body.get('kind', '')})** — {body.get('statement', '')}  \n"
         f"Confiance : `{conf.get('level', '')}` — {conf.get('justification', '')}  \n"
-        f"Porte qualité : `{gate.get('passed', 'non exécutée')}`"
+        f"Porte qualité : `{gate.get('passed', 'non exécutée')}` — prête pour décision : "
+        f"`{bool(rec.get('decision_ready'))}`"
+        + (" (bloquée par la porte qualité)" if rec.get("quality_blocked") else "")
         + (" — **arbitrage CEO requis (valeurs)**" if rec.get("ceo_arbitration_required") else "")
         + (
             " — décision CEO obligatoire pour la classe"

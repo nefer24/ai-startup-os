@@ -220,9 +220,43 @@ def material_fact_questions(
     *,
     cap: int,
 ) -> list[dict[str, Any]]:
-    """Questions factuelles dont dépend un désaccord pertinent (dédoublonnées, plafonnées)."""
-    seen: set[str] = set()
-    questions: list[dict[str, Any]] = []
+    """Questions factuelles dont dépend un désaccord pertinent (dédoublonnées, plafonnées).
+
+    Chaque question conserve sa **provenance de débat** : qui l'a soulevée (`raised_by`), quelle
+    position elle vise (`target`) et, surtout, les **positions concernées** (`positions`) — celles
+    dont la position dépend du fait : la cible d'un acte de confrontation, ou l'auteur d'une
+    objection factuelle du Tour 0. Une même question soulevée par plusieurs actes est fusionnée et
+    ses positions concernées sont réunies. C'est cette liste qui décide, plus tard, à qui la preuve
+    est soumise en révision : jamais à tout le monde par défaut.
+    """
+    by_key: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def _add(
+        question: str, claim: str, raised_by: str, target: str, nature: str, positions: list[str]
+    ) -> None:
+        key = " ".join(question.lower().split())
+        if not key:
+            return
+        entry = by_key.get(key)
+        if entry is None:
+            entry = {
+                "question": question,
+                "claim": claim,
+                "raised_by": raised_by,
+                "raised_by_all": [raised_by],
+                "target": target,
+                "nature": nature,
+                "positions": [],
+            }
+            by_key[key] = entry
+            order.append(key)
+        elif raised_by not in entry["raised_by_all"]:
+            entry["raised_by_all"].append(raised_by)
+        for p in positions:
+            if p and p not in entry["positions"]:
+                entry["positions"].append(p)
+
     for expert_id, out in confrontations.items():
         if out is None:
             continue
@@ -230,38 +264,25 @@ def material_fact_questions(
             question = act.fact_question.strip()
             if not (act.depends_on_fact and question):
                 continue
-            key = " ".join(question.lower().split())
-            if key in seen:
-                continue
-            seen.add(key)
-            questions.append(
-                {
-                    "question": question,
-                    "claim": act.text,
-                    "raised_by": labels.get(expert_id, expert_id),
-                    "target": act.target,
-                    "nature": act.nature,
-                }
+            _add(
+                question,
+                act.text,
+                labels.get(expert_id, expert_id),
+                act.target,
+                act.nature,
+                [act.target],
             )
-    # Objections typées « fait » au Tour 0 (cartographie) qui ne sont pas déjà couvertes.
+    # Objections typées « fait » au Tour 0 (cartographie) qui ne sont pas déjà couvertes : la
+    # position concernée est celle de leur auteur (sa position repose sur ce fait).
     for d in cartography.get("disagreements", []):
         if d.get("nature") != "fact" or d.get("source") == "greffier":
             continue
         question = str(d.get("target") or d.get("description") or "").strip()
-        key = " ".join(question.lower().split())
-        if not question or key in seen:
+        if not question:
             continue
-        seen.add(key)
-        questions.append(
-            {
-                "question": question,
-                "claim": d.get("description", ""),
-                "raised_by": str(d.get("source", "")),
-                "target": "",
-                "nature": "fact",
-            }
-        )
-    return questions[:cap]
+        raised_by = labels.get(str(d.get("source", "")), str(d.get("source", "")))
+        _add(question, d.get("description", ""), raised_by, "", "fact", [raised_by])
+    return [by_key[k] for k in order][:cap]
 
 
 # --- F. Révision -------------------------------------------------------------------------------
