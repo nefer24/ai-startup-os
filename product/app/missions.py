@@ -39,18 +39,21 @@ from app.mission_cartography import (
 )
 from app.mission_composition import ExpertSpec, compose
 from app.mission_consolidation import (
+    COMPARISON_MAX_FAMILIES,
     CONSOLIDATION_BATCH_SIZE,
+    META_CHUNK_SIZE,
     build_batch_prompt,
     build_compact_comparison_prompt,
     build_meta_prompt,
-    estimate_consolidation_calls,
+    coverage_requirements,
+    direct_family,
     families_from_batch,
     finalize_families,
     merge_families_from_meta,
     plan_batches,
+    plan_consolidation,
     premerge_options,
-    select_families_for_comparison,
-    singleton_family,
+    select_families_for_attempt,
 )
 from app.mission_deliberation import (
     COMPARISON_CALL_TYPE,
@@ -78,6 +81,7 @@ from app.mission_deliberation import (
     build_revision_prompt,
     build_steelman_prompt,
     build_synthesis_prompt,
+    epistemic_tag,
     is_premature_convergence,
     material_fact_questions,
     select_contradictor,
@@ -191,6 +195,10 @@ class _Run:
     budget_request: dict[str, Any] = field(default_factory=dict)
     # Cœur de synthèse effectif : consolidation (lots planifiés) + comparaison + synthèse + porte.
     core_calls: int = SYNTHESIS_CORE_CALLS
+    # Pire cas borné du cœur : nominal + relances autorisées (une par lot, une pour la
+    # comparaison). Les étapes optionnelles ne sont financées qu'au-delà de ce pire cas.
+    core_worst_calls: int = SYNTHESIS_CORE_CALLS + 1
+    core_plan: dict[str, int] = field(default_factory=dict)
 
 
 def _journal(
@@ -1009,10 +1017,30 @@ def _check_deliberation_affordable(session: Session, run: _Run) -> None:
     # Le cœur de synthèse dépend de la matière : la consolidation est planifiée en lots bornés
     # (jamais un appel monolithique), donc son nombre d'appels est estimé ici, avant de délibérer.
     options = run.cartography.get("options", [])
-    run.core_calls = (SYNTHESIS_CORE_CALLS - 1) + estimate_consolidation_calls(
-        options, CONSOLIDATION_BATCH_SIZE
-    )
+    plan = plan_consolidation(options, CONSOLIDATION_BATCH_SIZE)
+    run.core_plan = plan
+    run.core_calls = (SYNTHESIS_CORE_CALLS - 1) + plan["nominal"]
+    # Pire cas borné (B8) : + une relance scindée par lot de consolidation, + une relance de
+    # comparaison. Les relances ne sont dépensées que si les étapes plus prioritaires restent
+    # finançables (porte > synthèse > comparaison valide > consolidation valide > relances).
+    run.core_worst_calls = run.core_calls + 2 * plan["batches"] + 1
     minimal = answered + run.core_calls
+    _journal(
+        session,
+        run,
+        "deliberation",
+        "budget_plan",
+        "facilitateur",
+        {
+            "answered_positions": answered,
+            "core_nominal_calls": run.core_calls,
+            "core_worst_case_calls": run.core_worst_calls,
+            "consolidation_plan": plan,
+            "remaining_calls": run.ledger.remaining_calls,
+            "minimal_cycle_calls": minimal,
+            "retries_guaranteed": run.ledger.remaining_calls >= answered + run.core_worst_calls,
+        },
+    )
     if run.ledger.remaining_calls >= minimal:
         return
     run.stop_reason = "deliberation_budget_insufficient"
@@ -1055,7 +1083,7 @@ def _can_spend(session: Session, run: _Run, step: str, calls_needed: int, what: 
     le budget le permet) → consolidation, comparaison, synthèse, porte qualité. Un refus est
     journalisé ; il n'y a ni relance ni file d'attente.
     """
-    if run.ledger.remaining_calls - calls_needed >= run.core_calls:
+    if run.ledger.remaining_calls - calls_needed >= run.core_worst_calls:
         return True
     _journal(
         session,
@@ -1068,6 +1096,7 @@ def _can_spend(session: Session, run: _Run, step: str, calls_needed: int, what: 
             "calls_needed": calls_needed,
             "remaining_calls": run.ledger.remaining_calls,
             "synthesis_core_calls": run.core_calls,
+            "synthesis_core_worst_case_calls": run.core_worst_calls,
         },
     )
     return False
@@ -1710,12 +1739,39 @@ def _consolidation_output(
     return output, error, False
 
 
-def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
-    """Familles stratégiques : précompression déterministe → lots bornés par nature → méta-passe.
+def _retry_allowed(
+    session: Session, run: _Run, step: str, *, extra_calls: int, higher_priority_calls: int
+) -> bool:
+    """Une relance n'est financée que si les étapes plus prioritaires restent finançables.
 
-    Aucun appel monolithique ; une relance au plus par lot (lot scindé en deux, journalisée,
-    budgétée) ; jamais de repli « chaque option devient une famille » après erreur : un lot
-    irrécupérable laisse ses options non consolidées et le statut devient `failed`.
+    Hiérarchie (B8) : porte qualité > synthèse > comparaison valide > consolidation valide >
+    relance de comparaison > relance de consolidation > révisions > recherche > profondeur.
+    """
+    if run.ledger.remaining_calls - extra_calls >= higher_priority_calls:
+        return True
+    _journal(
+        session,
+        run,
+        step,
+        "retry_refused_budget",
+        "facilitateur",
+        {
+            "extra_calls": extra_calls,
+            "remaining_calls": run.ledger.remaining_calls,
+            "reserved_for_higher_priority": higher_priority_calls,
+        },
+    )
+    return False
+
+
+def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    """Familles stratégiques : précompression → lots bornés inter-natures → méta-passe.
+
+    La nature est un signal, pas une frontière (B6) : le greffier peut réunir des formulations
+    équivalentes de natures compatibles ; « agir » et « ne rien faire / différer » restent
+    distincts (garde déterministe). Aucun appel monolithique ; une relance au plus par lot (lot
+    scindé), financée seulement si comparaison, synthèse et porte restent finançables (B8) ;
+    jamais de repli « chaque option devient une famille » après erreur.
     """
     step = "consolidation"
     if run.stop_reason:
@@ -1726,8 +1782,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         _skip(session, run, step, "aucune option proposée")
         return
     groups = premerge_options(options)
-    batches, singletons = plan_batches(groups, CONSOLIDATION_BATCH_SIZE)
-    families_raw: list[dict[str, Any]] = [singleton_family(g) for g in singletons]
+    batches = plan_batches(groups, CONSOLIDATION_BATCH_SIZE)
     not_merged: list[dict[str, Any]] = []
     notes: list[str] = []
     unconsolidated: list[str] = []
@@ -1735,11 +1790,14 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
     retries = 0
     last_error = ""
     status = "ok"
-    by_kind_families: dict[str, list[dict[str, Any]]] = {}
-    kinds_batched: dict[str, int] = {}
     premerged = sum(1 for g in groups if len(g["member_ids"]) > 1)
+    cross_kind = sum(1 for g in groups if len(g["source_kinds"]) > 1)
     if premerged:
-        notes.append(f"{premerged} groupe(s) de formulations identiques fusionnés avant appel")
+        notes.append(
+            f"{premerged} groupe(s) de formulations identiques fusionnés avant appel"
+            + (f", dont {cross_kind} entre natures compatibles" if cross_kind else "")
+        )
+    meta_passes = max(1, -(-len(groups) // META_CHUNK_SIZE)) if len(batches) > 1 else 0
     _journal(
         session,
         run,
@@ -1749,17 +1807,21 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         {
             "atomic_count": len(options),
             "groups_after_premerge": len(groups),
-            "batches": [{"kind": k, "size": len(items)} for k, items in batches],
-            "singleton_kinds": [g["kind"] for g in singletons],
+            "batches": [len(items) for items in batches],
+            "meta_passes": meta_passes,
             "batch_size": CONSOLIDATION_BATCH_SIZE,
         },
     )
+    families_raw: list[dict[str, Any]] = []
+    if not batches:
+        families_raw = [direct_family(g) for g in groups]
     budget_stop = False
-    for kind, items in batches:
+    remaining_batches = len(batches)
+    for items in batches:
+        remaining_batches -= 1
         if budget_stop or run.stop_reason:
             unconsolidated += [m for g in items for m in g["member_ids"]]
             continue
-        kinds_batched[kind] = kinds_batched.get(kind, 0) + 1
         pending: list[list[dict[str, Any]]] = [items]
         attempt = 0
         while pending:
@@ -1770,8 +1832,8 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 run,
                 llm,
                 settings,
-                prompt=build_batch_prompt(kind, chunk),
-                what=f"lot {kind} ({len(chunk)} groupe(s))",
+                prompt=build_batch_prompt(chunk),
+                what=f"lot de {len(chunk)} groupe(s)",
             )
             if budget_stop:
                 unconsolidated += [m for g in chunk for m in g["member_ids"]]
@@ -1779,8 +1841,16 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 break
             if output is None:
                 last_error = error
-                if attempt == 0 and len(chunk) >= 2:
-                    # Relance compacte bornée : le lot est scindé en deux, une seule fois.
+                # Relance compacte bornée : le lot est scindé en deux, une seule fois, et
+                # seulement si les étapes plus prioritaires restent finançables.
+                higher = remaining_batches + meta_passes + 3  # lots restants, méta, comp/syn/porte
+                if (
+                    attempt == 0
+                    and len(chunk) >= 2
+                    and _retry_allowed(
+                        session, run, step, extra_calls=2, higher_priority_calls=higher
+                    )
+                ):
                     attempt = 1
                     retries += 1
                     half = len(chunk) // 2
@@ -1792,7 +1862,6 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                         "retry",
                         "facilitateur",
                         {
-                            "kind": kind,
                             "attempt": attempt,
                             "split_into": [half, len(chunk) - half],
                             "reason": error,
@@ -1802,37 +1871,44 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 status = "failed"
                 unconsolidated += [m for g in chunk for m in g["member_ids"]]
                 continue
-            fams, nm = families_from_batch(output, chunk, kind)
-            by_kind_families.setdefault(kind, []).extend(fams)
+            fams, nm = families_from_batch(output, chunk, notes)
+            families_raw.extend(fams)
             not_merged += nm
-    # Méta-consolidation : une passe par nature découpée en plusieurs lots.
-    for kind, fams in by_kind_families.items():
-        if kinds_batched.get(kind, 0) > 1 and len(fams) > 1 and not budget_stop:
-            for i, f in enumerate(fams, start=1):
-                f["temp_id"] = f"{kind.upper()}-T{i}"
+    # Méta-consolidation (bornée) : familles issues de lots différents, natures compatibles.
+    if meta_passes and families_raw and not budget_stop and not run.stop_reason:
+        ordered = sorted(families_raw, key=lambda f: f["label"].lower())
+        merged_all: list[dict[str, Any]] = []
+        for start in range(0, len(ordered), META_CHUNK_SIZE):
+            chunk_f = ordered[start : start + META_CHUNK_SIZE]
+            if len(chunk_f) < 2:
+                merged_all += chunk_f
+                continue
+            for i, f in enumerate(chunk_f, start=1):
+                f["temp_id"] = f"T{start + i}"
             calls += 1
             output, error, budget_stop = _consolidation_output(
                 session,
                 run,
                 llm,
                 settings,
-                prompt=build_meta_prompt(kind, fams),
-                what=f"méta-consolidation {kind} ({len(fams)} famille(s))",
+                prompt=build_meta_prompt(chunk_f),
+                what=f"méta-consolidation ({len(chunk_f)} famille(s))",
             )
             if output is not None:
-                merged = merge_families_from_meta(output, fams)
-                notes.append(f"méta-consolidation {kind} : {len(fams)} → {len(merged)} famille(s)")
-                fams = merged
+                merged = merge_families_from_meta(output, chunk_f, notes)
+                notes.append(f"méta-consolidation : {len(chunk_f)} → {len(merged)} famille(s)")
+                merged_all += merged
             else:
                 last_error = error or last_error
-                if not budget_stop:
-                    status = "partial" if status == "ok" else status
-                    notes.append(
-                        f"méta-consolidation {kind} non exploitable : familles des lots conservées"
-                    )
-                for f in fams:
+                if not budget_stop and status == "ok":
+                    status = "partial"
+                notes.append("méta-consolidation non exploitable : familles des lots conservées")
+                for f in chunk_f:
                     f.pop("temp_id", None)
-        families_raw.extend(fams)
+                merged_all += chunk_f
+            if budget_stop:
+                break
+        families_raw = merged_all
     if budget_stop:
         status = "failed"
     families, trace = finalize_families(families_raw, options)
@@ -1843,6 +1919,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         "trace": trace,
         "atomic_count": len(options),
         "groups_after_premerge": len(groups),
+        "cross_kind_groups": cross_kind,
         "family_count": len(families),
         "unconsolidated_option_ids": unconsolidated,
         "batches": len(batches),
@@ -1924,12 +2001,28 @@ def _comparison_rows(
     return criteria, rows, sorted(set(missing))
 
 
-def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
-    """Comparaison des familles sérieuses (sélection déterministe bornée), artefact conservé.
+def _request_texts(run: _Run) -> list[str]:
+    m = run.mission
+    f = run.framing
+    return [
+        m.input_text,
+        m.context_text,
+        m.ceo_preference,
+        f.problem_understood if f else "",
+        f.assumed_objective if f else "",
+        *(f.constraints if f else []),
+    ]
 
-    Une relance compacte au plus (moitié des familles retenues, journalisée, budgétée). Si la
-    comparaison échoue ou reste incomplète, `status` le dit (`failed` / `partial`) : aucune
-    prétention à une comparaison valide, et la porte qualité bloque la recommandation.
+
+def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
+    """Comparaison des familles avec couverture stratégique protégée à chaque tentative (B7).
+
+    Sélection stratifiée : d'abord les familles obligatoires (une par nature, désaccords internes,
+    citées dans la demande, dimensions critiques ou multiples, non-action, minorités matérielles),
+    puis les plus soutenues jusqu'au plafond. Une relance compacte au plus, qui ne sacrifie jamais
+    une famille obligatoire et n'est financée que si synthèse et porte restent finançables (B8).
+    `status = ok` seulement si la tentative valide couvre les obligatoires et évalue chaque famille
+    retenue sur tous les critères ; sinon `partial` / `failed` avec cause, et la porte bloque.
     """
     step = "comparaison"
     if run.stop_reason:
@@ -1939,7 +2032,18 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
     if not families or run.framing is None:
         _skip(session, run, step, "aucune famille stratégique à comparer")
         return
-    retained, deferred = select_families_for_comparison(families)
+    option_labels = {o["option_id"]: o["label"] for o in run.cartography.get("options", [])}
+    for f in families:
+        f["option_labels"] = [option_labels[o] for o in f["option_ids"] if o in option_labels]
+    critical = {d.name for d in run.framing.dimensions if d.presumed_criticality == "high"}
+    mandatory = coverage_requirements(
+        families, request_texts=_request_texts(run), critical_dimensions=critical
+    )
+    retained, deferred = select_families_for_attempt(
+        families, mandatory, cap=COMPARISON_MAX_FAMILIES
+    )
+    for f in families:
+        f.pop("option_labels", None)
     unknowns = list(run.framing.global_unknowns) + [
         u["text"] for u in run.cartography.get("unknowns", [])
     ]
@@ -1948,6 +2052,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
     output: ComparisonOutput | None = None
     error = ""
     compared = retained
+    coverage_note = ""
     for attempt in (1, 2):
         response = _call(
             session,
@@ -1973,6 +2078,9 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
                 "criteria": [],
                 "rows": [],
                 "retained_family_ids": [f["family_id"] for f in retained],
+                "mandatory_family_ids": sorted(mandatory, key=lambda x: int(x[1:])),
+                "coverage": mandatory,
+                "coverage_preserved": False,
                 "not_compared": deferred,
                 "attempts": attempts,
                 "parse_error": "budget",
@@ -1981,38 +2089,63 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         output, error = parse_structured(response.text, ComparisonOutput)
         error = _classify_parse_error(response, error)
         attempts.append({"attempt": attempt, "families": len(compared), "parse_error": error})
-        if output is not None or len(compared) < 2 or attempt == 2:
+        if output is not None or attempt == 2:
             break
-        # Relance compacte bornée : moitié des familles retenues (les plus soutenues d'abord).
-        half = max(2, len(compared) // 2)
-        kept = sorted(
-            compared,
-            key=lambda f: (-len(f.get("supporting_experts", [])), f["family_id"]),
-        )[:half]
-        kept_ids = {f["family_id"] for f in kept}
+        # Relance compacte bornée et STRATIFIÉE : les familles obligatoires sont toutes
+        # conservées ; seules les facultatives les moins soutenues sont écartées. Si la couverture
+        # obligatoire ne laisse aucune marge de réduction, la relance n'a pas lieu (échec
+        # explicite).
+        must = [f for f in compared if f["family_id"] in mandatory]
+        optional = sorted(
+            [f for f in compared if f["family_id"] not in mandatory],
+            key=lambda f: (-len(f.get("supporting_experts", [])), int(f["family_id"][1:])),
+        )
+        target_size = max(len(must), len(compared) // 2)
+        keep_optional = optional[: max(0, target_size - len(must))]
+        if len(must) + len(keep_optional) >= len(compared):
+            coverage_note = (
+                "relance impossible sans sacrifier une famille obligatoire pour la couverture "
+                "stratégique"
+            )
+            _journal(
+                session,
+                run,
+                step,
+                "retry_refused_coverage",
+                "facilitateur",
+                {"mandatory": len(must), "compared": len(compared)},
+            )
+            break
+        if not _retry_allowed(session, run, step, extra_calls=1, higher_priority_calls=2):
+            coverage_note = "relance non financée : synthèse et porte qualité prioritaires"
+            break
+        kept_ids = {f["family_id"] for f in must + keep_optional}
         deferred = deferred + [
             {
                 "family_id": f["family_id"],
                 "label": f["label"],
                 "kind": f["kind"],
-                "reason": "écartée de la relance compacte après sortie non exploitable",
+                "reason": "écartée de la relance compacte (facultative pour la couverture) après "
+                "sortie non exploitable",
             }
             for f in compared
             if f["family_id"] not in kept_ids
         ]
-        compared = sorted(kept, key=lambda f: int(f["family_id"][1:]))
+        compared = sorted(must + keep_optional, key=lambda f: int(f["family_id"][1:]))
         _journal(
             session,
             run,
             step,
             "retry",
             "facilitateur",
-            {"attempt": 2, "families": len(compared), "reason": error},
+            {"attempt": 2, "families": len(compared), "mandatory_kept": len(must), "reason": error},
         )
     criteria, rows, missing = _comparison_rows(output, compared)
+    compared_ids = {f["family_id"] for f in compared}
+    coverage_preserved = all(fid in compared_ids for fid in mandatory)
     if output is None:
         status = "failed"
-    elif missing or not criteria or not rows:
+    elif missing or not criteria or not rows or not coverage_preserved:
         status = "partial"
     else:
         status = "ok"
@@ -2026,10 +2159,14 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         "criteria": criteria,
         "rows": rows,
         "retained_family_ids": [f["family_id"] for f in compared],
+        "mandatory_family_ids": sorted(mandatory, key=lambda x: int(x[1:])),
+        "coverage": mandatory,
+        "coverage_preserved": coverage_preserved,
         "not_compared": deferred,
         "missing_family_ids": missing,
         "attempts": attempts,
-        "notes": output.notes if output else "",
+        "notes": output.notes if output else coverage_note,
+        "coverage_note": coverage_note,
         "parse_error": error,
     }
     _journal(
@@ -2043,9 +2180,12 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             "criteria": criteria,
             "rows": len(rows),
             "retained": len(compared),
+            "mandatory": len(mandatory),
+            "coverage_preserved": coverage_preserved,
             "not_compared": len(deferred),
             "missing": missing,
             "attempts": attempts,
+            "coverage_note": coverage_note,
             "parse_error": error,
         },
     )
@@ -2064,7 +2204,10 @@ def _synthesis_matter(run: _Run, residual: list[dict[str, Any]]) -> str:
     if f and f.constraints:
         parts.append("Contraintes : " + " ; ".join(f.constraints))
     if f and f.assumptions:
-        parts.append("Hypothèses de la demande (non vérifiées) : " + " ; ".join(f.assumptions))
+        parts.append(
+            "Hypothèses de la demande (non vérifiées) : "
+            + " ; ".join(f"{a} [{epistemic_tag(a)}]" for a in f.assumptions)
+        )
     if f and f.contestation.status == "raised":
         parts.append(
             f"Contestation soulevée au cadrage : {f.contestation.target} — "

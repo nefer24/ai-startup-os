@@ -952,22 +952,31 @@ l'incrément 1, la mission enchaîne (`app/missions.py`, prompts et règles dét
    `nuance` / `abandon` avec la cause (`triggered_by`) et la trace position initiale → révisée.
    Le Tour 0 reste immuable dans la cartographie. Un changement sans cause est marqué
    `unexplained_change` ; jamais d'optimisation vers le changement d'avis.
-5. **Consolidation** (`app/mission_consolidation.py`) — jamais d'appel monolithique :
-   **précompression** déterministe des doublons exacts, **partition par nature** (une famille ne
-   mêle jamais `build` et `buy` ; une nature à un seul groupe = famille sans appel), **lots
-   bornés** (16 groupes, représentation compacte), **méta-consolidation** par nature découpée ;
-   relance bornée (une par lot, lot scindé, journalisée, budgétée). Variantes, désaccords
-   intra-famille et non-fusions motivées conservés ; trace atomique → famille complète. Après
-   échec : options **non consolidées** listées, `status = failed`, **jamais** de repli « chaque
-   option devient une famille » ; la porte qualité bloque alors la recommandation.
-6. **Comparaison** — sur les familles **retenues** (sélection déterministe, plafond 12 : toutes si
-   possible, sinon les plus soutenues avec au moins une par nature et les désaccords internes ;
-   les autres sont listées « non comparées » avec motif) ; critères communs (noyau : résultat
-   attendu, coût, délai, risque, réversibilité, dépendances, preuves, inconnues), chaque
-   appréciation qualitative avec sa **base** (`evidence` / `inference` / `hypothesis` / `unknown` /
-   `ceo_input` / `model_knowledge`). Schéma **sans score ni rang** (testé). `status` = `ok`
-   (chaque famille retenue évaluée sur tous les critères) / `partial` / `failed` ; relance compacte
-   bornée ; un échec est dit, jamais présenté comme une comparaison valide.
+5. **Consolidation** (`app/mission_consolidation.py`) — jamais d'appel monolithique, et la
+   nature (`kind`) est un **signal, pas une frontière** : **précompression** déterministe des
+   doublons exacts de natures compatibles (égales ou `other`), **lots bornés inter-natures**
+   (16 groupes triés par libellé, représentation compacte), **méta-consolidation** bornée pouvant
+   réunir des familles équivalentes entre natures compatibles ; chaque famille porte
+   `canonical_kind` et `source_kinds`. Garde déterministe : action (`build` / `buy` / `integrate`
+   / `simplify` / `test`) et non-action (`wait` / `do_nothing`) ne se fusionnent jamais ; deux
+   natures concrètes différentes sous un même libellé ne sont jamais fusionnées d'office (le
+   greffier juge). Relance bornée (une par lot, lot scindé, journalisée, financée seulement si les
+   étapes plus prioritaires restent finançables). Variantes, désaccords intra-famille et
+   non-fusions motivées conservés ; trace atomique → famille complète. Après échec : options
+   **non consolidées** listées, `status = failed`, **jamais** de repli « chaque option devient une
+   famille » ; la porte qualité bloque alors la recommandation.
+6. **Comparaison** — **couverture stratégique protégée à chaque tentative** : familles
+   obligatoires déduites des données du pipeline (une représentante par nature, désaccords
+   internes, citées dans la demande / le cadrage / la préférence CEO, dimension critique ou
+   multiple, non-action / attente, minorités matérielles — jamais de mots-clés métier), puis les
+   plus soutenues jusqu'au plafond (12) ; les autres sont listées « non comparées » avec motif.
+   Critères communs (noyau : résultat attendu, coût, délai, risque, réversibilité, dépendances,
+   preuves, inconnues), chaque appréciation qualitative avec sa **base**. Schéma **sans score ni
+   rang** (testé). Relance compacte bornée et **stratifiée** (n'écarte que des facultatives ;
+   refusée si la couverture ne laisse aucune marge ou si synthèse et porte ne resteraient pas
+   finançables). `status = ok` seulement si chaque famille retenue est évaluée sur tous les
+   critères et que toutes les obligatoires figurent dans la tentative valide ; sinon `partial` /
+   `failed`, cause explicite, porte bloquée.
 7. **Synthèse en 14 champs** — synthétiseur distinct des perspectives : problème compris, objectif,
    contraintes, hypothèses, options examinées, preuves étiquetées, arguments pour / contre,
    risques, recommandation (`build` / `buy` / `integrate` / `simplify` / `test` / `wait` /
@@ -997,10 +1006,22 @@ surcharge CEO par mission **absolue** (l'escalade de classe ne la relève pas) ;
 cadrage relève les plafonds jusqu'au couloir de la nouvelle classe. Plan à deux niveaux à la
 composition : `full_deliberation` (3 appels planifiés par expert + étapes transverses) ou
 `coverage_first` (la largeur du Tour 0 prime, la délibération ira aussi loin que possible).
-Cycle minimal vérifié avant de délibérer (une confrontation par position + 4 appels de synthèse),
-sinon arrêt explicite `deliberation_budget_insufficient` avec **demande de budget chiffrée** ;
-steelman, recherche et révision ne sont financés que si le cœur de synthèse reste finançable
-(`budget_reserved_for_synthesis`, journalisé). **Dimension critique non couverte** ⇒ arrêt
+Cycle minimal vérifié avant de délibérer (une confrontation par position + cœur nominal :
+consolidation planifiée en lots, comparaison, synthèse, porte), sinon arrêt explicite
+`deliberation_budget_insufficient` avec **demande de budget chiffrée**. **Hiérarchie de
+protection** : porte qualité > synthèse > comparaison valide > consolidation valide > relance de
+comparaison > relance de consolidation > révisions > recherche > profondeur. Steelman, recherche et
+révision ne sont financés qu'au-delà du **pire cas borné** du cœur (nominal + relances autorisées,
+`budget_reserved_for_synthesis`) ; une relance n'est financée que si les étapes plus prioritaires
+restent finançables (`retry_refused_budget`, statut `failed` explicite, porte exécutée). La porte
+qualité ne peut plus être sacrifiée à une relance.
+
+**Garde-fou épistémique** : les hypothèses de la demande et des experts sont étiquetées
+(`calcul conditionnel` / `hypothèse comportementale` / `inconnue déclarée` / `prévision` /
+`affirmation`) dans la matière soumise aux instances, et la règle est explicite dans les consignes
+de confrontation et de synthèse : un calcul conditionnel (« X si Y ») est valide sous sa condition
+et n'est jamais requalifié en erreur ; seule une hypothèse comportementale (« parce que Y restera
+vrai ») est contestable comme telle ; une inconnue déclarée reste un scénario conditionnel. **Dimension critique non couverte** ⇒ arrêt
 `critical_dimension_uncovered` + demande de budget, jamais une fausse couverture. Aucune relance
 illimitée ; un refus = un arrêt propre + rapport partiel.
 

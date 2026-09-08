@@ -1,37 +1,53 @@
-"""Consolidation robuste et scalable des options atomiques (incrément 2, audit v1.2 — B2).
+"""Consolidation robuste et scalable des options atomiques (incrément 2, audits v1.2 B2 / v1.3
+B6-B8).
 
 Propriété garantie : **une inflation d'options atomiques ne provoque jamais un appel LLM
-monolithique** qui tenterait de reproduire toutes les options textuellement. La chaîne est :
+monolithique** et **la nature (`kind`) est un signal de structuration, pas une frontière
+non révisable**. La chaîne est :
 
-1. **précompression déterministe** — les options de même nature dont le libellé normalisé est
-   identique (casse, accents, ponctuation, espaces) sont fusionnées avant tout appel ; chaque
-   groupe est représenté par un identifiant unique, sa nature et un libellé court ;
-2. **partition par nature** — une famille ne mêle jamais deux natures (`build` ≠ `buy`) : la
-   consolidation sémantique n'a donc de sens qu'à l'intérieur d'une nature ; une nature à un seul
-   groupe donne une famille sans appel ;
-3. **lots bornés** — chaque nature est découpée en lots de taille bornée ; chaque lot est soumis
-   au greffier sous une représentation compacte (`identifiant | nature | libellé court`), donc
-   avec une sortie bornée ;
-4. **méta-consolidation** — si une nature a nécessité plusieurs lots, une passe unique fusionne
-   les familles équivalentes issues de lots différents (représentation compacte, une seule passe).
+1. **précompression déterministe** — les options dont le libellé normalisé est identique et dont
+   les natures sont *compatibles* sont fusionnées avant tout appel ; le groupe conserve ses
+   natures d'origine (`source_kinds`) ;
+2. **lots bornés inter-natures** — les groupes sont triés par libellé (les formulations voisines
+   de natures différentes sont adjacentes) puis découpés en lots de taille bornée, soumis au
+   greffier sous une représentation compacte (`identifiant : libellé [nature]`) ;
+3. **méta-consolidation** — si plusieurs lots ont été nécessaires, une passe bornée fusionne les
+   familles équivalentes issues de lots différents, y compris entre natures compatibles ;
+4. **nature canonique** — chaque famille porte `canonical_kind` (déclarée par le greffier si elle
+   figure parmi les natures d'origine, sinon la plus fréquente) et `source_kinds` (trace).
 
-Ce module est **déterministe** (aucun appel LLM) : il prépare, valide et assemble. L'orchestrateur
-(`app.missions`) fait les appels sous budget, borne les relances (une par lot, journalisée) et
-n'emploie **jamais** le repli « chaque option devient une famille » après une erreur : un lot
-irrécupérable laisse ses options **non consolidées**, le statut de la consolidation devient
-`failed` et la porte qualité bloque la recommandation.
+Garde déterministe : une famille ne réunit **jamais** une stratégie d'action (`build`, `buy`,
+`integrate`, `simplify`, `test`) et une stratégie de non-action (`wait`, `do_nothing`) — « agir »
+et « ne rien faire / différer » restent distincts ; `other` est compatible avec tout. Entre deux
+natures d'action, le jugement est sémantique et revient au greffier (acheter ≠ construire quand
+cela change dépendances, coût ou contrôle : c'est à lui de le dire).
+
+Ce module est **déterministe** (aucun appel LLM). L'orchestrateur (`app.missions`) fait les appels
+sous budget, borne les relances (une par lot, journalisée) et n'emploie **jamais** le repli
+« chaque option devient une famille » après une erreur : un lot irrécupérable laisse ses options
+**non consolidées**, le statut devient `failed` et la porte qualité bloque la recommandation.
+
+Le module fournit aussi les **exigences de couverture stratégique** de la comparaison (B7) : les
+familles qu'aucune tentative — initiale ou relance — ne peut sacrifier, déduites de données déjà
+présentes dans le pipeline (natures, désaccords internes, citation dans la demande, dimensions
+critiques, non-action), jamais de mots-clés métier.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from typing import Any
 
 from app.mission_schemas import ConsolidationOutput
 
 CONSOLIDATION_BATCH_SIZE = 16
+META_CHUNK_SIZE = 32
 SHORT_LABEL_CHARS = 90
+ACTION_KINDS = frozenset({"build", "buy", "integrate", "simplify", "test"})
+NON_ACTION_KINDS = frozenset({"wait", "do_nothing"})
+WILDCARD_KIND = "other"
 _PUNCT = re.compile(r"[^\w\s]", re.UNICODE)
 _SPACES = re.compile(r"\s+")
 
@@ -49,76 +65,123 @@ def short_label(text: str, limit: int = SHORT_LABEL_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def premerge_options(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fusion déterministe des doublons exacts (même nature, même libellé normalisé).
+def kinds_compatible(a: str, b: str) -> bool:
+    """Deux natures peuvent-elles appartenir à une même famille ? (garde déterministe)"""
+    if a == b or WILDCARD_KIND in (a, b):
+        return True
+    return (a in NON_ACTION_KINDS) == (b in NON_ACTION_KINDS)
 
-    Retourne des **groupes** : `group_id` (identifiant de la première option), `member_ids`,
-    `kind`, `label` (court), `expert_ids`. Un groupe à un membre est une option ordinaire.
+
+def canonical_kind(source_kinds: list[str], declared: str = "") -> str:
+    """Nature canonique : la nature déclarée si elle est d'origine, sinon la plus fréquente."""
+    concrete = [k for k in source_kinds if k != WILDCARD_KIND]
+    if declared and declared != WILDCARD_KIND and declared in source_kinds:
+        return declared
+    if not concrete:
+        return WILDCARD_KIND
+    counts = Counter(concrete)
+    best = max(counts.values())
+    return next(k for k in concrete if counts[k] == best)
+
+
+def premerge_options(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fusion déterministe des doublons exacts (même libellé normalisé, natures compatibles).
+
+    Retourne des **groupes** : `group_id`, `member_ids`, `source_kinds` (ordre d'apparition),
+    `kind` (canonique), `label` (court), `expert_ids`. Un groupe à un membre est une option
+    ordinaire. Deux libellés identiques de natures incompatibles restent deux groupes.
     """
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
-    order: list[tuple[str, str]] = []
+    groups: list[dict[str, Any]] = []
+    index: dict[str, list[dict[str, Any]]] = {}
     for o in options:
-        key = (o["kind"], normalize_label(o["label"]))
-        g = groups.get(key)
-        if g is None:
-            g = {
+        key = normalize_label(o["label"])
+        target = None
+        for g in index.get(key, []):
+            # Fusion déterministe seulement si les natures sont égales ou si l'une est `other` :
+            # deux natures concrètes différentes sous un même libellé (acheter / construire…)
+            # restent deux groupes, adjacents dans le même lot, et c'est au greffier de juger.
+            if all(k == o["kind"] or WILDCARD_KIND in (k, o["kind"]) for k in g["source_kinds"]):
+                target = g
+                break
+        if target is None:
+            target = {
                 "group_id": o["option_id"],
                 "member_ids": [],
+                "source_kinds": [],
                 "kind": o["kind"],
                 "label": short_label(o["label"]),
                 "expert_ids": [],
+                "dimensions": [],
             }
-            groups[key] = g
-            order.append(key)
-        g["member_ids"].append(o["option_id"])
-        if o["expert_id"] not in g["expert_ids"]:
-            g["expert_ids"].append(o["expert_id"])
-    return [groups[k] for k in order]
+            groups.append(target)
+            index.setdefault(key, []).append(target)
+        target["member_ids"].append(o["option_id"])
+        if o["kind"] not in target["source_kinds"]:
+            target["source_kinds"].append(o["kind"])
+        if o["expert_id"] not in target["expert_ids"]:
+            target["expert_ids"].append(o["expert_id"])
+        if o.get("dimension") and o["dimension"] not in target["dimensions"]:
+            target["dimensions"].append(o["dimension"])
+    for g in groups:
+        g["kind"] = canonical_kind(g["source_kinds"])
+    return groups
 
 
 def plan_batches(
     groups: list[dict[str, Any]], batch_size: int = CONSOLIDATION_BATCH_SIZE
-) -> tuple[list[tuple[str, list[dict[str, Any]]]], list[dict[str, Any]]]:
-    """Partition par nature puis en lots bornés.
+) -> list[list[dict[str, Any]]]:
+    """Lots bornés inter-natures : groupes triés par libellé puis nature, découpés en lots.
 
-    Retourne (`batches`, `singletons`) : `batches` = liste de (nature, groupes) à soumettre au
-    greffier ; `singletons` = groupes seuls dans leur nature (famille sans appel).
+    Un seul groupe au total = aucune consolidation à faire (famille directe, sans appel).
     """
-    by_kind: dict[str, list[dict[str, Any]]] = {}
-    kinds: list[str] = []
-    for g in groups:
-        if g["kind"] not in by_kind:
-            kinds.append(g["kind"])
-        by_kind.setdefault(g["kind"], []).append(g)
-    batches: list[tuple[str, list[dict[str, Any]]]] = []
-    singletons: list[dict[str, Any]] = []
+    if len(groups) <= 1:
+        return []
+    ordered = sorted(groups, key=lambda g: (normalize_label(g["label"]), g["kind"]))
     size = max(2, batch_size)
-    for kind in kinds:
-        items = by_kind[kind]
-        if len(items) == 1:
-            singletons.append(items[0])
-            continue
-        for i in range(0, len(items), size):
-            batches.append((kind, items[i : i + size]))
-    return batches, singletons
+    return [ordered[i : i + size] for i in range(0, len(ordered), size)]
+
+
+def plan_consolidation(
+    options: list[dict[str, Any]], batch_size: int = CONSOLIDATION_BATCH_SIZE
+) -> dict[str, int]:
+    """Plan d'appels (sans relance) : lots + passes de méta-consolidation.
+
+    `nominal` = lots + méta ; `worst_case` = nominal + 2 par lot (une relance scindée par lot, au
+    plus) — la méta-passe ne se relance pas. Sert à réserver le pire cas borné du cœur (B8).
+    """
+    groups = premerge_options(options)
+    batches = plan_batches(groups, batch_size)
+    meta = 0
+    if len(batches) > 1:
+        # Familles au pire = nombre de groupes ; méta en tranches bornées.
+        meta = max(1, -(-len(groups) // META_CHUNK_SIZE))
+    nominal = len(batches) + meta
+    return {
+        "groups": len(groups),
+        "batches": len(batches),
+        "meta": meta,
+        "nominal": nominal,
+        "max_retries": len(batches),
+        "worst_case": nominal + 2 * len(batches),
+    }
 
 
 def estimate_consolidation_calls(
     options: list[dict[str, Any]], batch_size: int = CONSOLIDATION_BATCH_SIZE
 ) -> int:
     """Nombre d'appels planifiés pour consolider (lots + méta-passes), sans relance."""
-    batches, _ = plan_batches(premerge_options(options), batch_size)
-    kinds_with_batches: dict[str, int] = {}
-    for kind, _items in batches:
-        kinds_with_batches[kind] = kinds_with_batches.get(kind, 0) + 1
-    meta = sum(1 for n in kinds_with_batches.values() if n > 1)
-    return len(batches) + meta
+    return plan_consolidation(options, batch_size)["nominal"]
 
 
-def build_batch_prompt(kind: str, items: list[dict[str, Any]]) -> str:
-    """Prompt compact d'un lot : identifiant : libellé court (nature commune)."""
+def build_batch_prompt(items: list[dict[str, Any]]) -> str:
+    """Prompt compact d'un lot : identifiant : libellé court [natures d'origine]."""
     lines = [
-        f"Nature commune du lot : {kind}. Options atomiques (identifiant : libellé) :",
+        "Options atomiques (identifiant : libellé [nature(s) déclarée(s)]). La nature est un "
+        "signal, pas une frontière : deux formulations substantiellement identiques de natures "
+        "différentes forment UNE famille (indique alors la nature canonique) ; « agir » et "
+        "« ne rien faire / différer » restent toujours distincts, de même que des stratégies "
+        "réellement opposées (immédiat vs différé, refonte complète vs correctif minimal, acheter "
+        "vs construire quand cela change dépendances, coût ou contrôle)."
     ]
     for g in items:
         dup = (
@@ -126,7 +189,7 @@ def build_batch_prompt(kind: str, items: list[dict[str, Any]]) -> str:
             if len(g["member_ids"]) > 1
             else ""
         )
-        lines.append(f"- {g['group_id']} : {g['label']}{dup}")
+        lines.append(f"- {g['group_id']} : {g['label']} [{'/'.join(g['source_kinds'])}]{dup}")
     lines += [
         "",
         "Regroupe uniquement les options réellement équivalentes ; conserve les variantes et les "
@@ -136,30 +199,101 @@ def build_batch_prompt(kind: str, items: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def build_meta_prompt(kind: str, families: list[dict[str, Any]]) -> str:
-    """Prompt compact de méta-consolidation : familles issues de lots différents (même nature)."""
+def build_meta_prompt(families: list[dict[str, Any]]) -> str:
+    """Prompt compact de méta-consolidation : familles issues de lots différents."""
     lines = [
-        f"Nature commune : {kind}. Familles issues de lots séparés (identifiant : libellé, "
-        "nombre d'options) :"
+        "Familles issues de lots séparés (identifiant : libellé [nature canonique], nombre "
+        "d'options). Fusionne uniquement les familles réellement équivalentes, y compris entre "
+        "natures compatibles ; « agir » et « ne rien faire / différer » restent distincts."
     ]
     for f in families:
-        lines.append(f"- {f['temp_id']} : {f['label']} ({len(f['option_ids'])} option(s))")
+        lines.append(
+            f"- {f['temp_id']} : {f['label']} [{f['kind']}] ({len(f['option_ids'])} option(s))"
+        )
     lines += [
         "",
-        "Fusionne uniquement les familles réellement équivalentes (les identifiants sont ceux des "
-        "familles). Conserve les autres telles quelles. JSON compact, sans résumé libre.",
+        "Les identifiants sont ceux des familles. Conserve les autres telles quelles. "
+        "JSON compact, sans résumé libre.",
     ]
     return "\n".join(lines)
 
 
+def _family(
+    label: str,
+    parts: list[dict[str, Any]],
+    *,
+    declared_kind: str,
+    variants: list[dict[str, str]],
+    internal: list[str],
+    source: str,
+) -> dict[str, Any]:
+    source_kinds: list[str] = []
+    for p in parts:
+        for k in p.get("source_kinds", [p.get("kind", WILDCARD_KIND)]):
+            if k not in source_kinds:
+                source_kinds.append(k)
+    return {
+        "label": short_label(label),
+        "kind": canonical_kind(source_kinds, declared_kind),
+        "source_kinds": source_kinds,
+        "option_ids": [m for p in parts for m in p.get("member_ids", p.get("option_ids", []))],
+        "group_ids": [g for p in parts for g in p.get("group_ids", [p.get("group_id")]) if g],
+        "dimensions": list(dict.fromkeys(d for p in parts for d in p.get("dimensions", []) if d)),
+        "variants": variants,
+        "internal_disagreements": list(dict.fromkeys(internal)),
+        "source": source,
+    }
+
+
+def _split_incompatible(
+    label: str,
+    parts: list[dict[str, Any]],
+    *,
+    declared_kind: str,
+    variants: list[dict[str, str]],
+    internal: list[str],
+    source: str,
+    notes: list[str],
+) -> list[dict[str, Any]]:
+    """Garde : une famille mêlant action et non-action est scindée (journalisé)."""
+    action = [p for p in parts if p["kind"] in ACTION_KINDS]
+    non_action = [p for p in parts if p["kind"] in NON_ACTION_KINDS]
+    wild = [p for p in parts if p["kind"] not in ACTION_KINDS | NON_ACTION_KINDS]
+    if not action or not non_action:
+        return [
+            _family(
+                label,
+                parts,
+                declared_kind=declared_kind,
+                variants=variants,
+                internal=internal,
+                source=source,
+            )
+        ]
+    notes.append(f"famille « {label} » scindée : action et non-action ne se fusionnent pas")
+    out = []
+    for sub in (action + wild, non_action):
+        ids = {m for p in sub for m in p.get("member_ids", p.get("option_ids", []))}
+        out.append(
+            _family(
+                label,
+                sub,
+                declared_kind=declared_kind,
+                variants=[v for v in variants if v["option_id"] in ids],
+                internal=internal,
+                source=source + "+scission",
+            )
+        )
+    return out
+
+
 def families_from_batch(
-    output: ConsolidationOutput, items: list[dict[str, Any]], kind: str
+    output: ConsolidationOutput, items: list[dict[str, Any]], notes: list[str]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Familles d'un lot à partir de la sortie du greffier, identifiants validés.
 
     Les identifiants inconnus sont ignorés ; un groupe non cité par le greffier devient une famille
-    à lui seul (le greffier ne l'a rattaché à rien : ce n'est pas un repli après erreur, c'est
-    son jugement). Retourne (familles, non-fusions motivées).
+    à lui seul (c'est son jugement, pas un repli après erreur). Retourne (familles, non-fusions).
     """
     by_id = {g["group_id"]: g for g in items}
     assigned: set[str] = set()
@@ -169,37 +303,33 @@ def families_from_batch(
         if not gids:
             continue
         assigned.update(gids)
-        option_ids = [m for gid in gids for m in by_id[gid]["member_ids"]]
+        parts = [by_id[g] for g in gids]
         variants = [
             {"option_id": v.option_id, "difference": v.difference}
             for v in fam.variants
-            if v.option_id in by_id and v.option_id in gids
+            if v.option_id in gids
         ]
-        families.append(
-            {
-                "label": short_label(fam.label or by_id[gids[0]]["label"]),
-                "kind": kind,
-                "option_ids": option_ids,
-                "group_ids": gids,
-                "variants": variants,
-                "internal_disagreements": list(fam.internal_disagreements),
-                "source": "greffier",
-            }
+        families += _split_incompatible(
+            fam.label or parts[0]["label"],
+            parts,
+            declared_kind=fam.kind,
+            variants=variants,
+            internal=list(fam.internal_disagreements),
+            source="greffier",
+            notes=notes,
         )
     for g in items:
-        if g["group_id"] in assigned:
-            continue
-        families.append(
-            {
-                "label": g["label"],
-                "kind": kind,
-                "option_ids": list(g["member_ids"]),
-                "group_ids": [g["group_id"]],
-                "variants": [],
-                "internal_disagreements": [],
-                "source": "greffier_non_rattachee",
-            }
-        )
+        if g["group_id"] not in assigned:
+            families.append(
+                _family(
+                    g["label"],
+                    [g],
+                    declared_kind=g["kind"],
+                    variants=[],
+                    internal=[],
+                    source="greffier_non_rattachee",
+                )
+            )
     not_merged = [
         {"option_ids": [i for i in n.option_ids if i in by_id], "reason": n.reason}
         for n in output.not_merged_because
@@ -209,9 +339,9 @@ def families_from_batch(
 
 
 def merge_families_from_meta(
-    output: ConsolidationOutput, families: list[dict[str, Any]]
+    output: ConsolidationOutput, families: list[dict[str, Any]], notes: list[str]
 ) -> list[dict[str, Any]]:
-    """Applique une méta-consolidation : fusion de familles équivalentes d'une même nature."""
+    """Applique une méta-consolidation : fusion de familles équivalentes (natures compatibles)."""
     by_temp = {f["temp_id"]: f for f in families}
     assigned: set[str] = set()
     merged: list[dict[str, Any]] = []
@@ -221,21 +351,15 @@ def merge_families_from_meta(
             continue
         assigned.update(tids)
         parts = [by_temp[t] for t in tids]
-        merged.append(
-            {
-                "label": short_label(fam.label or parts[0]["label"]),
-                "kind": parts[0]["kind"],
-                "option_ids": [oid for p in parts for oid in p["option_ids"]],
-                "group_ids": [g for p in parts for g in p["group_ids"]],
-                "variants": [v for p in parts for v in p["variants"]],
-                "internal_disagreements": list(
-                    dict.fromkeys(
-                        [d for p in parts for d in p["internal_disagreements"]]
-                        + list(fam.internal_disagreements)
-                    )
-                ),
-                "source": "greffier+meta" if len(parts) > 1 else parts[0]["source"],
-            }
+        merged += _split_incompatible(
+            fam.label or parts[0]["label"],
+            parts,
+            declared_kind=fam.kind,
+            variants=[v for p in parts for v in p["variants"]],
+            internal=[d for p in parts for d in p["internal_disagreements"]]
+            + list(fam.internal_disagreements),
+            source="greffier+meta" if len(parts) > 1 else parts[0]["source"],
+            notes=notes,
         )
     for f in families:
         if f["temp_id"] not in assigned:
@@ -243,69 +367,141 @@ def merge_families_from_meta(
     return merged
 
 
-def singleton_family(group: dict[str, Any]) -> dict[str, Any]:
-    """Famille d'une nature qui ne compte qu'un seul groupe : aucun appel nécessaire."""
-    return {
-        "label": group["label"],
-        "kind": group["kind"],
-        "option_ids": list(group["member_ids"]),
-        "group_ids": [group["group_id"]],
-        "variants": [],
-        "internal_disagreements": [],
-        "source": "seule_de_sa_nature",
-    }
+def direct_family(group: dict[str, Any]) -> dict[str, Any]:
+    """Famille d'un groupe unique (aucun autre groupe à consolider) : aucun appel nécessaire."""
+    return _family(
+        group["label"],
+        [group],
+        declared_kind=group["kind"],
+        variants=[],
+        internal=[],
+        source="seule_option",
+    )
 
 
 def finalize_families(
     families: list[dict[str, Any]], options: list[dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Numérote les familles (F1…), ajoute les soutiens et construit la trace atomique → famille."""
+    """Numérote les familles (F1…), ajoute soutiens et natures, construit la trace atomique."""
     by_option = {o["option_id"]: o for o in options}
     final: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
     for i, f in enumerate(families, start=1):
         fid = f"F{i}"
         variant_ids = {v["option_id"] for v in f.get("variants", [])}
+        group_ids = set(f.get("group_ids", []))
+        source_kinds = list(
+            dict.fromkeys(
+                [by_option[o]["kind"] for o in f["option_ids"] if o in by_option]
+                + list(f.get("source_kinds", []))
+            )
+        )
         final.append(
             {
                 "family_id": fid,
                 "label": f["label"],
                 "kind": f["kind"],
+                "canonical_kind": f["kind"],
+                "source_kinds": source_kinds,
                 "option_ids": list(f["option_ids"]),
                 "variants": list(f.get("variants", [])),
                 "internal_disagreements": list(f.get("internal_disagreements", [])),
                 "supporting_experts": sorted(
                     {by_option[o]["expert_id"] for o in f["option_ids"] if o in by_option}
                 ),
+                "dimensions": sorted(
+                    {by_option[o].get("dimension", "") for o in f["option_ids"] if o in by_option}
+                    - {""}
+                ),
                 "source": f.get("source", "greffier"),
             }
         )
         for oid in f["option_ids"]:
-            gid = next((g for g in f.get("group_ids", []) if g == oid), None)
             role = (
                 "variant"
                 if oid in variant_ids
-                else (
-                    "member"
-                    if gid is not None or len(f.get("group_ids", [])) == 0
-                    else "premerged_duplicate"
-                )
+                else ("member" if (oid in group_ids or not group_ids) else "premerged_duplicate")
             )
             trace.append({"option_id": oid, "family_id": fid, "role": role})
     return final, trace
 
 
-# --- Comparaison : sélection déterministe des familles à comparer ---------------------------------
+# --- Comparaison : couverture stratégique et sélection stratifiée --------------------------------
 COMPARISON_MAX_FAMILIES = 12
 
 
-def select_families_for_comparison(
-    families: list[dict[str, Any]], cap: int = COMPARISON_MAX_FAMILIES
+def _cited(label: str, normalized_text: str) -> bool:
+    """Le libellé apparaît-il, mot pour mot, dans un texte normalisé de la demande ?"""
+    key = normalize_label(label)
+    if len(key) < 3:
+        return False
+    return re.search(rf"(?<!\w){re.escape(key)}(?!\w)", normalized_text) is not None
+
+
+def coverage_requirements(
+    families: list[dict[str, Any]],
+    *,
+    request_texts: list[str],
+    critical_dimensions: set[str],
+) -> dict[str, list[str]]:
+    """Familles qu'aucune tentative de comparaison ne peut sacrifier, avec leurs motifs.
+
+    Déduit de données déjà présentes dans le pipeline — jamais de mots-clés métier :
+      * une famille représentative de chaque nature canonique (la plus soutenue) ;
+      * les familles portant un désaccord interne ;
+      * les familles citées dans la demande / le cadrage / la préférence CEO (leur libellé ou
+        celui d'une de leurs options apparaît dans ces textes) ;
+      * les familles issues d'une dimension présumée critique ou de plusieurs dimensions ;
+      * une option de non-action / attente si elle existe ;
+      * les minorités matérielles : un seul soutien mais désaccord interne ou dimension critique.
+    """
+    reasons: dict[str, list[str]] = {}
+
+    def _mark(fid: str, why: str) -> None:
+        reasons.setdefault(fid, [])
+        if why not in reasons[fid]:
+            reasons[fid].append(why)
+
+    by_kind: dict[str, list[dict[str, Any]]] = {}
+    for f in families:
+        by_kind.setdefault(f["kind"], []).append(f)
+    for kind, fams in by_kind.items():
+        best = sorted(
+            fams,
+            key=lambda f: (-len(f.get("supporting_experts", [])), int(f["family_id"][1:])),
+        )[0]
+        _mark(best["family_id"], f"représentante de la nature {kind}")
+    texts = [normalize_label(t) for t in request_texts if t and t.strip()]
+    for f in families:
+        if f.get("internal_disagreements"):
+            _mark(f["family_id"], "désaccord interne")
+        labels = [f["label"], *f.get("option_labels", [])]
+        if any(_cited(lab, t) for lab in labels for t in texts):
+            _mark(f["family_id"], "citée dans la demande ou le cadrage")
+        dims = set(f.get("dimensions", []))
+        if dims & critical_dimensions:
+            _mark(f["family_id"], "dimension présumée critique")
+        if len(dims) >= 2:
+            _mark(f["family_id"], "portée par plusieurs dimensions")
+        if f["kind"] in NON_ACTION_KINDS:
+            _mark(f["family_id"], "option de non-action / attente")
+        if len(f.get("supporting_experts", [])) == 1 and (
+            f.get("internal_disagreements") or (dims & critical_dimensions)
+        ):
+            _mark(f["family_id"], "minorité matérielle")
+    return reasons
+
+
+def select_families_for_attempt(
+    families: list[dict[str, Any]],
+    mandatory: dict[str, list[str]],
+    *,
+    cap: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Retient au plus `cap` familles : toutes si possible ; sinon les plus soutenues, avec au
-    moins une famille par nature (les stratégies minoritaires sérieuses restent représentées) et
-    celles portant un désaccord interne. Aucun score : un ordre déterministe, journalisé.
+    """Sélection stratifiée : d'abord toutes les familles obligatoires (couverture), puis les
+    plus soutenues jusqu'au plafond. Le plafond ne tronque jamais la couverture obligatoire.
     Retourne (retenues, écartées avec motif)."""
+    retained: list[dict[str, Any]] = [f for f in families if f["family_id"] in mandatory]
     if len(families) <= cap:
         return list(families), []
     ranked = sorted(
@@ -313,26 +509,14 @@ def select_families_for_comparison(
         key=lambda f: (
             -len(f.get("supporting_experts", [])),
             -len(f.get("option_ids", [])),
-            f["family_id"],
+            int(f["family_id"][1:]),
         ),
     )
-    retained: list[dict[str, Any]] = []
-    seen_kinds: set[str] = set()
-    for f in ranked:  # une par nature d'abord
-        if f["kind"] not in seen_kinds:
-            retained.append(f)
-            seen_kinds.add(f["kind"])
-    for f in ranked:  # puis désaccords internes, puis soutien
-        if len(retained) >= cap:
-            break
-        if f not in retained and f.get("internal_disagreements"):
-            retained.append(f)
     for f in ranked:
         if len(retained) >= cap:
             break
         if f not in retained:
             retained.append(f)
-    retained = retained[: max(cap, len(seen_kinds))]
     retained_ids = {f["family_id"] for f in retained}
     deferred = [
         {
@@ -340,8 +524,8 @@ def select_families_for_comparison(
             "label": f["label"],
             "kind": f["kind"],
             "reason": (
-                "au-delà du plafond de familles comparées ; conservée dans le rapport et la "
-                "synthèse, non comparée"
+                "au-delà du plafond de familles comparées ; non obligatoire pour la couverture "
+                "stratégique ; conservée dans le rapport et la synthèse, non comparée"
             ),
         }
         for f in families

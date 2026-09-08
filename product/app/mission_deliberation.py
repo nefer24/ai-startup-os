@@ -22,6 +22,8 @@ Mouvements (document canonique §4, `behavior/04`) :
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Any
 
 from app.mission_budget import normalize_class
@@ -45,6 +47,69 @@ COMPACT = (
     "à la ligne décoratifs)"
 )
 
+# --- Garde-fou épistémique (audit v1.3) : hypothèses conditionnelles explicites ------------------
+EPISTEMIC_RULE = (
+    "Calibration épistémique : distingue (1) fait fourni, (2) calcul conditionnel explicite "
+    "(« X si Y », « à volume constant »), (3) hypothèse comportementale (« parce que Y restera "
+    "vrai »), (4) prévision, (5) inférence du modèle. Un calcul conditionnel donné avec sa "
+    "condition est VALIDE sous cette condition : ne le requalifie jamais en erreur ou en "
+    "incohérence ; dis plutôt qu'il est insuffisant pour estimer l'effet net si la condition "
+    "peut changer. Seule une hypothèse comportementale (la condition présentée comme prédiction) "
+    "peut être contestée comme telle ; une inconnue déclarée reste un scénario conditionnel, pas "
+    "une prévision."
+)
+EPISTEMIC_LABELS = {
+    "conditional_calculation": "calcul conditionnel (valide sous sa condition)",
+    "behavioural_hypothesis": "hypothèse comportementale (condition présentée comme prédiction)",
+    "declared_unknown": "inconnue déclarée (scénario conditionnel, pas une prévision)",
+    "forecast": "prévision",
+    "statement": "affirmation",
+}
+_COND_RE = re.compile(
+    r"\b(si\b|a condition|en supposant|sous l hypothese|toutes choses egales|"
+    r"a [a-z]+ constant(?:e|s|es)?\b|constant(?:e|s|es)?\b|inchang(?:e|ee|es|ees)\b)",
+)
+_BEHAV_RE = re.compile(
+    r"\b(parce que|car|puisque|etant donne que)\b.*"
+    r"\b(restera|resteront|sera|seront|va |vont |demeurera)\b"
+)
+_UNKNOWN_RE = re.compile(
+    r"\b(ne connait pas|ne connaissons pas|inconnu|on ignore|incertain|pas connu|sans savoir)\b"
+)
+_FORECAST_RE = re.compile(
+    r"\b(prevoit|prevision|prevu|devrait|devraient|anticip|projette|projection)\b"
+)
+
+
+def _fold(text: str) -> str:
+    stripped = unicodedata.normalize("NFKD", text)
+    stripped = "".join(c for c in stripped if not unicodedata.combining(c))
+    return re.sub(r"[^\w\s]", " ", stripped.lower())
+
+
+def classify_epistemic(text: str) -> str:
+    """Classe épistémique déterministe d'un énoncé (garde-fou, pas un jugement de validité).
+
+    `behavioural_hypothesis` prime sur `conditional_calculation` : « X parce que Y restera vrai »
+    présente la condition comme une prédiction, contestable ; « X si Y » ne l'est pas.
+    """
+    folded = " " + _fold(text) + " "
+    if _UNKNOWN_RE.search(folded):
+        return "declared_unknown"
+    if _BEHAV_RE.search(folded):
+        return "behavioural_hypothesis"
+    if _COND_RE.search(folded):
+        return "conditional_calculation"
+    if _FORECAST_RE.search(folded):
+        return "forecast"
+    return "statement"
+
+
+def epistemic_tag(text: str) -> str:
+    """Étiquette lisible ajoutée à un énoncé dans la matière soumise aux instances."""
+    return EPISTEMIC_LABELS[classify_epistemic(text)]
+
+
 # --- C. Confrontation -----------------------------------------------------------------------
 CONFRONTATION_SYSTEM = (
     "Le premier tour d'une étude est clos. Tu es l'une des perspectives qui y ont participé. "
@@ -61,7 +126,9 @@ CONFRONTATION_SYSTEM = (
     "Règles : une simple opposition non argumentée n'est pas recevable ; ne fabrique aucun "
     "désaccord ; si tu es d'accord avec une position, dis-le (convergence_note) plutôt que "
     "d'inventer une critique ; si ton désaccord dépend d'un FAIT vérifiable, mets "
-    "depends_on_fact = true et formule la question précise à rechercher (fact_question).\n\n"
+    "depends_on_fact = true et formule la question précise à rechercher (fact_question).\n"
+    + EPISTEMIC_RULE
+    + "\n\n"
     + COMPACT
     + ' : {"acts": [{"act": "critique|defend|complement|refute|third_way|none", "target": "P2", '
     '"nature": "solution|hypothesis|fact|value|other", "text": "…", "depends_on_fact": false, '
@@ -78,7 +145,10 @@ def build_map_view(cartography: dict[str, Any], exclude_label: str = "") -> str:
         lines.append(f"- {p['label']} ({p.get('dimension', '')}) : {p['position']}")
     hyps = cartography.get("hypotheses", [])
     if hyps:
-        lines.append("Hypothèses avancées : " + " ; ".join(h["text"] for h in hyps[:12]))
+        lines.append(
+            "Hypothèses avancées : "
+            + " ; ".join(f"{h['text']} [{epistemic_tag(h['text'])}]" for h in hyps[:12])
+        )
     unknowns = cartography.get("unknowns", [])
     if unknowns:
         lines.append("Inconnues déclarées : " + " ; ".join(u["text"] for u in unknowns[:12]))
@@ -430,7 +500,9 @@ SYNTHESIS_SYSTEM = (
     "- les preuves sont étiquetées par provenance : ceo_input, external, model_knowledge, "
     "inference, hypothesis ; aucune source inventée ;\n"
     "- la confiance (low|medium|high) est justifiée par la stabilité, les preuves, les "
-    "inconnues.\n\n"
+    "inconnues ;\n- "
+    + EPISTEMIC_RULE
+    + "\n\n"
     + COMPACT
     + ' : {"problem_understood": "…", "objective": "…", "constraints": ["…"], "assumptions": '
     '[{"text": "…", "status": "verified|unverified"}], "options": [{"family_id": "F1", "label": '
