@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Iterator
 
-from sqlalchemy import String, Text, create_engine
+from sqlalchemy import String, Text, create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -556,6 +556,13 @@ class LLMCallLog(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     duration_ms: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    # OT-V1 (incrément 1) — colonnes NULLABLE : tokens et coût réels du chemin structuré.
+    # Les appels historiques (`complete`) les laissent à NULL.
+    input_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(nullable=True)
+    cost_eur: Mapped[float | None] = mapped_column(nullable=True)
+    call_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    mission_id: Mapped[int | None] = mapped_column(nullable=True)
 
 
 class ProductEventLog(Base):
@@ -578,6 +585,93 @@ class ProductEventLog(Base):
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
 
 
+class Mission(Base):
+    """Mission de cadrage OT-V1 (incrément 1) : entrée unique → cadrage → composition → Tour 0 →
+    cartographie → rapport de situation `candidate`.
+
+    Une mission **ne décide rien et n'exécute rien** : son rapport reste `candidate` jusqu'à une
+    action CEO explicite (approuver / demander révision / rejeter). Les plafonds (appels, euros)
+    sont ceux fixés par le CEO pour l'incrément 1 ; ils ne sont jamais dépassés silencieusement.
+    """
+
+    __tablename__ = "missions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    input_type: Mapped[str] = mapped_column(String, default="problem")
+    input_text: Mapped[str] = mapped_column(Text, default="")
+    context_text: Mapped[str] = mapped_column(Text, default="")
+    ceo_preference: Mapped[str] = mapped_column(Text, default="")
+    declared_class: Mapped[str] = mapped_column(String, default="")
+    # Classe effective : déclarée par le CEO, sinon « importante_provisoire » (non déterminée),
+    # jamais « importante » définitive par défaut ; le cadrage peut l'escalader.
+    effective_class: Mapped[str] = mapped_column(String, default="importante_provisoire")
+    class_is_provisional: Mapped[bool] = mapped_column(default=True)
+    status: Mapped[str] = mapped_column(String, default="running")
+    stop_reason: Mapped[str] = mapped_column(String, default="")
+    max_llm_calls: Mapped[int] = mapped_column(default=12)
+    max_cost_eur: Mapped[float] = mapped_column(default=2.0)
+    llm_calls_used: Mapped[int] = mapped_column(default=0)
+    input_tokens: Mapped[int] = mapped_column(default=0)
+    output_tokens: Mapped[int] = mapped_column(default=0)
+    cost_eur: Mapped[float] = mapped_column(default=0.0)
+    framing_json: Mapped[str] = mapped_column(Text, default="")
+    composition_json: Mapped[str] = mapped_column(Text, default="")
+    cartography_json: Mapped[str] = mapped_column(Text, default="")
+    report_json: Mapped[str] = mapped_column(Text, default="")
+    ceo_notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
+
+
+class MissionJournalEntry(Base):
+    """Journal append-only d'une mission : chaque étape, chaque appel, chaque arrêt.
+
+    Les entrées du Tour 0 conservent le **prompt complet** envoyé à chaque expert (et son empreinte)
+    afin de pouvoir démontrer après coup que les contextes étaient réellement isolés.
+    """
+
+    __tablename__ = "mission_journal_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mission_id: Mapped[int] = mapped_column(index=True)
+    seq: Mapped[int] = mapped_column(default=0)
+    step: Mapped[str] = mapped_column(String, default="")
+    entry_type: Mapped[str] = mapped_column(String, default="")
+    actor: Mapped[str] = mapped_column(String, default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(default=_now)
+
+
+# Colonnes ajoutées après coup à des tables existantes (`create_all` ne migre pas). Pour une base
+# SQLite locale déjà créée avant l'incrément 1, elles sont ajoutées au démarrage si absentes.
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "llm_call_logs": {
+        "input_tokens": "INTEGER",
+        "output_tokens": "INTEGER",
+        "cost_eur": "FLOAT",
+        "call_type": "VARCHAR",
+        "mission_id": "INTEGER",
+    }
+}
+
+
+def ensure_added_columns(engine: Engine) -> list[str]:
+    """Ajoute les colonnes nullable manquantes (bases créées avant l'incrément 1). Idempotent."""
+    inspector = inspect(engine)
+    added: list[str] = []
+    for table, columns in _ADDED_COLUMNS.items():
+        if table not in inspector.get_table_names():
+            continue
+        existing = {col["name"] for col in inspector.get_columns(table)}
+        for name, sql_type in columns.items():
+            if name in existing:
+                continue
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+            added.append(f"{table}.{name}")
+    return added
+
+
 def make_engine(database_url: str) -> Engine:
     """Construit un moteur SQLAlchemy. `check_same_thread=False` pour SQLite + FastAPI."""
     connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
@@ -585,8 +679,9 @@ def make_engine(database_url: str) -> Engine:
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:
-    """Crée les tables si besoin et retourne une fabrique de sessions."""
+    """Crée les tables si besoin (et les colonnes ajoutées) et retourne une fabrique de sessions."""
     Base.metadata.create_all(engine)
+    ensure_added_columns(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)
 
 

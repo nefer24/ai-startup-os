@@ -826,3 +826,94 @@ class ProductEventLogOut(BaseModel):
     message: str
     metadata_json: str
     created_at: dt.datetime
+
+
+# ---------------------------------------------------------------------------
+# OT-V1 — incrément 1 : missions de cadrage (entrée unique → rapport de situation).
+# ---------------------------------------------------------------------------
+MissionInputType = Literal["problem", "idea", "objective", "existing_solution"]
+MissionDeclaredClass = Literal["", "courante", "importante", "structurante", "critique"]
+
+
+class MissionCreateRequest(BaseModel):
+    """Entrée unique d'une mission : problème, idée, objectif ou solution existante.
+
+    Sans classe déclarée, la mission démarre en « importante provisoire / non déterminée » et le
+    cadrage peut l'escalader. Les plafonds par défaut sont ceux fixés par le CEO (configuration).
+    """
+
+    input_type: MissionInputType = "problem"
+    input_text: str
+    context_text: str = ""
+    ceo_preference: str = ""
+    declared_class: MissionDeclaredClass = ""
+    max_llm_calls: int | None = Field(default=None, gt=0)
+    max_cost_eur: float | None = Field(default=None, gt=0)
+
+    @field_validator("input_text")
+    @classmethod
+    def _not_blank_input(cls, value: str) -> str:
+        """Refuse une entrée vide."""
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("ne doit pas être vide")
+        return cleaned
+
+    @field_validator("context_text", "ceo_preference")
+    @classmethod
+    def _strip_mission_optional(cls, value: str) -> str:
+        """Nettoie les champs optionnels."""
+        return value.strip()
+
+
+class MissionCeoActionRequest(BaseModel):
+    """Action CEO explicite sur un rapport `candidate` (approuver / révision / rejeter)."""
+
+    ceo_notes: str = ""
+
+
+class MissionOut(BaseModel):
+    """Vue complète d'une mission : métadonnées, budget consommé, artefacts JSON décodés."""
+
+    id: int
+    input_type: str
+    input_text: str
+    context_text: str
+    ceo_preference: str
+    declared_class: str
+    effective_class: str
+    class_is_provisional: bool
+    status: str
+    stop_reason: str
+    max_llm_calls: int
+    max_cost_eur: float
+    llm_calls_used: int
+    input_tokens: int
+    output_tokens: int
+    cost_eur: float
+    ceo_notes: str
+    created_at: dt.datetime
+    updated_at: dt.datetime
+    framing: dict[str, Any] | None = None
+    composition: dict[str, Any] | None = None
+    cartography: dict[str, Any] | None = None
+    report: dict[str, Any] | None = None
+
+
+class MissionJournalEntryOut(BaseModel):
+    """Entrée du journal append-only d'une mission."""
+
+    id: int
+    seq: int
+    step: str
+    entry_type: str
+    actor: str
+    payload: dict[str, Any]
+    created_at: dt.datetime
+
+
+class MissionReportMarkdownOut(BaseModel):
+    """Rapport de situation rendu en Markdown déterministe."""
+
+    mission_id: int
+    markdown: str

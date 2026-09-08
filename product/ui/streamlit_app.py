@@ -2242,6 +2242,149 @@ def _guide_list(title: str, rows: list[str]) -> None:
             st.markdown(f"- {row}")
 
 
+MISSION_NOTICE = (
+    "Une mission de cadrage (OT-V1, incrément 1) **comprend, compose, explore et cartographie** ; "
+    "elle ne recommande rien : le rapport de situation reste `candidate` jusqu'à votre action. "
+    "Plafonds par mission : 12 appels LLM et 2,00 € (défauts CEO), arrêt propre si atteints."
+)
+
+
+def render_mission_create(client: SolutionPlansAPIClient) -> None:
+    """Formulaire d'entrée unique : problème / idée / objectif / solution existante."""
+    st.subheader("Lancer une mission de cadrage")
+    st.info(MISSION_NOTICE)
+    with st.form("mission_create_form"):
+        input_type = st.selectbox(
+            "Nature de l'entrée",
+            options=["problem", "idea", "objective", "existing_solution"],
+            format_func=lambda v: {
+                "problem": "Problème",
+                "idea": "Idée",
+                "objective": "Objectif",
+                "existing_solution": "Solution existante",
+            }[v],
+        )
+        input_text = st.text_area("Entrée (texte du demandeur)", height=180)
+        context_text = st.text_area("Dossier / contexte (optionnel)", height=120)
+        ceo_preference = st.text_input("Préférence éventuelle du CEO (optionnel)")
+        declared_class = st.selectbox(
+            "Classe déclarée (optionnel — sinon « importante provisoire / non déterminée »)",
+            options=["", "courante", "importante", "structurante", "critique"],
+            format_func=lambda v: v or "non déclarée",
+        )
+        col1, col2 = st.columns(2)
+        with col1:
+            max_calls = st.number_input("Plafond d'appels LLM", min_value=1, value=12, step=1)
+        with col2:
+            max_cost = st.number_input("Plafond en euros", min_value=0.05, value=2.0, step=0.05)
+        submitted = st.form_submit_button("Lancer la mission")
+    if not submitted:
+        return
+    if not input_text.strip():
+        st.warning("L'entrée est obligatoire.")
+        return
+    try:
+        with st.spinner("Cadrage → composition → Tour 0 → cartographie…"):
+            mission = client.create_mission(
+                {
+                    "input_type": input_type,
+                    "input_text": input_text,
+                    "context_text": context_text,
+                    "ceo_preference": ceo_preference,
+                    "declared_class": declared_class,
+                    "max_llm_calls": int(max_calls),
+                    "max_cost_eur": float(max_cost),
+                }
+            )
+    except APIError as exc:
+        st.error(str(exc))
+        return
+    st.session_state["selected_mission_id"] = mission["id"]
+    st.success(
+        f"Mission #{mission['id']} : rapport `{mission['status']}` — "
+        f"{mission['llm_calls_used']} appel(s), {mission['cost_eur']:.4f} €"
+        + (f" — arrêt : {mission['stop_reason']}" if mission["stop_reason"] else "")
+    )
+
+
+def render_mission_detail(client: SolutionPlansAPIClient) -> None:
+    """Rapport de situation, composition, budget et actions CEO d'une mission."""
+    st.subheader("Missions")
+    try:
+        missions = client.list_missions()
+    except APIError as exc:
+        st.error(str(exc))
+        return
+    if not missions:
+        st.caption("Aucune mission pour l'instant.")
+        return
+    options = {
+        m["id"]: f"#{m['id']} · {m['status']} · {m['input_type']} · {m['input_text'][:60]}"
+        for m in missions
+    }
+    default = st.session_state.get("selected_mission_id", missions[0]["id"])
+    ids = list(options)
+    index = ids.index(default) if default in ids else 0
+    mission_id = st.selectbox(
+        "Mission", options=ids, index=index, format_func=lambda i: options[i], key="mission_pick"
+    )
+    try:
+        mission = client.get_mission(int(mission_id))
+        markdown = client.get_mission_report_markdown(int(mission_id))["markdown"]
+    except APIError as exc:
+        st.error(str(exc))
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Statut", mission["status"])
+    c2.metric("Appels", f"{mission['llm_calls_used']}/{mission['max_llm_calls']}")
+    c3.metric("Coût (€)", f"{mission['cost_eur']:.4f}")
+    c4.metric("Classe", mission["effective_class"])
+    if mission["stop_reason"]:
+        st.warning(f"Rapport partiel — arrêt : {mission['stop_reason']}")
+    composition = mission.get("composition") or {}
+    with st.expander("Composition (dimension → angle → justification)"):
+        for cell in composition.get("cells", []):
+            st.markdown(
+                f"- **{cell['dimension']}** (criticité {cell['criticality']}) : "
+                + ", ".join(cell["angles"])
+            )
+        for entry in composition.get("journal", []):
+            if entry.get("event") == "expert":
+                st.caption(f"{entry['expert_id']} — {entry['angle']} — {entry['justification']}")
+        bounds = composition.get("bounds", {})
+        if bounds:
+            st.caption(
+                f"Borne d'angles par cellule : {bounds.get('max_angles_per_cell')} — "
+                f"{bounds.get('max_angles_per_cell_nature', '')}"
+            )
+    st.markdown(markdown)
+    st.download_button(
+        "Télécharger le rapport (.md)",
+        data=markdown,
+        file_name=f"mission_{mission_id}_situation.md",
+        mime="text/markdown",
+    )
+    if mission["status"] != "candidate":
+        st.caption("Actions CEO indisponibles : le rapport n'est plus `candidate`.")
+        return
+    notes = st.text_input("Note CEO (optionnel)", key=f"mission_notes_{mission_id}")
+    a1, a2, a3 = st.columns(3)
+    actions = {
+        "approve": (a1, "Approuver le rapport"),
+        "request-revision": (a2, "Demander une révision"),
+        "reject": (a3, "Rejeter"),
+    }
+    for action, (col, label) in actions.items():
+        if col.button(label, key=f"mission_{action}_{mission_id}"):
+            try:
+                updated = client.mission_ceo_action(int(mission_id), action, notes)
+            except APIError as exc:
+                st.error(str(exc))
+                return
+            st.success(f"Mission #{mission_id} → `{updated['status']}` (aucune exécution).")
+            st.rerun()
+
+
 def main() -> None:
     """Point d'entrée de l'interface CEO."""
     st.set_page_config(page_title="AI-SOS — Fabrique de solutions", page_icon="🧭")
@@ -2260,6 +2403,7 @@ def main() -> None:
     (
         tab_guide,
         tab_project,
+        tab_missions,
         tab_create,
         tab_improve,
         tab_company,
@@ -2273,6 +2417,7 @@ def main() -> None:
         [
             "Guide MVP",
             "Projets",
+            "Missions (cadrage)",
             "Créer une solution",
             "Améliorer une solution existante",
             "Composer une entreprise IA spécialisée",
@@ -2292,6 +2437,9 @@ def main() -> None:
         render_project_dashboard(client)
         render_project_export(client)
         render_project_snapshot(client)
+    with tab_missions:
+        render_mission_create(client)
+        render_mission_detail(client)
     with tab_create:
         render_submit(client)
         render_plans_list(client)

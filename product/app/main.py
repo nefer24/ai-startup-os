@@ -128,6 +128,7 @@ L'observabilité (Phase 8) est **read-only** : elle journalise mais ne déclench
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated, Any
@@ -219,6 +220,17 @@ from app.deliverable_versions import (
     set_version_status,
 )
 from app.llm import LLMClient, build_llm_client
+from app.mission_report import render_situation_report_markdown
+from app.missions import (
+    InvalidMissionStatusError,
+    MissionNotFoundError,
+    apply_ceo_action,
+    get_mission,
+    list_journal,
+    list_missions,
+    mission_payload,
+    run_mission,
+)
 from app.observability import (
     list_events,
     list_llm_calls,
@@ -295,6 +307,11 @@ from app.schemas import (
     LLMCallLogOut,
     LLMResultOut,
     LLMTestRequest,
+    MissionCeoActionRequest,
+    MissionCreateRequest,
+    MissionJournalEntryOut,
+    MissionOut,
+    MissionReportMarkdownOut,
     ProductEventLogOut,
     ProjectCreateRequest,
     ProjectExportMarkdownOut,
@@ -1756,3 +1773,120 @@ def import_project_snapshot_endpoint(
         skipped_links=result["skipped_links"],
         warnings=result["warnings"],
     )
+
+
+# ---------------------------------------------------------------------------
+# OT-V1 — incrément 1 : missions de cadrage.
+#   Cadrage → Composition → Exploration indépendante (Tour 0) → Cartographie → Rapport `candidate`.
+# Le rapport ne recommande rien ; approbation / révision / rejet sont des actions CEO explicites
+# qui ne déclenchent aucune exécution.
+# ---------------------------------------------------------------------------
+def _get_mission_or_404(db: Session, mission_id: int) -> Any:
+    """Récupère une mission par id ou lève 404."""
+    try:
+        return get_mission(db, mission_id)
+    except MissionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="mission introuvable") from exc
+
+
+@app.post("/missions", response_model=MissionOut, status_code=201)
+def create_mission(payload: MissionCreateRequest, db: DbSession, llm: LLM) -> MissionOut:
+    """Crée et exécute une mission de cadrage sous budget ; retourne le rapport `candidate`."""
+    mission = run_mission(db, llm, payload, get_settings())
+    log_product_event(
+        db,
+        "mission_report_ready",
+        "otv1_inc1",
+        "mission",
+        mission.id,
+        mission.status,
+        metadata={
+            "llm_calls_used": mission.llm_calls_used,
+            "cost_eur": mission.cost_eur,
+            "stop_reason": mission.stop_reason,
+            "effective_class": mission.effective_class,
+        },
+    )
+    return MissionOut.model_validate(mission_payload(mission))
+
+
+@app.get("/missions", response_model=list[MissionOut])
+def list_missions_endpoint(db: DbSession) -> list[MissionOut]:
+    """Liste les missions (limite 100), de la plus récente à la plus ancienne."""
+    return [MissionOut.model_validate(mission_payload(m)) for m in list_missions(db)]
+
+
+@app.get("/missions/{mission_id}", response_model=MissionOut)
+def get_mission_endpoint(mission_id: int, db: DbSession) -> MissionOut:
+    """Retourne une mission complète (cadrage, composition, cartographie, rapport)."""
+    return MissionOut.model_validate(mission_payload(_get_mission_or_404(db, mission_id)))
+
+
+@app.get("/missions/{mission_id}/journal", response_model=list[MissionJournalEntryOut])
+def get_mission_journal(mission_id: int, db: DbSession) -> list[MissionJournalEntryOut]:
+    """Journal append-only de la mission (prompts du Tour 0 inclus, pour prouver l'isolement)."""
+    _get_mission_or_404(db, mission_id)
+    return [
+        MissionJournalEntryOut(
+            id=e.id,
+            seq=e.seq,
+            step=e.step,
+            entry_type=e.entry_type,
+            actor=e.actor,
+            payload=json.loads(e.payload_json) if e.payload_json else {},
+            created_at=e.created_at,
+        )
+        for e in list_journal(db, mission_id)
+    ]
+
+
+@app.get("/missions/{mission_id}/report/markdown", response_model=MissionReportMarkdownOut)
+def get_mission_report_markdown(mission_id: int, db: DbSession) -> MissionReportMarkdownOut:
+    """Rapport de situation en Markdown déterministe (aucun appel LLM, aucune mutation)."""
+    mission = _get_mission_or_404(db, mission_id)
+    report = mission_payload(mission)["report"]
+    if report is None:
+        raise HTTPException(status_code=409, detail="rapport non disponible (mission non terminée)")
+    return MissionReportMarkdownOut(
+        mission_id=mission.id, markdown=render_situation_report_markdown(report)
+    )
+
+
+def _mission_ceo_action(
+    db: Session, mission_id: int, action: str, payload: MissionCeoActionRequest
+) -> MissionOut:
+    mission = _get_mission_or_404(db, mission_id)
+    try:
+        mission = apply_ceo_action(db, mission, action, payload.ceo_notes)
+    except InvalidMissionStatusError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    log_product_event(
+        db, f"mission_{mission.status}", "otv1_inc1", "mission", mission.id, mission.status
+    )
+    return MissionOut.model_validate(mission_payload(mission))
+
+
+@app.post("/missions/{mission_id}/approve", response_model=MissionOut)
+def approve_mission(
+    mission_id: int, db: DbSession, payload: MissionCeoActionRequest | None = None
+) -> MissionOut:
+    """Validation CEO du rapport de situation. Ne déclenche aucune exécution."""
+    return _mission_ceo_action(db, mission_id, "approve", payload or MissionCeoActionRequest())
+
+
+@app.post("/missions/{mission_id}/request-revision", response_model=MissionOut)
+def request_revision_mission(
+    mission_id: int, db: DbSession, payload: MissionCeoActionRequest | None = None
+) -> MissionOut:
+    """Demande de révision CEO. Ne relance rien automatiquement."""
+    return _mission_ceo_action(
+        db, mission_id, "request_revision", payload or MissionCeoActionRequest()
+    )
+
+
+@app.post("/missions/{mission_id}/reject", response_model=MissionOut)
+def reject_mission(
+    mission_id: int, db: DbSession, payload: MissionCeoActionRequest | None = None
+) -> MissionOut:
+    """Rejet CEO du rapport de situation."""
+    return _mission_ceo_action(db, mission_id, "reject", payload or MissionCeoActionRequest())
