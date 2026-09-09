@@ -2703,7 +2703,7 @@ def test_b9_stress_coverage_without_mandatory_explosion(
     assert hard <= cited | {by_label["option omega"]}
     assert len(comp["mandatory_family_ids"]) <= 12
     assert len(comp["mandatory_family_ids"]) < cons["family_count"] / 2
-    # Couverture : dimensions critiques, non-action, natures, minorité représentées, pas exhaustives.
+    # Couverture : représentée, jamais exhaustive.
     retained_set = set(retained)
     dims_retained = {d for fid in retained for d in families[fid]["dimensions"]}
     assert {"dimension alpha", "dimension beta"} <= dims_retained
