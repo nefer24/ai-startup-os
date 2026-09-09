@@ -179,6 +179,9 @@ def test_error_classification_is_generic_and_fail_closed() -> None:
         "exception_type",
         "message",
         "retry_after_seconds",
+        "cost_semantics",
+        "usage_input_tokens",
+        "usage_output_tokens",
     }
 
 

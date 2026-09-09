@@ -129,9 +129,13 @@ from app.mission_schemas import (
 )
 from app.observability import observed
 from app.provider_errors import (
+    COST_KNOWN,
+    COST_KNOWN_ZERO,
+    COST_UNCERTAIN,
     LOCAL_ERROR,
     PERMANENT_PROVIDER_ERROR,
     TRANSIENT_PROVIDER_ERROR,
+    ProviderErrorInfo,
     classify_provider_error,
     retry_delay_seconds,
 )
@@ -324,6 +328,7 @@ def _call(
         prompt=prompt,
         call_type=call_type,
         max_tokens=max_tokens,
+        estimated_cost_eur=estimate,
     )
     cost = run.ledger.record(response.usage)
     _sync_budget(session, run)
@@ -365,18 +370,25 @@ def _call_with_retries(
     prompt: str,
     call_type: str,
     max_tokens: int,
+    estimated_cost_eur: float,
 ) -> tuple[LLMResponse, int]:
-    """Tentatives physiques bornées d'UN appel logique déjà admis par le budget (B10).
+    """Tentatives physiques bornées d'UN appel logique déjà admis par le budget (B10, B12).
 
     Une erreur classée transitoire est relancée avec attente exponentielle bornée (ou `Retry-After`
     plafonné), au plus `mission_provider_max_attempts` tentatives par appel logique et
     `mission_provider_max_retries_total` relances par mission ; une erreur permanente, locale ou
     inconnue n'est jamais relancée. Chaque tentative est journalisée (`call_attempt_failed`) et
-    tracée dans `llm_call_logs` par le client observé. Les tentatives échouées ne consomment ni
-    appel logique ni coût au registre (aucun usage rapporté) : elles ne peuvent donc jamais
-    entamer les réserves des étapes obligatoires (B8). Limite : si le fournisseur a traité une
-    requête dont la réponse s'est perdue, il n'y a pas de garantie « exactement une fois » côté
-    fournisseur ; côté mission, un seul résultat logique est enregistré.
+    tracée dans `llm_call_logs` par le client observé. Les tentatives échouées ne consomment aucun
+    appel logique : les réserves en appels des étapes obligatoires (B8) restent intactes.
+
+    Coût des tentatives échouées (B12) : un rejet explicite avant traitement (`known_zero`) ne
+    coûte rien ; un échec ambigu (`uncertain` : délai, coupure, 500/502/504, inconnu) ajoute la
+    borne pré-appel `estimated_cost_eur` à l'exposition potentielle du registre ; un usage réel
+    exposé par l'exception (`known`) est compté en coût connu. Une relance n'est admise que si
+    connu + incertain + `estimated_cost_eur` ≤ `max_cost_eur` (sinon
+    `retry_refused_uncertain_cost_budget`, fail-closed). L'exposition reste ensuite déduite du
+    plafond pour tous les appels suivants, obligatoires compris. Côté mission, un seul résultat
+    logique est enregistré, quel que soit le nombre de tentatives.
     """
     run.logical_calls += 1
     logical_call_id = f"LC-{run.logical_calls}"
@@ -393,8 +405,43 @@ def _call_with_retries(
         except Exception as exc:
             info = classify_provider_error(exc)
             run.provider_failures += 1
+            attempt_cost = _account_failed_attempt(
+                run,
+                info,
+                estimated_cost_eur=estimated_cost_eur,
+                call_type=call_type,
+                logical_call_id=logical_call_id,
+                attempt=attempt,
+            )
+            _sync_budget(session, run)
             total_cap_reached = run.provider_retries >= settings.mission_provider_max_retries_total
-            can_retry = info.retryable and attempt < max_attempts and not total_cap_reached
+            cost_allows = run.ledger.retry_allowed_by_cost(estimated_cost_eur)
+            otherwise_allowed = info.retryable and attempt < max_attempts and not total_cap_reached
+            can_retry = otherwise_allowed and cost_allows
+            if can_retry:
+                refusal_reason = ""
+            elif not info.retryable:
+                refusal_reason = "not_retryable"
+            elif attempt >= max_attempts:
+                refusal_reason = "max_attempts_reached"
+            elif total_cap_reached:
+                refusal_reason = "total_retry_cap_reached"
+            else:
+                refusal_reason = "retry_refused_uncertain_cost_budget"
+            cost_view = {
+                **attempt_cost,
+                "known_cost_eur": run.ledger.known_cost_eur,
+                "uncertain_cost_upper_bound_eur": round(
+                    run.ledger.uncertain_cost_upper_bound_eur, 6
+                ),
+                "potential_total_cost_upper_bound_eur": (
+                    run.ledger.potential_total_cost_upper_bound_eur
+                ),
+                "estimated_retry_cost_eur": estimated_cost_eur,
+                "max_cost_eur": run.ledger.max_cost_eur,
+                "retry_allowed_by_cost": cost_allows,
+                "retry_refusal_reason": refusal_reason,
+            }
             delay = (
                 retry_delay_seconds(
                     attempt,
@@ -425,6 +472,7 @@ def _call_with_retries(
                     "retry_delay_seconds": delay,
                     "retries_total_used": run.provider_retries,
                     "retries_total_max": settings.mission_provider_max_retries_total,
+                    **cost_view,
                     "budget": run.ledger.snapshot(),
                 },
             )
@@ -432,7 +480,9 @@ def _call_with_retries(
                 run.provider_retries += 1
                 provider_sleep(delay)
                 continue
-            if info.category == TRANSIENT_PROVIDER_ERROR:
+            if refusal_reason == "retry_refused_uncertain_cost_budget":
+                reason = refusal_reason
+            elif info.category == TRANSIENT_PROVIDER_ERROR:
                 reason = "transient_retries_exhausted"
             elif info.category == PERMANENT_PROVIDER_ERROR:
                 reason = "permanent_provider_error"
@@ -454,8 +504,49 @@ def _call_with_retries(
                 "retries_total_max": settings.mission_provider_max_retries_total,
                 "total_retry_cap_reached": total_cap_reached and info.retryable,
                 **info.to_dict(),
+                **cost_view,
             }
             raise MissionCallFailedError(failure) from exc
+
+
+def _account_failed_attempt(
+    run: _Run,
+    info: ProviderErrorInfo,
+    *,
+    estimated_cost_eur: float,
+    call_type: str,
+    logical_call_id: str,
+    attempt: int,
+) -> dict[str, Any]:
+    """Comptabilité financière d'une tentative échouée selon sa sémantique de coût (B12)."""
+    if info.cost_semantics == COST_KNOWN and info.usage_input_tokens is not None:
+        usage = LLMUsage(
+            input_tokens=int(info.usage_input_tokens),
+            output_tokens=int(info.usage_output_tokens or 0),
+        )
+        return {
+            "cost_semantics": COST_KNOWN,
+            "attempt_known_cost_eur": run.ledger.record_failed_attempt_usage(usage),
+            "attempt_uncertain_upper_bound_eur": 0.0,
+        }
+    if info.cost_semantics == COST_UNCERTAIN:
+        exposure = run.ledger.record_uncertain_attempt(
+            estimated_cost_eur,
+            call_type=call_type,
+            logical_call_id=logical_call_id,
+            attempt=attempt,
+        )
+        return {
+            "cost_semantics": COST_UNCERTAIN,
+            "attempt_known_cost_eur": 0.0,
+            "attempt_uncertain_upper_bound_eur": exposure["upper_bound_eur"],
+            "exposure_id": exposure["id"],
+        }
+    return {
+        "cost_semantics": COST_KNOWN_ZERO,
+        "attempt_known_cost_eur": 0.0,
+        "attempt_uncertain_upper_bound_eur": 0.0,
+    }
 
 
 def _classify_parse_error(response: LLMResponse, error: str) -> str:
@@ -1130,6 +1221,9 @@ BUDGET_STOP_REASONS = frozenset(
         "cost_cap_would_be_exceeded",
         "budget_insufficient_for_exploration",
         "deliberation_budget_insufficient",
+        # B12 — relance fournisseur refusée : l'exposition financière potentielle atteindrait le
+        # plafond CEO (arrêt budgétaire, pas une panne).
+        "retry_refused_uncertain_cost_budget",
     }
 )
 OBJECTION_ACTS = frozenset({"critique", "refute", "third_way", "steelman_critique"})

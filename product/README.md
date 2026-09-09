@@ -1026,11 +1026,32 @@ qualité ne peut plus être sacrifiée à une relance.
 (`MISSION_PROVIDER_*`) ; une erreur permanente (authentification, requête invalide, modèle
 inexistant), locale (validation, contrat) ou inconnue n'est jamais relancée. `llm_calls_used`
 compte les appels logiques réussis ; tentatives, relances et échecs sont comptés à part et
-journalisés par tentative. Une tentative échouée ne consomme ni appel ni euro : les réserves du cœur
-(B8) et les plafonds restent intacts. Après épuisement : mission `failed`, `stop_reason`
+journalisés par tentative. Une tentative échouée ne consomme aucun appel : les réserves en appels du
+cœur (B8) restent intactes ; son coût suit la sémantique B12 ci-dessous. Après épuisement : mission
+`failed`, `stop_reason`
 `transient_retries_exhausted` (ou `permanent_provider_error`), échec structuré `failure` (étape,
 acteur, tentatives, catégorie, code), données déjà produites conservées, rapport diagnostic
 partiel, aucune recommandation.
+
+**Coût des tentatives fournisseur (B12)** : trois plafonds distincts — appels logiques réussis
+(`max_llm_calls`), relances physiques (`MISSION_PROVIDER_*`) et plafond financier conservateur.
+Une tentative échouée sans usage rapporté n'est jamais supposée gratuite si elle a pu être traitée :
+un **rejet explicite avant traitement** (429, 529, 503, 408, 425, 4xx permanents, types
+`overloaded_error` / `rate_limit_error` / `service_unavailable` / authentification…) vaut
+`known_zero` ; un **échec ambigu** (délai, coupure, réponse perdue, 500 / 502 / 504, erreur inconnue
+ou locale dans la frontière d'appel) vaut `uncertain` et ajoute la **borne pré-appel** de l'appel à
+`uncertain_cost_upper_bound_eur` (exposition potentielle, jamais présentée comme facturée) ; un usage
+réel exposé par l'exception vaut `known` et entre dans le coût connu. Le budget distingue
+`known_cost_eur` (observé), `uncertain_cost_upper_bound_eur` et
+`potential_total_cost_upper_bound_eur` (= connu + incertain) ; le plafond CEO `max_cost_eur`
+s'applique à cette borne pour **tout** appel (obligatoire compris) et pour toute relance :
+`connu + incertain + estimation ≤ plafond` (égalité admise), sinon aucune relance,
+`retry_refused_uncertain_cost_budget`, mission `failed`, `decision_ready = false`. Chaque tentative
+échouée journalise `cost_semantics`, coût connu, exposition, borne, estimation de relance, plafond,
+`retry_allowed_by_cost` et la raison d'un refus ; les expositions sont conservées individuellement
+(non réconciliées) pour qu'une réconciliation future remplace la borne au lieu de l'additionner. Le
+rapport et l'interface affichent « coût connu · exposition incertaine ≤ · borne supérieure
+potentielle ≤ · plafond CEO ».
 
 **État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
 `GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec

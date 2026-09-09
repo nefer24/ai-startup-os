@@ -2410,8 +2410,20 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Statut", mission["status"])
     c2.metric("Appels", f"{mission['llm_calls_used']}/{mission['max_llm_calls']}")
-    c3.metric("Coût (€)", f"{mission['cost_eur']:.4f}")
+    c3.metric("Coût connu (€)", f"{mission['cost_eur']:.4f}")
     c4.metric("Classe", mission["effective_class"])
+    # B12 — le coût connu n'est pas l'exposition : des tentatives fournisseur au coût inconnu sont
+    # comptées comme borne supérieure, et le plafond CEO s'applique à cette borne.
+    budget = (mission.get("report") or {}).get("budget") or {}
+    uncertain = float(budget.get("uncertain_cost_upper_bound_eur", 0.0) or 0.0)
+    if uncertain > 0:
+        potential = float(budget.get("potential_total_cost_upper_bound_eur", 0.0) or 0.0)
+        cap = float(budget.get("max_cost_eur", mission.get("max_cost_eur", 0.0)) or 0.0)
+        st.caption(
+            f"Exposition fournisseur incertaine ≤ {uncertain:.4f} € (borne supérieure sur "
+            f"{int(budget.get('uncertain_attempts', 0) or 0)} tentative(s) échouée(s), pas une "
+            f"facture) · borne totale potentielle ≤ {potential:.4f} € · plafond CEO {cap:.2f} €"
+        )
     # B11 — l'état de la mission est dit avant toute lecture de rapport : « pas de rapport »
     # n'implique jamais « encore en cours ». Une mission échouée est annoncée comme telle.
     summary = mission_state_summary(mission)

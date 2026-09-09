@@ -10,6 +10,20 @@ La politique raisonne en catégories génériques ; les correspondances propres 
 types d'erreur, en-tête `Retry-After`) sont lues par introspection défensive (`status_code`,
 `body`, `response`), sans dépendre d'un fournisseur en particulier. Aucun secret n'est copié : seuls
 le type, le code et un message tronqué sont conservés.
+
+Sémantique de coût d'une tentative échouée (B12). Une tentative sans usage rapporté n'a pas
+forcément coûté zéro : le fournisseur a pu traiter la requête sans que la réponse nous parvienne.
+Trois cas, jamais confondus :
+
+* `known_zero` — **rejet explicite avant traitement** : le fournisseur a répondu par une erreur
+  structurée de contrôle d'admission (débit, surcharge, indisponibilité, validation,
+  authentification, permission, ressource inexistante). Contrat retenu : aucun coût de génération
+  n'est engagé pour une requête que le fournisseur a refusé d'admettre et l'a dit.
+* `uncertain` — **échec ambigu** : délai d'attente, coupure de connexion, réponse perdue, panne
+  serveur ou de passerelle après admission possible (500, 502, 504), erreur non classée ou erreur
+  locale levée à l'intérieur de la frontière d'appel. La requête a pu être traitée : le coût réel
+  est inconnu et compté comme **exposition potentielle** (borne supérieure), jamais comme facture.
+* `known` — l'exception expose un usage réel (tokens) : ces données sont utilisées telles quelles.
 """
 
 from __future__ import annotations
@@ -51,6 +65,23 @@ _TRANSIENT_NAME_HINTS = (
 _PERMANENT_NAME_HINTS = ("authentication", "permission", "badrequest", "notfound", "unprocessable")
 MESSAGE_LIMIT = 300
 
+# B12 — sémantique de coût d'une tentative échouée.
+COST_KNOWN_ZERO = "known_zero"
+COST_KNOWN = "known"
+COST_UNCERTAIN = "uncertain"
+# Rejets explicites avant traitement (contrôle d'admission) : le fournisseur n'a pas exécuté la
+# requête et l'a signalé dans une réponse structurée. 408 (requête incomplète dans le délai) et 425
+# (trop tôt) sont des refus de lecture ; 429 / 503 / 529 des refus de service ; les 4xx permanents
+# des refus de validation ou d'accès.
+REJECTED_BEFORE_PROCESSING_STATUS_CODES = PERMANENT_STATUS_CODES | frozenset(
+    {408, 425, 429, 503, 529}
+)
+REJECTED_BEFORE_PROCESSING_ERROR_TYPES = PERMANENT_ERROR_TYPES | frozenset(
+    {"overloaded_error", "rate_limit_error", "service_unavailable"}
+)
+# Pannes serveur ou de passerelle : la requête a pu être admise et traitée avant l'échec.
+AMBIGUOUS_STATUS_CODES = frozenset({500, 502, 504})
+
 
 @dataclass(frozen=True)
 class ProviderErrorInfo:
@@ -63,9 +94,50 @@ class ProviderErrorInfo:
     exception_type: str
     message: str
     retry_after_seconds: float | None = None
+    # B12 — `known_zero` (rejet explicite avant traitement), `uncertain` (échec ambigu : coût réel
+    # inconnu, exposition potentielle) ou `known` (usage réel exposé par l'exception).
+    cost_semantics: str = COST_UNCERTAIN
+    usage_input_tokens: int | None = None
+    usage_output_tokens: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _usage_of(exc: BaseException) -> tuple[int, int] | None:
+    """Usage réel exposé par une exception ou une réponse partielle, s'il est fiable (entiers)."""
+    for holder in (exc, getattr(exc, "response", None), getattr(exc, "body", None)):
+        usage = holder.get("usage") if isinstance(holder, dict) else getattr(holder, "usage", None)
+        if usage is None:
+            continue
+        if isinstance(usage, dict):
+            inp, out = usage.get("input_tokens"), usage.get("output_tokens")
+        else:
+            inp, out = getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None)
+        if isinstance(inp, int) and isinstance(out, int) and inp >= 0 and out >= 0:
+            return inp, out
+    return None
+
+
+def cost_semantics_of(
+    status_code: int | None, error_type: str, usage: tuple[int, int] | None
+) -> str:
+    """Sémantique de coût d'une tentative échouée (voir l'en-tête du module).
+
+    Ordre : usage réel exposé → `known` ; code serveur / passerelle ambigu (500, 502, 504) →
+    `uncertain` ; rejet explicite (code ou type de contrôle d'admission) → `known_zero` ; tout le
+    reste (réseau, délai, inconnu, local) → `uncertain` (conservateur : jamais supposé gratuit).
+    """
+    if usage is not None:
+        return COST_KNOWN
+    if status_code in AMBIGUOUS_STATUS_CODES:
+        return COST_UNCERTAIN
+    if (
+        status_code in REJECTED_BEFORE_PROCESSING_STATUS_CODES
+        or error_type in REJECTED_BEFORE_PROCESSING_ERROR_TYPES
+    ):
+        return COST_KNOWN_ZERO
+    return COST_UNCERTAIN
 
 
 def _error_type_of(exc: BaseException) -> str:
@@ -113,6 +185,8 @@ def classify_provider_error(
     lowered = name.lower()
     message = str(exc)[:MESSAGE_LIMIT]
     retry_after = _retry_after_of(exc)
+    usage = _usage_of(exc)
+    semantics = cost_semantics_of(status_code, error_type, usage)
 
     def _info(category: str, retryable: bool) -> ProviderErrorInfo:
         return ProviderErrorInfo(
@@ -123,6 +197,9 @@ def classify_provider_error(
             exception_type=name,
             message=message,
             retry_after_seconds=retry_after,
+            cost_semantics=semantics,
+            usage_input_tokens=usage[0] if usage else None,
+            usage_output_tokens=usage[1] if usage else None,
         )
 
     local_types: tuple[type[BaseException], ...] = (

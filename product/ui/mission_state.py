@@ -23,6 +23,10 @@ CATEGORY_LABELS = {
 }
 REASON_LABELS = {
     "transient_retries_exhausted": "échec après épuisement des relances",
+    "retry_refused_uncertain_cost_budget": (
+        "relance refusée : l'exposition financière potentielle (coût connu + tentatives au coût "
+        "inconnu) atteindrait le plafond CEO"
+    ),
     "permanent_provider_error": "erreur permanente : aucune relance",
     "local_error": "erreur locale : aucune relance",
     "unknown_error": "erreur non classée : aucune relance",

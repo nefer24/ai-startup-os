@@ -6,6 +6,13 @@ façon pessimiste + `max_tokens` de sortie au barème configuré) et **refuse** 
 faire dépasser l'un des plafonds. Après l'appel, le coût réel est calculé à partir de l'usage
 rapporté. Aucun dépassement silencieux : un refus lève `BudgetExceededError` avec sa raison, et
 l'appelant arrête proprement la mission en conservant ce qui a été produit.
+
+Exposition financière incertaine (B12). Une tentative fournisseur échouée sans usage rapporté n'est
+jamais supposée gratuite si elle a pu être traitée : sa borne supérieure pré-appel est comptée à
+part (`uncertain_cost_upper_bound_eur`), distincte du coût réellement observé (`known_cost_eur`).
+Le plafond CEO s'applique à la **borne totale potentielle** (connu + incertain) : aucun appel,
+aucune relance n'est admis si cette borne plus l'estimation de l'appel dépasserait `max_cost_eur`.
+Les compteurs d'appels (`max_calls`, appels logiques) restent indépendants de cette exposition.
 """
 
 from __future__ import annotations
@@ -38,6 +45,13 @@ class BudgetLedger:
     output_tokens: int = 0
     cost_eur: float = 0.0
     refusals: list[dict[str, Any]] = field(default_factory=list)
+    # B12 — exposition potentielle : somme des bornes pré-appel des tentatives échouées au coût
+    # inconnu (jamais une facture). Chaque exposition est conservée individuellement, non
+    # réconciliée : une réconciliation future (usage réel découvert) remplacerait la borne par le
+    # coût connu au lieu de les additionner.
+    uncertain_cost_upper_bound_eur: float = 0.0
+    uncertain_attempts: int = 0
+    uncertain_exposures: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def remaining_calls(self) -> int:
@@ -45,9 +59,19 @@ class BudgetLedger:
         return max(0, self.max_calls - self.calls_used)
 
     @property
+    def known_cost_eur(self) -> float:
+        """Coût réellement observé (usage rapporté par le fournisseur)."""
+        return round(self.cost_eur, 6)
+
+    @property
+    def potential_total_cost_upper_bound_eur(self) -> float:
+        """Borne supérieure conservatrice : coût connu + exposition incertaine."""
+        return round(self.cost_eur + self.uncertain_cost_upper_bound_eur, 6)
+
+    @property
     def remaining_cost_eur(self) -> float:
-        """Budget en euros encore disponible."""
-        return round(max(0.0, self.max_cost_eur - self.cost_eur), 6)
+        """Budget en euros encore disponible, l'exposition incertaine déduite."""
+        return round(max(0.0, self.max_cost_eur - self.potential_total_cost_upper_bound_eur), 6)
 
     def estimate_call_cost_eur(self, system: str, prompt: str, max_tokens: int) -> float:
         """Majorant du coût d'un appel : prompt estimé pessimiste + sortie à `max_tokens`."""
@@ -69,11 +93,14 @@ class BudgetLedger:
             self.refusals.append({"reason": "max_calls_reached", **detail})
             raise BudgetExceededError("max_calls_reached", detail)
         estimate = self.estimate_call_cost_eur(system, prompt, max_tokens)
-        if self.cost_eur + estimate > self.max_cost_eur:
+        if self.potential_total_cost_upper_bound_eur + estimate > self.max_cost_eur:
             detail = {
                 "call_type": call_type,
                 "estimated_call_cost_eur": estimate,
                 "cost_eur_so_far": round(self.cost_eur, 6),
+                "known_cost_eur": self.known_cost_eur,
+                "uncertain_cost_upper_bound_eur": round(self.uncertain_cost_upper_bound_eur, 6),
+                "potential_total_cost_upper_bound_eur": self.potential_total_cost_upper_bound_eur,
                 "max_cost_eur": self.max_cost_eur,
             }
             self.refusals.append({"reason": "cost_cap_would_be_exceeded", **detail})
@@ -82,14 +109,51 @@ class BudgetLedger:
 
     def record(self, usage: LLMUsage) -> float:
         """Enregistre un appel effectué et son usage réel ; retourne le coût réel de l'appel."""
+        cost = self._add_known_usage(usage)
+        self.calls_used += 1
+        return cost
+
+    def _add_known_usage(self, usage: LLMUsage) -> float:
         cost = estimate_cost_eur(
             usage.input_tokens, usage.output_tokens, self.price_in_per_mtok, self.price_out_per_mtok
         )
-        self.calls_used += 1
         self.input_tokens += usage.input_tokens
         self.output_tokens += usage.output_tokens
         self.cost_eur = round(self.cost_eur + cost, 6)
         return cost
+
+    def record_failed_attempt_usage(self, usage: LLMUsage) -> float:
+        """Usage réel rapporté par une tentative échouée (B12, `known`) : coût connu, sans appel
+        logique. Retourne le coût de la tentative."""
+        return self._add_known_usage(usage)
+
+    def record_uncertain_attempt(
+        self, upper_bound_eur: float, *, call_type: str, logical_call_id: str, attempt: int
+    ) -> dict[str, Any]:
+        """Tentative échouée au coût inconnu (B12, `uncertain`) : ajoute sa borne pré-appel à
+        l'exposition potentielle. Retourne l'exposition enregistrée (non réconciliée)."""
+        exposure = {
+            "id": f"{logical_call_id}#{attempt}",
+            "logical_call_id": logical_call_id,
+            "attempt": attempt,
+            "call_type": call_type,
+            "upper_bound_eur": round(upper_bound_eur, 6),
+            "reconciled": False,
+        }
+        self.uncertain_attempts += 1
+        self.uncertain_cost_upper_bound_eur = round(
+            self.uncertain_cost_upper_bound_eur + upper_bound_eur, 6
+        )
+        self.uncertain_exposures.append(exposure)
+        return exposure
+
+    def retry_allowed_by_cost(self, estimated_retry_cost_eur: float) -> bool:
+        """Règle financière d'une relance (B12) : connu + incertain + estimation ≤ plafond.
+
+        L'égalité est autorisée (la borne reste dans le plafond) ; tout dépassement est refusé.
+        """
+        bound = self.potential_total_cost_upper_bound_eur + estimated_retry_cost_eur
+        return bound <= self.max_cost_eur
 
     def max_affordable_experts(self, *, reserved_calls: int, calls_per_expert: int = 2) -> int:
         """Nombre maximal d'experts finançables au Tour 0 avec les appels restants.
@@ -121,6 +185,11 @@ class BudgetLedger:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cost_eur": round(self.cost_eur, 6),
+            "known_cost_eur": self.known_cost_eur,
+            "uncertain_cost_upper_bound_eur": round(self.uncertain_cost_upper_bound_eur, 6),
+            "uncertain_attempts": self.uncertain_attempts,
+            "potential_total_cost_upper_bound_eur": self.potential_total_cost_upper_bound_eur,
+            "uncertain_exposures": [dict(e) for e in self.uncertain_exposures],
             "remaining_cost_eur": self.remaining_cost_eur,
             "refusals": list(self.refusals),
         }

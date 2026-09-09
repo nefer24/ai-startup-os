@@ -516,6 +516,31 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _render_cost_exposure(b: dict[str, Any]) -> list[str]:
+    """Coût connu / exposition incertaine / borne potentielle / plafond CEO (B12).
+
+    L'exposition est une borne supérieure sur des tentatives fournisseur au coût inconnu, jamais
+    une facture ; elle n'est détaillée que si elle existe.
+    """
+    known = float(b.get("known_cost_eur", b.get("cost_eur", 0.0)) or 0.0)
+    uncertain = float(b.get("uncertain_cost_upper_bound_eur", 0.0) or 0.0)
+    potential = float(b.get("potential_total_cost_upper_bound_eur", known + uncertain) or 0.0)
+    cap = float(b.get("max_cost_eur", 0.0) or 0.0)
+    line = (
+        f"**Coût fournisseur :** connu {known:.4f} € · exposition incertaine ≤ {uncertain:.4f} € "
+        f"· borne supérieure potentielle ≤ {potential:.4f} € · plafond CEO {cap:.2f} €"
+    )
+    if uncertain <= 0:
+        return [line]
+    n = int(b.get("uncertain_attempts", 0) or 0)
+    return [
+        line,
+        f"_Exposition incertaine : {n} tentative(s) fournisseur échouée(s) sans usage rapporté, "
+        "dont le traitement n'est pas exclu (borne pré-appel, pas un coût facturé). Le plafond "
+        "s'applique à la borne supérieure potentielle._",
+    ]
+
+
 def render_situation_report_markdown(report: dict[str, Any]) -> str:
     """Rendu Markdown déterministe du rapport de situation."""
     f = report["fourteen_fields"]
@@ -541,6 +566,7 @@ def render_situation_report_markdown(report: dict[str, Any]) -> str:
         f"**Budget :** {b.get('llm_calls_used', 0)}/{b.get('max_llm_calls', 0)} appels · "
         f"{b.get('cost_eur', 0.0):.4f} € / {b.get('max_cost_eur', 0.0):.2f} € · "
         f"{b.get('input_tokens', 0)} tokens entrée · {b.get('output_tokens', 0)} tokens sortie",
+        *_render_cost_exposure(b),
         "",
         banner,
         "",
