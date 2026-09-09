@@ -3,8 +3,16 @@
 **Pull Request :** #144 — *OT-V1 — Incrément 2 : délibération probante → recommandation décisionnelle*
 **Branche :** `product/increment-2` (créée depuis `product/mvp` au freeze v3.1 `d2931a7`) → `develop`
 **Auteur :** Claude Code (Chief System Architect)
-**Date :** 2026-09-09 (ARP v1.3.3, après l'audit v1.3.2 : B12 comptabilité conservatrice du coût des tentatives fournisseur)
+**Date :** 2026-09-09 (ARP v1.3.3.1, après l'audit v1.3.3 : B12.1 sémantique financière du 503)
 **Commits :** départ `d2931a7` (PR #143, freeze v3.1 + ARP) → freeze v1 `dc72da2`, rebasé à l'identique sur `develop` après fusion de #143 en `6d53926` → freeze v1.1 `f3749e8` (C1–C4) → freeze v1.2 `82caaf8` (B1–B5) → **INCREMENT 2 CODE FREEZE v1.3** (B6–B8 + garde-fou épistémique ; SHA dans le message de commit et dans `TRACEABILITY.md`)
+
+## 0 septies. Micro-correctif v1.3.3.1 — B12.1 « hypothèse de coût nul non fondée »
+
+**Audit v1.3.3 (freeze `bd6c263`).** B12 PASS ; un défaut : la politique générique classait 503 comme rejet explicite avant traitement (`known_zero`). Un 503 générique ne garantit pas, à lui seul, l'absence d'admission, de travail, de tokens consommés ou de facturation : l'assertion était trop forte pour une politique fournisseur-agnostique.
+
+**Correction (`app/provider_errors.py`, micro-correctif, registre et boucle de relance inchangés).** Séparation explicite entre classification technique (503 reste transitoire, relançable) et sémantique financière : 503 et le type `service_unavailable` passent en `uncertain` (avec 500 / 502 / 504, `api_error`, `timeout_error`). `known_zero` reste réservé aux rejets d'admission explicites (429 `rate_limit_error`, 529 `overloaded_error`, 408, 425, 4xx permanents), justifiés comme assertion forte et non généralisés. Point d'extension : un adaptateur peut porter sur l'exception un booléen strict `rejected_before_processing` qui prime sur la règle générique dans les deux sens ; aucune garantie de ce type n'est inventée dans le code générique.
+
+**Tests.** `test_cost_semantics_distinguish_rejected_ambiguous_and_known` : 503 et `service_unavailable` déplacés vers les ambigus, 503 vérifié relançable, garantie explicite d'adaptateur (vraie, fausse, non booléenne ignorée) ; TEST F paramétré : 503 → exposition créée (`uncertain_cost_upper_bound_eur` = borne du cadrage, relance faite car la borne financière le permet), 502 / 504 / 500 inchangés, 429 et 529 → aucune exposition. **Totaux v1.3.3.1** : **468 tests produit verts** (377 + 61 + 14 + 16), 1 780 racine ; ruff / format / mypy verts. Aucun holdout consulté ni exécuté.
 
 ## 0 sexies. Correctif v1.3.3 — B12 « coût incertain des tentatives fournisseur »
 

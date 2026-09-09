@@ -1036,10 +1036,13 @@ partiel, aucune recommandation.
 **Coût des tentatives fournisseur (B12)** : trois plafonds distincts — appels logiques réussis
 (`max_llm_calls`), relances physiques (`MISSION_PROVIDER_*`) et plafond financier conservateur.
 Une tentative échouée sans usage rapporté n'est jamais supposée gratuite si elle a pu être traitée :
-un **rejet explicite avant traitement** (429, 529, 503, 408, 425, 4xx permanents, types
-`overloaded_error` / `rate_limit_error` / `service_unavailable` / authentification…) vaut
-`known_zero` ; un **échec ambigu** (délai, coupure, réponse perdue, 500 / 502 / 504, erreur inconnue
-ou locale dans la frontière d'appel) vaut `uncertain` et ajoute la **borne pré-appel** de l'appel à
+un **rejet explicite avant traitement** (429, 529, 408, 425, 4xx permanents, types
+`overloaded_error` / `rate_limit_error` / authentification…) vaut `known_zero` — assertion forte,
+réservée aux cas où le système a une base explicite, jamais déduite d'un statut ambigu ; un **échec
+ambigu** (délai, coupure, réponse perdue, 500 / 502 / 503 / 504, `service_unavailable`, erreur
+inconnue ou locale dans la frontière d'appel) vaut `uncertain` (B12.1 : un 503 générique est
+relançable techniquement mais financièrement incertain ; un adaptateur peut porter une garantie
+explicite `rejected_before_processing` qui prime) et ajoute la **borne pré-appel** de l'appel à
 `uncertain_cost_upper_bound_eur` (exposition potentielle, jamais présentée comme facturée) ; un usage
 réel exposé par l'exception vaut `known` et entre dans le coût connu. Le budget distingue
 `known_cost_eur` (observé), `uncertain_cost_upper_bound_eur` et

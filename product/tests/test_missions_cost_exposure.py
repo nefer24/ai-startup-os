@@ -110,7 +110,6 @@ def test_cost_semantics_distinguish_rejected_ambiguous_and_known() -> None:
     for exc in (
         overloaded(),
         FakeProviderError(429, "rate_limit_error"),
-        FakeProviderError(503, "", "service unavailable"),
         FakeProviderError(408),
         FakeProviderError(401, "authentication_error"),
         FakeProviderError(400, "invalid_request_error"),
@@ -125,16 +124,32 @@ def test_cost_semantics_distinguish_rejected_ambiguous_and_known() -> None:
         ConnectionError("reset"),
         FakeProviderError(500, "api_error"),
         FakeProviderError(502),
+        # B12.1 — un 503 générique est relançable techniquement mais financièrement incertain.
+        FakeProviderError(503, "", "service unavailable"),
+        FakeProviderError(None, "service_unavailable"),
         FakeProviderError(504),
         RuntimeError("?"),
         ValueError("adapter"),
     ):
-        assert classify_provider_error(exc).cost_semantics == COST_UNCERTAIN, exc
+        info = classify_provider_error(exc)
+        assert info.cost_semantics == COST_UNCERTAIN, exc
+    assert classify_provider_error(FakeProviderError(503)).retryable is True
     # Usage réel exposé : données réelles, jamais une borne.
     known = classify_provider_error(_UsageBearingError())
     assert known.cost_semantics == COST_KNOWN
     assert (known.usage_input_tokens, known.usage_output_tokens) == (1000, 200)
     assert known.category == TRANSIENT_PROVIDER_ERROR
+    # Une garantie explicite portée par un adaptateur prime sur la règle générique, dans les deux
+    # sens ; seul un booléen strict est pris en compte.
+    guaranteed = FakeProviderError(503, "", "service unavailable")
+    guaranteed.rejected_before_processing = True  # type: ignore[attr-defined]
+    assert classify_provider_error(guaranteed).cost_semantics == COST_KNOWN_ZERO
+    denied = FakeProviderError(429, "rate_limit_error")
+    denied.rejected_before_processing = False  # type: ignore[attr-defined]
+    assert classify_provider_error(denied).cost_semantics == COST_UNCERTAIN
+    loose = FakeProviderError(429, "rate_limit_error")
+    loose.rejected_before_processing = "yes"  # type: ignore[attr-defined]
+    assert classify_provider_error(loose).cost_semantics == COST_KNOWN_ZERO
 
 
 def test_ledger_counts_uncertain_exposure_against_the_cap_without_double_counting() -> None:
@@ -364,16 +379,25 @@ def test_permanent_error_has_no_uncertain_exposure(
     assert mission["failure"]["retry_refusal_reason"] == "not_retryable"
 
 
-# --- TEST F — 503 explicite (rejet) vs passerelle (ambigu) : politique formalisée -----------------
+# --- TEST F — 503 / 502 / 504 / 500 ambigus, 429 / 529 rejets explicites : politique formalisée --
 @pytest.mark.parametrize(
     ("error", "semantics"),
     [
-        (FakeProviderError(503, "", "service unavailable"), COST_KNOWN_ZERO),
+        (FakeProviderError(503, "", "service unavailable"), COST_UNCERTAIN),
         (FakeProviderError(502, "", "bad gateway"), COST_UNCERTAIN),
         (FakeProviderError(504, "", "gateway timeout"), COST_UNCERTAIN),
         (FakeProviderError(500, "api_error", "internal"), COST_UNCERTAIN),
+        (FakeProviderError(429, "rate_limit_error", "rate limited"), COST_KNOWN_ZERO),
+        (overloaded(), COST_KNOWN_ZERO),
     ],
-    ids=["503_rejected", "502_ambiguous", "504_ambiguous", "500_ambiguous"],
+    ids=[
+        "503_ambiguous",
+        "502_ambiguous",
+        "504_ambiguous",
+        "500_ambiguous",
+        "429_rejected",
+        "529_rejected",
+    ],
 )
 def test_server_side_errors_follow_the_formalised_cost_policy(
     client: TestClient,

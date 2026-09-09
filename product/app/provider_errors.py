@@ -16,14 +16,22 @@ forcément coûté zéro : le fournisseur a pu traiter la requête sans que la r
 Trois cas, jamais confondus :
 
 * `known_zero` — **rejet explicite avant traitement** : le fournisseur a répondu par une erreur
-  structurée de contrôle d'admission (débit, surcharge, indisponibilité, validation,
-  authentification, permission, ressource inexistante). Contrat retenu : aucun coût de génération
-  n'est engagé pour une requête que le fournisseur a refusé d'admettre et l'a dit.
+  structurée de contrôle d'admission (débit 429, surcharge 529, validation, authentification,
+  permission, ressource inexistante). Contrat retenu : aucun coût de génération n'est engagé pour
+  une requête que le fournisseur a refusé d'admettre et l'a dit. C'est une **assertion forte**,
+  réservée aux cas où le système a une base explicite ; un statut HTTP ambigu ne la fonde jamais.
 * `uncertain` — **échec ambigu** : délai d'attente, coupure de connexion, réponse perdue, panne
-  serveur ou de passerelle après admission possible (500, 502, 504), erreur non classée ou erreur
-  locale levée à l'intérieur de la frontière d'appel. La requête a pu être traitée : le coût réel
-  est inconnu et compté comme **exposition potentielle** (borne supérieure), jamais comme facture.
+  serveur, indisponibilité ou passerelle après admission possible (500, 502, 503, 504), erreur non
+  classée ou erreur locale levée à l'intérieur de la frontière d'appel. La requête a pu être
+  traitée : le coût réel est inconnu et compté comme **exposition potentielle** (borne supérieure),
+  jamais comme facture. Un 503 générique est techniquement relançable mais financièrement incertain
+  (B12.1) : rien ne garantit, à lui seul, qu'aucun travail n'a été effectué ni facturé.
 * `known` — l'exception expose un usage réel (tokens) : ces données sont utilisées telles quelles.
+
+La classification technique (relançable ou non) et la sémantique financière sont indépendantes. Un
+adaptateur fournisseur qui dispose d'une garantie explicite et documentée peut la porter sur
+l'exception (`rejected_before_processing = True` / `False`) : elle prime alors sur la règle
+générique. Aucune garantie de ce type n'est inventée ici.
 """
 
 from __future__ import annotations
@@ -71,16 +79,17 @@ COST_KNOWN = "known"
 COST_UNCERTAIN = "uncertain"
 # Rejets explicites avant traitement (contrôle d'admission) : le fournisseur n'a pas exécuté la
 # requête et l'a signalé dans une réponse structurée. 408 (requête incomplète dans le délai) et 425
-# (trop tôt) sont des refus de lecture ; 429 / 503 / 529 des refus de service ; les 4xx permanents
-# des refus de validation ou d'accès.
-REJECTED_BEFORE_PROCESSING_STATUS_CODES = PERMANENT_STATUS_CODES | frozenset(
-    {408, 425, 429, 503, 529}
-)
+# (trop tôt) sont des refus de lecture ; 429 (débit) et 529 (surcharge) des refus d'admission
+# explicites ; les 4xx permanents des refus de validation ou d'accès.
+REJECTED_BEFORE_PROCESSING_STATUS_CODES = PERMANENT_STATUS_CODES | frozenset({408, 425, 429, 529})
 REJECTED_BEFORE_PROCESSING_ERROR_TYPES = PERMANENT_ERROR_TYPES | frozenset(
-    {"overloaded_error", "rate_limit_error", "service_unavailable"}
+    {"overloaded_error", "rate_limit_error"}
 )
-# Pannes serveur ou de passerelle : la requête a pu être admise et traitée avant l'échec.
-AMBIGUOUS_STATUS_CODES = frozenset({500, 502, 504})
+# Pannes serveur, indisponibilité générique ou passerelle : la requête a pu être admise et traitée
+# avant l'échec. 503 (et le type `service_unavailable`) y figure (B12.1) : un statut
+# d'indisponibilité générique ne prouve pas l'absence de traitement ni de facturation.
+AMBIGUOUS_STATUS_CODES = frozenset({500, 502, 503, 504})
+AMBIGUOUS_ERROR_TYPES = frozenset({"service_unavailable", "api_error", "timeout_error"})
 
 
 @dataclass(frozen=True)
@@ -120,17 +129,26 @@ def _usage_of(exc: BaseException) -> tuple[int, int] | None:
 
 
 def cost_semantics_of(
-    status_code: int | None, error_type: str, usage: tuple[int, int] | None
+    status_code: int | None,
+    error_type: str,
+    usage: tuple[int, int] | None,
+    *,
+    rejected_before_processing: bool | None = None,
 ) -> str:
     """Sémantique de coût d'une tentative échouée (voir l'en-tête du module).
 
-    Ordre : usage réel exposé → `known` ; code serveur / passerelle ambigu (500, 502, 504) →
-    `uncertain` ; rejet explicite (code ou type de contrôle d'admission) → `known_zero` ; tout le
-    reste (réseau, délai, inconnu, local) → `uncertain` (conservateur : jamais supposé gratuit).
+    Ordre : usage réel exposé → `known` ; garantie explicite d'un adaptateur
+    (`rejected_before_processing`) → `known_zero` si vraie, `uncertain` si fausse ; code ou type
+    serveur / indisponibilité / passerelle ambigu (500, 502, 503, 504, `service_unavailable`,
+    `api_error`, `timeout_error`) → `uncertain` ; rejet explicite d'admission (code ou type) →
+    `known_zero` ; tout le reste (réseau, délai, inconnu, local) → `uncertain` (conservateur :
+    jamais supposé gratuit).
     """
     if usage is not None:
         return COST_KNOWN
-    if status_code in AMBIGUOUS_STATUS_CODES:
+    if rejected_before_processing is not None:
+        return COST_KNOWN_ZERO if rejected_before_processing else COST_UNCERTAIN
+    if status_code in AMBIGUOUS_STATUS_CODES or error_type in AMBIGUOUS_ERROR_TYPES:
         return COST_UNCERTAIN
     if (
         status_code in REJECTED_BEFORE_PROCESSING_STATUS_CODES
@@ -138,6 +156,12 @@ def cost_semantics_of(
     ):
         return COST_KNOWN_ZERO
     return COST_UNCERTAIN
+
+
+def _rejected_before_processing_of(exc: BaseException) -> bool | None:
+    """Garantie explicite portée par un adaptateur fournisseur, si elle existe (booléen strict)."""
+    flag = getattr(exc, "rejected_before_processing", None)
+    return flag if isinstance(flag, bool) else None
 
 
 def _error_type_of(exc: BaseException) -> str:
@@ -186,7 +210,12 @@ def classify_provider_error(
     message = str(exc)[:MESSAGE_LIMIT]
     retry_after = _retry_after_of(exc)
     usage = _usage_of(exc)
-    semantics = cost_semantics_of(status_code, error_type, usage)
+    semantics = cost_semantics_of(
+        status_code,
+        error_type,
+        usage,
+        rejected_before_processing=_rejected_before_processing_of(exc),
+    )
 
     def _info(category: str, retryable: bool) -> ProviderErrorInfo:
         return ProviderErrorInfo(
