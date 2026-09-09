@@ -965,11 +965,15 @@ l'incrément 1, la mission enchaîne (`app/missions.py`, prompts et règles dét
    non-fusions motivées conservés ; trace atomique → famille complète. Après échec : options
    **non consolidées** listées, `status = failed`, **jamais** de repli « chaque option devient une
    famille » ; la porte qualité bloque alors la recommandation.
-6. **Comparaison** — **couverture stratégique protégée à chaque tentative** : familles
-   obligatoires déduites des données du pipeline (une représentante par nature, désaccords
-   internes, citées dans la demande / le cadrage / la préférence CEO, dimension critique ou
-   multiple, non-action / attente, minorités matérielles — jamais de mots-clés métier), puis les
-   plus soutenues jusqu'au plafond (12) ; les autres sont listées « non comparées » avec motif.
+6. **Comparaison** — **couverture stratégique protégée à chaque tentative**, sous un **plafond
+   dur de 12** : d'abord les familles individuellement indispensables (*hard* : citées dans la
+   demande / le cadrage / la préférence CEO, désaccord interne unique), puis **une** famille par
+   exigence de représentation (chaque nature, chaque dimension critique, non-action / attente,
+   minorité matérielle, désaccord interne, stratégie multi-dimensionnelle — appartenir au groupe
+   ne rend pas la famille obligatoire ; jamais de mots-clés métier), puis les facultatives par
+   soutien ; les autres sont listées « non comparées » avec motif et chaque famille porte son rôle
+   et ses raisons dans le journal (`selection`). Si les *hard* dépassent 12 : conflit déclaré,
+   aucune tentative, `failed`, porte bloquée.
    Critères communs (noyau : résultat attendu, coût, délai, risque, réversibilité, dépendances,
    preuves, inconnues), chaque appréciation qualitative avec sa **base**. Schéma **sans score ni
    rang** (testé). Relance compacte bornée et **stratifiée** (n'écarte que des facultatives ;

@@ -3,8 +3,25 @@
 **Pull Request :** #144 — *OT-V1 — Incrément 2 : délibération probante → recommandation décisionnelle*
 **Branche :** `product/increment-2` (créée depuis `product/mvp` au freeze v3.1 `d2931a7`) → `develop`
 **Auteur :** Claude Code (Chief System Architect)
-**Date :** 2026-09-08 (ARP v1.3, après audit du freeze v1.2 et second holdout indépendant)
+**Date :** 2026-09-09 (ARP v1.3.1, après audit du freeze v1.3 : B6, B8 et garde-fou épistémique PASS ; un blocker B9)
 **Commits :** départ `d2931a7` (PR #143, freeze v3.1 + ARP) → freeze v1 `dc72da2`, rebasé à l'identique sur `develop` après fusion de #143 en `6d53926` → freeze v1.1 `f3749e8` (C1–C4) → freeze v1.2 `82caaf8` (B1–B5) → **INCREMENT 2 CODE FREEZE v1.3** (B6–B8 + garde-fou épistémique ; SHA dans le message de commit et dans `TRACEABILITY.md`)
+
+## 0 quater. Correction d'audit v1.3.1 — B9 « explosion des familles obligatoires »
+
+**Cause racine.** En v1.3, `coverage_requirements` exprimait la couverture au niveau de la *famille* : toute famille d'une dimension critique, toute famille `wait` / `do_nothing`, toute minorité, toute famille multi-dimensions devenait individuellement obligatoire, et `select_families_for_attempt` ne retirait jamais une obligatoire. Sur 30–40 familles, 20–30 pouvaient être obligatoires : tentative > 12, troncature, relance impossible à compacter.
+
+**Correction (localisée à la sélection dans `mission_consolidation.py` et à `_step_comparison`).** Deux concepts distincts :
+
+* **hard** — présence *individuelle* indispensable : stratégies citées mot pour mot dans la demande / le cadrage / la préférence CEO (B7 conservé), et un désaccord interne *unique* qui disparaîtrait autrement ;
+* **exigences de couverture** — contraintes de *représentation*, satisfaites par AU MOINS une famille : chaque nature canonique, chaque dimension présumée critique, la non-action / attente, les minorités matérielles (par nature), un désaccord interne, une stratégie multi-dimensionnelle. Appartenir au groupe ne rend pas la famille obligatoire.
+
+Sélection stratifiée sous **plafond dur inchangé (12)** : hard → une famille par exigence (couverture gloutonne déterministe : à chaque pas la candidate qui satisfait le plus d'exigences encore ouvertes, puis l'ordre de préférence documenté — désaccord interne, portée multi-dimensions, soutien, identifiant ; pas de score) → facultatives par soutien. Le plafond n'est jamais dépassé ; une exigence insatisfaisable est listée (`unsatisfied_requirements`) et le statut n'est pas `ok`. **Saturation** : si les hard dépassent à eux seuls 12, conflit déclaré (`hard_mandatory_exceeds_cap`, journalisé), **aucune** tentative (aucun prompt > 12, aucune hard écartée en silence), `status = failed`, synthèse et porte exécutées si le budget le permet, porte bloquée, `decision_ready = false`. La relance (B7 v1.3) conserve hard + couverture et n'écarte que des facultatives ; B8 inchangé.
+
+**Observabilité.** Entrée de journal `selection` et charge utile `comparison` : total de familles, plafond, hard, conflit éventuel, exigences avec la famille qui les satisfait et leurs candidates, retenues, différées, et pour chaque famille son rôle (`hard` / `coverage` / `optional` / `deferred` / `dropped_on_retry`) et ses raisons.
+
+**Tests ajoutés (3) + 1 réécrit.** `test_b9_stress_coverage_without_mandatory_explosion` (33 familles, 7 experts sur 2 dimensions critiques + 1 secondaire, 5 variantes de non-action, 3 stratégies citées, minorité avec désaccord interne, multi-dimensions : retenues ≤ 12, citées conservées, deux dimensions critiques représentées, 1 à 3 non-actions sur 5, 7 natures représentées, minorité conservée, ≥ 20 redondantes différées, sélection ≠ « les 12 plus soutenues », rôles et raisons pour les 33 familles), `test_b9_hard_mandatory_saturation_is_explicit_and_fail_closed` (13 stratégies exigées : conflit, aucune tentative, `failed`, journal, synthèse et porte exécutées, `decision_ready = false`), `test_b9_generic_shape_does_not_turn_most_families_into_mandatory` (forme « nombreuses familles / deux dimensions critiques / prolifération diagnostic-action-test-non-action » sans citation : ≤ 1 hard, obligatoires ≤ 12, `ok`), `test_coverage_requirements_are_data_driven` réécrit (hard / exigences / saturation à cap 2). Non-régression : B7 (15 familles : relance 12 → 7 conservant les 3 citées, la minorité, la non-action, une famille par nature), B6, B8, garde-fou épistémique, C1–C4, B1–B5 inchangés et verts.
+
+**Totaux v1.3.1** : **438 tests produit verts** (377 historiques + 61), 1 780 racine ; ruff / format / mypy verts (produit et racine). Plafonds de classe et `COMPARISON_MAX_FAMILIES = 12` inchangés. Aucun holdout consulté ni exécuté.
 
 ## 0 bis. Corrections d'audit v1.2 (verdict FIX FIRST après le premier holdout indépendant)
 

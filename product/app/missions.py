@@ -2015,14 +2015,15 @@ def _request_texts(run: _Run) -> list[str]:
 
 
 def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
-    """Comparaison des familles avec couverture stratégique protégée à chaque tentative (B7).
+    """Comparaison des familles avec couverture stratégique protégée à chaque tentative (B7/B9).
 
-    Sélection stratifiée : d'abord les familles obligatoires (une par nature, désaccords internes,
-    citées dans la demande, dimensions critiques ou multiples, non-action, minorités matérielles),
-    puis les plus soutenues jusqu'au plafond. Une relance compacte au plus, qui ne sacrifie jamais
-    une famille obligatoire et n'est financée que si synthèse et porte restent finançables (B8).
-    `status = ok` seulement si la tentative valide couvre les obligatoires et évalue chaque famille
-    retenue sur tous les critères ; sinon `partial` / `failed` avec cause, et la porte bloque.
+    Sélection stratifiée sous plafond dur (`COMPARISON_MAX_FAMILIES`) : familles individuellement
+    indispensables (hard : citées dans la demande, désaccord unique), puis UNE famille par exigence
+    de représentation (nature, dimension critique, non-action, minorité matérielle, désaccord,
+    multi-dimensions), puis facultatives. Si les hard dépassent le plafond : conflit déclaré,
+    aucune tentative, `failed`, porte bloquée. Une relance compacte au plus, qui n'écarte que des
+    facultatives et n'est financée que si synthèse et porte restent finançables (B8). `status = ok`
+    seulement si hard et couverture sont préservées et chaque famille retenue évaluée.
     """
     step = "comparaison"
     if run.stop_reason:
@@ -2036,14 +2037,87 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
     for f in families:
         f["option_labels"] = [option_labels[o] for o in f["option_ids"] if o in option_labels]
     critical = {d.name for d in run.framing.dimensions if d.presumed_criticality == "high"}
-    mandatory = coverage_requirements(
+    coverage = coverage_requirements(
         families, request_texts=_request_texts(run), critical_dimensions=critical
     )
-    retained, deferred = select_families_for_attempt(
-        families, mandatory, cap=COMPARISON_MAX_FAMILIES
-    )
+    picked = select_families_for_attempt(families, coverage, cap=COMPARISON_MAX_FAMILIES)
     for f in families:
         f.pop("option_labels", None)
+    hard_ids = sorted(coverage["hard"], key=lambda x: int(x[1:]))
+    selection = picked["selection"]
+    _journal(
+        session,
+        run,
+        step,
+        "selection",
+        "facilitateur",
+        {
+            "families_total": len(families),
+            "cap": COMPARISON_MAX_FAMILIES,
+            "hard_mandatory": hard_ids,
+            "hard_conflict": picked["hard_conflict"],
+            "coverage_requirements": [
+                {
+                    "id": r["id"],
+                    "satisfied_by": r.get("satisfied_by"),
+                    "candidates": r["candidates"],
+                }
+                for r in picked["requirements"]
+            ],
+            "unsatisfied_requirements": picked["unsatisfied"],
+            "retained": [f["family_id"] for f in picked["retained"]],
+            "deferred": [d["family_id"] for d in picked["deferred"]],
+            "selection": selection,
+        },
+    )
+    base_payload: dict[str, Any] = {
+        "cap": COMPARISON_MAX_FAMILIES,
+        "hard_mandatory_family_ids": hard_ids,
+        "hard_mandatory_conflict": picked["hard_conflict"],
+        "coverage_requirements": [
+            {"id": r["id"], "label": r["label"], "satisfied_by": r.get("satisfied_by")}
+            for r in picked["requirements"]
+        ],
+        "unsatisfied_requirements": picked["unsatisfied"],
+        "selection": selection,
+    }
+    if picked["hard_conflict"]:
+        # Fail-closed : plus de familles individuellement indispensables que le plafond. Aucune
+        # tentative n'envoie plus de `cap` familles ; aucune n'est écartée en silence.
+        run.comparison = {
+            **base_payload,
+            "status": "failed",
+            "criteria": [],
+            "rows": [],
+            "retained_family_ids": [],
+            "mandatory_family_ids": hard_ids,
+            "coverage": {fid: selection[fid]["reasons"] for fid in hard_ids},
+            "coverage_preserved": False,
+            "not_compared": [],
+            "missing_family_ids": [],
+            "attempts": [],
+            "notes": "",
+            "coverage_note": (
+                f"hard_mandatory_exceeds_cap : {len(hard_ids)} familles individuellement "
+                f"indispensables pour {COMPARISON_MAX_FAMILIES} places — comparaison non "
+                "réalisable sous le plafond sans perdre une alternative demandée"
+            ),
+            "parse_error": "",
+        }
+        _journal(
+            session,
+            run,
+            step,
+            "hard_mandatory_exceeds_cap",
+            "facilitateur",
+            {"hard_mandatory": hard_ids, "cap": COMPARISON_MAX_FAMILIES},
+        )
+        run.steps_done.append(step)
+        return
+    retained, deferred = picked["retained"], picked["deferred"]
+    mandatory: dict[str, list[str]] = {
+        fid: s["reasons"] for fid, s in selection.items() if s["role"] in {"hard", "coverage"}
+    }
     unknowns = list(run.framing.global_unknowns) + [
         u["text"] for u in run.cartography.get("unknowns", [])
     ]
@@ -2074,6 +2148,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         )
         if response is None:
             run.comparison = {
+                **base_payload,
                 "status": "failed",
                 "criteria": [],
                 "rows": [],
@@ -2091,10 +2166,8 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         attempts.append({"attempt": attempt, "families": len(compared), "parse_error": error})
         if output is not None or attempt == 2:
             break
-        # Relance compacte bornée et STRATIFIÉE : les familles obligatoires sont toutes
-        # conservées ; seules les facultatives les moins soutenues sont écartées. Si la couverture
-        # obligatoire ne laisse aucune marge de réduction, la relance n'a pas lieu (échec
-        # explicite).
+        # Relance compacte bornée et STRATIFIÉE : hard et couverture sont tous conservés ; seules
+        # les facultatives les moins soutenues sont écartées. Sans marge, pas de relance.
         must = [f for f in compared if f["family_id"] in mandatory]
         optional = sorted(
             [f for f in compared if f["family_id"] not in mandatory],
@@ -2104,8 +2177,8 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         keep_optional = optional[: max(0, target_size - len(must))]
         if len(must) + len(keep_optional) >= len(compared):
             coverage_note = (
-                "relance impossible sans sacrifier une famille obligatoire pour la couverture "
-                "stratégique"
+                "relance impossible sans sacrifier une famille indispensable ou nécessaire à la "
+                "couverture stratégique"
             )
             _journal(
                 session,
@@ -2120,17 +2193,23 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             coverage_note = "relance non financée : synthèse et porte qualité prioritaires"
             break
         kept_ids = {f["family_id"] for f in must + keep_optional}
-        deferred = deferred + [
-            {
-                "family_id": f["family_id"],
-                "label": f["label"],
-                "kind": f["kind"],
-                "reason": "écartée de la relance compacte (facultative pour la couverture) après "
-                "sortie non exploitable",
-            }
-            for f in compared
-            if f["family_id"] not in kept_ids
-        ]
+        for f in compared:
+            if f["family_id"] not in kept_ids:
+                selection[f["family_id"]] = {
+                    "role": "dropped_on_retry",
+                    "reasons": [
+                        "facultative pour la couverture ; écartée de la relance compacte après "
+                        "sortie non exploitable"
+                    ],
+                }
+                deferred.append(
+                    {
+                        "family_id": f["family_id"],
+                        "label": f["label"],
+                        "kind": f["kind"],
+                        "reason": selection[f["family_id"]]["reasons"][0],
+                    }
+                )
         compared = sorted(must + keep_optional, key=lambda f: int(f["family_id"][1:]))
         _journal(
             session,
@@ -2138,11 +2217,16 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             step,
             "retry",
             "facilitateur",
-            {"attempt": 2, "families": len(compared), "mandatory_kept": len(must), "reason": error},
+            {
+                "attempt": 2,
+                "families": len(compared),
+                "mandatory_kept": len(must),
+                "reason": error,
+            },
         )
     criteria, rows, missing = _comparison_rows(output, compared)
     compared_ids = {f["family_id"] for f in compared}
-    coverage_preserved = all(fid in compared_ids for fid in mandatory)
+    coverage_preserved = all(fid in compared_ids for fid in mandatory) and not picked["unsatisfied"]
     if output is None:
         status = "failed"
     elif missing or not criteria or not rows or not coverage_preserved:
@@ -2154,7 +2238,12 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             rows.append(
                 {"family_id": fid, "assessments": {}, "note": "non évaluée par la comparaison"}
             )
+    if picked["unsatisfied"] and not coverage_note:
+        coverage_note = "exigences de couverture non satisfaisables sous le plafond : " + ", ".join(
+            picked["unsatisfied"]
+        )
     run.comparison = {
+        **base_payload,
         "status": status,
         "criteria": criteria,
         "rows": rows,
@@ -2180,6 +2269,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             "criteria": criteria,
             "rows": len(rows),
             "retained": len(compared),
+            "hard_mandatory": len(hard_ids),
             "mandatory": len(mandatory),
             "coverage_preserved": coverage_preserved,
             "not_compared": len(deferred),

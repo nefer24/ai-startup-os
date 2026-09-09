@@ -1934,15 +1934,17 @@ def test_comparison_failure_is_explicit_and_blocks_the_gate(
     comp = mission["deliberation"]["comparison"]
     assert comp["status"] == "failed"
     assert comp["parse_error"].startswith("truncated_output")
-    # Une relance compacte au plus, STRATIFIÉE : les 9 familles obligatoires (une par nature,
-    # désaccords internes, non-action) sont toutes conservées ; seule la facultative est écartée.
-    assert [a["families"] for a in comp["attempts"]] == [10, 9]
-    assert len(comp["mandatory_family_ids"]) == 9
+    # Une relance compacte au plus, STRATIFIÉE : les 5 familles nécessaires à la couverture (une
+    # par nature ; désaccord interne et multi-dimensions déjà représentés) sont conservées ; les
+    # facultatives sont écartées. Aucune famille n'est « hard » (rien n'est cité dans la demande).
+    assert [a["families"] for a in comp["attempts"]] == [10, 5]
+    assert comp["hard_mandatory_family_ids"] == []
+    assert len(comp["mandatory_family_ids"]) == 5
     assert comp["coverage_preserved"] is True
     assert len([c for c in llm.calls if c["call_type"] == "comparison"]) == 2
     assert comp["criteria"] == []
     assert comp["rows"] == []
-    assert len(comp["not_compared"]) == 1
+    assert len(comp["not_compared"]) == 5
     rec = mission["recommendation"]
     assert rec["status"] == "produced"
     assert rec["gate"]["passed"] is False
@@ -2257,9 +2259,12 @@ def test_comparison_retry_preserves_strategic_coverage(
     assert cons["family_count"] == 15
     by_label = {f["label"]: f["family_id"] for f in cons["families"]}
     comp = mission["deliberation"]["comparison"]
-    # 10 familles obligatoires (natures, citées, minorité, non-action, multi-dimensions) : la
-    # relance passe de 12 à 10 en n'écartant que des facultatives.
-    assert [a["families"] for a in comp["attempts"]] == [12, 10]
+    # 3 familles hard (citées) + 4 retenues pour la couverture (natures do_nothing / wait / test /
+    # buy ; build, integrate, simplify, multi-dimensions et désaccord interne déjà représentés par
+    # les hard) : la relance passe de 12 à 7 en n'écartant que des facultatives.
+    assert [a["families"] for a in comp["attempts"]] == [12, 7]
+    assert len(comp["hard_mandatory_family_ids"]) == 3
+    assert comp["hard_mandatory_conflict"] is False
     assert comp["status"] == "ok"
     assert comp["coverage_preserved"] is True
     central = [
@@ -2275,8 +2280,8 @@ def test_comparison_retry_preserves_strategic_coverage(
     assert set(central) <= mandatory
     assert all("citée dans la demande" in " ".join(coverage[f]) for f in central)
     assert minority in mandatory
-    assert "minorité matérielle" in coverage[minority]
-    assert "désaccord interne" in coverage[minority]
+    assert any("minorité matérielle" in r or "nature buy" in r for r in coverage[minority])
+    assert comp["selection"][minority]["role"] == "coverage"
     assert {by_label["ne rien faire"], by_label["attendre le prochain cycle"]} <= mandatory
     retained = set(comp["retained_family_ids"])
     assert mandatory <= retained
@@ -2294,7 +2299,7 @@ def test_comparison_retry_preserves_strategic_coverage(
         for e in journal(client, mission["id"])
         if e["entry_type"] == "retry" and e["step"] == "comparaison"
     )
-    assert retry["payload"]["mandatory_kept"] == 10
+    assert retry["payload"]["mandatory_kept"] == 7
     rec = mission["recommendation"]
     assert rec["gate"]["passed"] is True
     assert rec["decision_ready"] is True
@@ -2340,90 +2345,59 @@ def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
 def test_coverage_requirements_are_data_driven() -> None:
     from app.mission_consolidation import coverage_requirements, select_families_for_attempt
 
+    def fam(
+        i: int, kind: str, sup: list[str], dims: list[str], internal: list[str]
+    ) -> dict[str, Any]:
+        return {
+            "family_id": f"F{i}",
+            "label": ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"][i - 1],
+            "kind": kind,
+            "supporting_experts": sup,
+            "option_ids": [f"o{i}"],
+            "internal_disagreements": internal,
+            "dimensions": dims,
+        }
+
     families = [
-        {
-            "family_id": "F1",
-            "label": "alpha",
-            "kind": "build",
-            "supporting_experts": ["E1", "E2", "E3"],
-            "option_ids": ["a"],
-            "internal_disagreements": [],
-            "dimensions": ["d1"],
-        },
-        {
-            "family_id": "F2",
-            "label": "beta",
-            "kind": "build",
-            "supporting_experts": ["E1", "E2"],
-            "option_ids": ["b"],
-            "internal_disagreements": [],
-            "dimensions": ["d1"],
-        },
-        {
-            "family_id": "F3",
-            "label": "gamma",
-            "kind": "buy",
-            "supporting_experts": ["E3"],
-            "option_ids": ["c"],
-            "internal_disagreements": ["périmètre"],
-            "dimensions": ["d2"],
-        },
-        {
-            "family_id": "F4",
-            "label": "delta",
-            "kind": "wait",
-            "supporting_experts": ["E2"],
-            "option_ids": ["d"],
-            "internal_disagreements": [],
-            "dimensions": ["d1"],
-        },
-        {
-            "family_id": "F5",
-            "label": "epsilon",
-            "kind": "build",
-            "supporting_experts": ["E1"],
-            "option_ids": ["e"],
-            "internal_disagreements": [],
-            "dimensions": ["d1", "d2"],
-        },
-        {
-            "family_id": "F6",
-            "label": "zeta",
-            "kind": "build",
-            "supporting_experts": ["E1"],
-            "option_ids": ["f"],
-            "internal_disagreements": [],
-            "dimensions": ["d3"],
-        },
-        {
-            "family_id": "F7",
-            "label": "eta",
-            "kind": "build",
-            "supporting_experts": ["E2"],
-            "option_ids": ["g"],
-            "internal_disagreements": [],
-            "dimensions": ["d1"],
-        },
+        fam(1, "build", ["E1", "E2", "E3"], ["d1"], []),
+        fam(2, "build", ["E1", "E2"], ["d1"], []),
+        fam(3, "buy", ["E3"], ["d2"], ["périmètre"]),
+        fam(4, "wait", ["E2"], ["d1"], []),
+        fam(5, "build", ["E1"], ["d1", "d2"], []),
+        fam(6, "build", ["E1"], ["d3"], []),
+        fam(7, "build", ["E2"], ["d1"], []),
     ]
-    reasons = coverage_requirements(
+    coverage = coverage_requirements(
         families, request_texts=["Faut-il retenir zeta ou alpha ?"], critical_dimensions={"d3"}
     )
-    assert reasons["F1"] == [
-        "représentante de la nature build",
-        "citée dans la demande ou le cadrage",
-    ]
-    assert "désaccord interne" in reasons["F3"]
-    assert "minorité matérielle" in reasons["F3"]
-    assert "option de non-action / attente" in reasons["F4"]
-    assert reasons["F5"] == ["portée par plusieurs dimensions"]
-    assert "dimension présumée critique" in reasons["F6"]
-    assert "citée dans la demande ou le cadrage" in reasons["F6"]
-    assert "F2" not in reasons
-    assert "F7" not in reasons
-    retained, deferred = select_families_for_attempt(families, reasons, cap=5)
-    assert [f["family_id"] for f in retained] == ["F1", "F3", "F4", "F5", "F6"]
-    assert [d["family_id"] for d in deferred] == ["F2", "F7"]
-    assert select_families_for_attempt(families, reasons, cap=12) == (families, [])
+    # Hard : les stratégies citées mot pour mot (« eta » n'est pas « zeta ») et le désaccord unique.
+    assert coverage["hard"] == {
+        "F1": ["citée dans la demande ou le cadrage"],
+        "F3": ["désaccord interne unique : disparaîtrait autrement"],
+        "F6": ["citée dans la demande ou le cadrage"],
+    }
+    reqs = {r["id"]: r["candidates"] for r in coverage["requirements"]}
+    assert reqs["kind:build"][0] == "F5"  # multi-dimensions préférée, puis soutien
+    assert reqs["critical_dimension:d3"] == ["F6"]
+    assert reqs["non_action"] == ["F4"]
+    assert reqs["minority:buy"] == ["F3"]
+    assert reqs["multi_dimension"] == ["F5"]
+    picked = select_families_for_attempt(families, coverage, cap=5)
+    assert picked["hard_conflict"] is False
+    retained = [f["family_id"] for f in picked["retained"]]
+    assert retained == ["F1", "F3", "F4", "F5", "F6"]
+    assert picked["selection"]["F4"]["role"] == "coverage"
+    assert picked["selection"]["F5"]["reasons"] == ["stratégie multi-dimensionnelle représentée"]
+    assert [d["family_id"] for d in picked["deferred"]] == ["F2", "F7"]
+    assert picked["unsatisfied"] == []
+    everything = select_families_for_attempt(families, coverage, cap=12)
+    assert [f["family_id"] for f in everything["retained"]] == [f["family_id"] for f in families]
+    assert everything["selection"]["F2"]["role"] == "optional"
+    # Saturation : plus de hard que de places → conflit déclaré, aucune sélection normale.
+    saturated = select_families_for_attempt(families, coverage, cap=2)
+    assert saturated["hard_conflict"] is True
+    assert saturated["hard_count"] == 3
+    assert saturated["retained"] == []
 
 
 # B8 — La porte qualité est prioritaire sur tout retry ; réserve du pire cas borné.
@@ -2594,3 +2568,242 @@ def test_conditional_assumptions_are_tagged_in_the_synthesis_matter(
     confrontation_systems = {c["system"] for c in llm.calls if c["call_type"] == "confrontation"}
     assert all("Calibration épistémique" in s for s in confrontation_systems)
     assert mission["recommendation"]["status"] == "produced"
+
+
+# --- Correction d'audit v1.3.1 (B9 : explosion des familles obligatoires) ----------------------
+B9_FRAMING: dict[str, Any] = {
+    **THREE_DIM_FRAMING,
+    "problem_understood": "cas synthétique B9 : deux dimensions critiques, prolifération d'options",
+    "dimensions": [
+        {
+            "name": "dimension alpha",
+            "why": "dimension présumée critique",
+            "presumed_criticality": "high",
+            "unknowns": [],
+            "suggested_angles": ["praticien", "mesure", "sceptique"],
+        },
+        {
+            "name": "dimension beta",
+            "why": "dimension présumée critique",
+            "presumed_criticality": "high",
+            "unknowns": [],
+            "suggested_angles": ["utilisateur", "théoricien", "conformité"],
+        },
+        {
+            "name": "dimension gamma",
+            "why": "dimension secondaire",
+            "presumed_criticality": "low",
+            "unknowns": [],
+            "suggested_angles": ["intégration"],
+        },
+    ],
+}
+B9_INPUT = "Nous hésitons entre le plan alpha, le plan beta et le plan gamma."
+
+
+def b9_options() -> dict[str, OptionSpec]:
+    """33 familles attendues : prolifération diagnostic / action / test / non-action sur deux
+    dimensions critiques (E1aE3 alpha, E4aE6 beta), une dimension secondaire (E7), 5 variantes de
+    non-action, 3 stratégies citées dans la demande, une minorité sérieuse avec désaccord interne
+    (option omega, E7 seul), deux stratégies multi-dimensionnelles ou à deux soutiens."""
+    return {
+        "E1": [
+            ("plan alpha", "build"),
+            ("diagnostic A1", "test"),
+            ("action A1", "build"),
+            ("action A2", "build"),
+            ("attendre T1", "wait"),
+            ("action A7", "build"),
+            ("diagnostic A3", "test"),
+        ],
+        "E2": [
+            ("action A3", "build"),
+            ("action A4", "build"),
+            ("diagnostic A2", "test"),
+            ("ne rien faire", "do_nothing"),
+            ("stratégie commune", "integrate"),
+        ],
+        "E3": [
+            ("action A5", "build"),
+            ("action A6", "simplify"),
+            ("attendre T2", "wait"),
+            ("plan gamma", "buy"),
+            ("action A8", "build"),
+        ],
+        "E4": [
+            ("plan beta", "build"),
+            ("action B1", "build"),
+            ("action B2", "build"),
+            ("diagnostic B1", "test"),
+            ("stratégie commune", "integrate"),
+        ],
+        "E5": [
+            ("action B3", "build"),
+            ("action B4", "simplify"),
+            ("geler le périmètre", "do_nothing"),
+            ("attendre T3", "wait"),
+            ("plan courant", "build"),
+            ("action B6", "build"),
+        ],
+        "E6": [
+            ("action B5", "build"),
+            ("diagnostic B2", "test"),
+            ("plan courant", "build"),
+            ("action B7", "build"),
+            ("action B8", "build"),
+        ],
+        "E7": [("option omega", "buy"), ("action G1", "build")],
+    }
+
+
+INTERNAL_DISAGREEMENT_STEMS.add("option omega")
+NON_ACTION_LABELS = {
+    "attendre t1",
+    "attendre t2",
+    "attendre t3",
+    "ne rien faire",
+    "geler le perimetre",
+}
+
+
+def _b9_mission(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM], name: str, **kw: Any
+) -> tuple[dict[str, Any], DeliberationLLM]:
+    llm = use_llm(
+        DeliberationLLM(framing=B9_FRAMING, options=b9_options(), consolidation=competent_clerk)
+    )
+    mission = run(client, llm, name, declared_class="structurante", **kw)
+    return mission, llm
+
+
+def test_b9_stress_coverage_without_mandatory_explosion(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    mission, _ = _b9_mission(
+        client, use_llm, "B9 stress : 33 familles, 2 dimensions critiques", input_text=B9_INPUT
+    )
+    assert len(mission["composition"]["experts"]) == 7
+    cons = mission["deliberation"]["consolidation"]
+    assert cons["status"] == "ok"
+    assert 30 <= cons["family_count"] <= 40
+    families = {f["family_id"]: f for f in cons["families"]}
+    by_label = {f["label"]: f["family_id"] for f in cons["families"]}
+    comp = mission["deliberation"]["comparison"]
+    retained = comp["retained_family_ids"]
+    # Invariant dur : jamais plus de 12 familles dans une tentative normale.
+    assert len(retained) <= 12
+    assert all(a["families"] <= 12 for a in comp["attempts"])
+    assert comp["status"] == "ok"
+    assert comp["coverage_preserved"] is True
+    assert comp["hard_mandatory_conflict"] is False
+    # Hard : seulement les stratégies citées et le désaccord interne unique — pas d'explosion.
+    hard = set(comp["hard_mandatory_family_ids"])
+    cited = {by_label["plan alpha"], by_label["plan beta"], by_label["plan gamma"]}
+    assert cited <= hard
+    assert hard <= cited | {by_label["option omega"]}
+    assert len(comp["mandatory_family_ids"]) <= 12
+    assert len(comp["mandatory_family_ids"]) < cons["family_count"] / 2
+    # Couverture : dimensions critiques, non-action, natures, minorité représentées, pas exhaustives.
+    retained_set = set(retained)
+    dims_retained = {d for fid in retained for d in families[fid]["dimensions"]}
+    assert {"dimension alpha", "dimension beta"} <= dims_retained
+    non_action_retained = [fid for fid in retained if families[fid]["label"] in NON_ACTION_LABELS]
+    assert 1 <= len(non_action_retained) <= 3
+    assert len([f for f in cons["families"] if f["label"] in NON_ACTION_LABELS]) == 5
+    kinds_retained = {families[fid]["kind"] for fid in retained}
+    assert kinds_retained >= {"build", "test", "wait", "do_nothing", "integrate", "simplify", "buy"}
+    assert by_label["option omega"] in retained_set  # minorité sérieuse conservée
+    assert families[by_label["option omega"]]["internal_disagreements"] == ["périmètre contesté"]
+    # Les redondances sont écartées, et la sélection n'est pas « les plus soutenues ».
+    assert len(comp["not_compared"]) >= 20
+    most_supported = sorted(
+        cons["families"],
+        key=lambda f: (-len(f["supporting_experts"]), int(f["family_id"][1:])),
+    )[:12]
+    assert {f["family_id"] for f in most_supported} != retained_set
+    # Observabilité : chaque famille a un rôle et une raison ; les exigences sont tracées.
+    roles = {s["role"] for s in comp["selection"].values()}
+    assert roles >= {"hard", "coverage", "optional", "deferred"}
+    assert all(s["reasons"] for s in comp["selection"].values())
+    assert len(comp["selection"]) == cons["family_count"]
+    req_ids = {r["id"] for r in comp["coverage_requirements"]}
+    assert {
+        "critical_dimension:dimension alpha",
+        "critical_dimension:dimension beta",
+        "non_action",
+    } <= req_ids
+    assert all(r["satisfied_by"] in retained_set for r in comp["coverage_requirements"])
+    assert comp["unsatisfied_requirements"] == []
+    entries = journal(client, mission["id"])
+    sel = next(e for e in entries if e["step"] == "comparaison" and e["entry_type"] == "selection")
+    assert sel["payload"]["families_total"] == cons["family_count"]
+    assert sel["payload"]["cap"] == 12
+    assert sel["payload"]["hard_conflict"] is False
+    assert all(set(r["assessments"]) == set(comp["criteria"]) for r in comp["rows"])
+    rec = mission["recommendation"]
+    assert rec["gate"]["passed"] is True
+    assert rec["decision_ready"] is True
+    assert mission["llm_calls_used"] <= 60
+
+
+def test_b9_hard_mandatory_saturation_is_explicit_and_fail_closed(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    demanded = (
+        "plan alpha, plan beta, plan gamma, action A1, action A2, action A3, action A4, action A5, "
+        "action B1, action B2, action B3, action B4, action B5"
+    )
+    mission, llm = _b9_mission(
+        client,
+        use_llm,
+        "B9 saturation : 13 stratégies exigées",
+        input_text=f"Compare précisément : {demanded}.",
+    )
+    comp = mission["deliberation"]["comparison"]
+    assert comp["hard_mandatory_conflict"] is True
+    assert len(comp["hard_mandatory_family_ids"]) >= 13
+    assert comp["status"] == "failed"
+    assert "hard_mandatory_exceeds_cap" in comp["coverage_note"]
+    # Aucune tentative normale n'envoie plus de 12 familles ; aucune hard supprimée en silence.
+    assert comp["attempts"] == []
+    assert not [c for c in llm.calls if c["call_type"] == "comparison"]
+    assert comp["retained_family_ids"] == []
+    assert all(
+        comp["selection"][fid]["role"] == "hard" for fid in comp["hard_mandatory_family_ids"]
+    )
+    entries = journal(client, mission["id"])
+    assert any(e["entry_type"] == "hard_mandatory_exceeds_cap" for e in entries)
+    # Synthèse et porte restent exécutées ; rien n'est « prêt ».
+    assert {"synthese", "porte_qualite"} <= set(mission["deliberation"]["steps_done"])
+    rec = mission["recommendation"]
+    assert rec["status"] == "produced"
+    assert rec["gate"]["passed"] is False
+    assert "upstream_stage_failed:comparaison" in rec["gate"]["integrity_failures"]
+    assert rec["decision_ready"] is False
+    assert rec["quality_blocked"] is True
+    synthesis_prompt = next(c for c in llm.calls if c["call_type"] == "synthesis")["prompt"]
+    assert "Comparaison INVALIDE" in synthesis_prompt
+
+
+def test_b9_generic_shape_does_not_turn_most_families_into_mandatory(
+    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+) -> None:
+    # Forme générique : nombreuses familles, deux dimensions critiques, prolifération
+    # diagnostic / action / test / non-action, > 12 candidates potentiellement importantes,
+    # aucune stratégie citée dans la demande.
+    mission, _ = _b9_mission(client, use_llm, "B9 forme générique sans citation")
+    cons = mission["deliberation"]["consolidation"]
+    comp = mission["deliberation"]["comparison"]
+    assert cons["family_count"] >= 30
+    candidates_in_critical_dims = [
+        f for f in cons["families"] if set(f["dimensions"]) & {"dimension alpha", "dimension beta"}
+    ]
+    assert (
+        len(candidates_in_critical_dims) > 12
+    )  # l'ancienne règle les aurait toutes rendues obligatoires
+    assert len(comp["hard_mandatory_family_ids"]) <= 1  # seul le désaccord interne unique
+    assert len(comp["mandatory_family_ids"]) <= 12
+    assert len(comp["retained_family_ids"]) <= 12
+    assert comp["status"] == "ok"
+    assert comp["coverage_preserved"] is True
+    assert mission["recommendation"]["decision_ready"] is True

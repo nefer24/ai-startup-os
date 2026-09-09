@@ -443,96 +443,201 @@ def coverage_requirements(
     *,
     request_texts: list[str],
     critical_dimensions: set[str],
-) -> dict[str, list[str]]:
-    """Familles qu'aucune tentative de comparaison ne peut sacrifier, avec leurs motifs.
+) -> dict[str, Any]:
+    """Exigences de couverture stratégique de la comparaison (B7, révisé B9).
 
-    Déduit de données déjà présentes dans le pipeline — jamais de mots-clés métier :
-      * une famille représentative de chaque nature canonique (la plus soutenue) ;
-      * les familles portant un désaccord interne ;
-      * les familles citées dans la demande / le cadrage / la préférence CEO (leur libellé ou
-        celui d'une de leurs options apparaît dans ces textes) ;
-      * les familles issues d'une dimension présumée critique ou de plusieurs dimensions ;
-      * une option de non-action / attente si elle existe ;
-      * les minorités matérielles : un seul soutien mais désaccord interne ou dimension critique.
+    Deux concepts distincts — c'est la correction B9 :
+
+    * **hard** — familles dont la présence *individuelle* est indispensable : stratégies citées mot
+      pour mot dans la demande / le cadrage / la préférence CEO (ce que le CEO demande de comparer),
+      et un désaccord interne *unique* qui disparaîtrait autrement ;
+    * **requirements** — contraintes de *représentation*, satisfaites par AU MOINS une famille
+      appropriée : chaque nature canonique, chaque dimension présumée critique, la non-action /
+      attente, les minorités matérielles (par nature), un désaccord interne, une stratégie
+      multi-dimensionnelle. Appartenir à un tel groupe ne rend **pas** une famille obligatoire.
+
+    Les candidats de chaque exigence sont ordonnés par un ordre lexicographique déterministe et
+    documenté (pas un score) : désaccord interne, portée multi-dimensions, nombre de soutiens,
+    identifiant. Tout est déduit de données déjà présentes dans le pipeline : aucun mot-clé métier.
     """
-    reasons: dict[str, list[str]] = {}
-
-    def _mark(fid: str, why: str) -> None:
-        reasons.setdefault(fid, [])
-        if why not in reasons[fid]:
-            reasons[fid].append(why)
-
-    by_kind: dict[str, list[dict[str, Any]]] = {}
-    for f in families:
-        by_kind.setdefault(f["kind"], []).append(f)
-    for kind, fams in by_kind.items():
-        best = sorted(
-            fams,
-            key=lambda f: (-len(f.get("supporting_experts", [])), int(f["family_id"][1:])),
-        )[0]
-        _mark(best["family_id"], f"représentante de la nature {kind}")
+    hard: dict[str, list[str]] = {}
     texts = [normalize_label(t) for t in request_texts if t and t.strip()]
+
+    def _pref(f: dict[str, Any]) -> tuple[int, int, int, int]:
+        return (
+            0 if f.get("internal_disagreements") else 1,
+            -len(set(f.get("dimensions", []))),
+            -len(f.get("supporting_experts", [])),
+            int(f["family_id"][1:]),
+        )
+
     for f in families:
-        if f.get("internal_disagreements"):
-            _mark(f["family_id"], "désaccord interne")
         labels = [f["label"], *f.get("option_labels", [])]
         if any(_cited(lab, t) for lab in labels for t in texts):
-            _mark(f["family_id"], "citée dans la demande ou le cadrage")
-        dims = set(f.get("dimensions", []))
-        if dims & critical_dimensions:
-            _mark(f["family_id"], "dimension présumée critique")
-        if len(dims) >= 2:
-            _mark(f["family_id"], "portée par plusieurs dimensions")
-        if f["kind"] in NON_ACTION_KINDS:
-            _mark(f["family_id"], "option de non-action / attente")
-        if len(f.get("supporting_experts", [])) == 1 and (
-            f.get("internal_disagreements") or (dims & critical_dimensions)
-        ):
-            _mark(f["family_id"], "minorité matérielle")
-    return reasons
+            hard.setdefault(f["family_id"], []).append("citée dans la demande ou le cadrage")
+    with_disagreement = [f for f in families if f.get("internal_disagreements")]
+    if len(with_disagreement) == 1:
+        fid = with_disagreement[0]["family_id"]
+        hard.setdefault(fid, []).append("désaccord interne unique : disparaîtrait autrement")
+
+    requirements: list[dict[str, Any]] = []
+
+    def _req(req_id: str, label: str, candidates: list[dict[str, Any]]) -> None:
+        if candidates:
+            requirements.append(
+                {
+                    "id": req_id,
+                    "label": label,
+                    "candidates": [c["family_id"] for c in sorted(candidates, key=_pref)],
+                }
+            )
+
+    kinds: list[str] = list(dict.fromkeys(f["kind"] for f in families))
+    for kind in kinds:
+        _req(
+            f"kind:{kind}", f"nature {kind} représentée", [f for f in families if f["kind"] == kind]
+        )
+    for dim in sorted(critical_dimensions):
+        _req(
+            f"critical_dimension:{dim}",
+            f"dimension critique « {dim} » représentée",
+            [f for f in families if dim in set(f.get("dimensions", []))],
+        )
+    _req(
+        "non_action",
+        "non-action / attente représentée",
+        [f for f in families if f["kind"] in NON_ACTION_KINDS],
+    )
+    minorities = [
+        f
+        for f in families
+        if len(f.get("supporting_experts", [])) == 1
+        and (
+            f.get("internal_disagreements") or (set(f.get("dimensions", [])) & critical_dimensions)
+        )
+    ]
+    for kind in list(dict.fromkeys(f["kind"] for f in minorities)):
+        _req(
+            f"minority:{kind}",
+            f"minorité matérielle de nature {kind} représentée",
+            [f for f in minorities if f["kind"] == kind],
+        )
+    _req("internal_disagreement", "désaccord interne représenté", with_disagreement)
+    _req(
+        "multi_dimension",
+        "stratégie multi-dimensionnelle représentée",
+        [f for f in families if len(set(f.get("dimensions", []))) >= 2],
+    )
+    return {"hard": hard, "requirements": requirements}
 
 
 def select_families_for_attempt(
     families: list[dict[str, Any]],
-    mandatory: dict[str, list[str]],
+    coverage: dict[str, Any],
     *,
     cap: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Sélection stratifiée : d'abord toutes les familles obligatoires (couverture), puis les
-    plus soutenues jusqu'au plafond. Le plafond ne tronque jamais la couverture obligatoire.
-    Retourne (retenues, écartées avec motif)."""
-    retained: list[dict[str, Any]] = [f for f in families if f["family_id"] in mandatory]
-    if len(families) <= cap:
-        return list(families), []
-    ranked = sorted(
-        families,
+) -> dict[str, Any]:
+    """Sélection stratifiée sous plafond dur (B9) : hard → couverture → facultatives.
+
+    1. les familles *hard* sont retenues ; si elles dépassent à elles seules le plafond, le conflit
+       est déclaré (`hard_conflict = True`) et **aucune** sélection normale n'est produite — la
+       comparaison n'est pas réalisable sous le plafond, fail-closed ;
+    2. chaque exigence de couverture est satisfaite par UNE famille (les hard comptent) : couverture
+       gloutonne déterministe, en préférant à chaque pas la candidate qui satisfait le plus
+       d'exigences encore ouvertes, puis l'ordre de préférence de l'exigence ; le plafond n'est
+       jamais dépassé — une exigence qui ne peut plus être satisfaite est listée ;
+    3. les places restantes vont aux facultatives par soutien puis identifiant.
+    Retourne retenues, écartées (avec motif), la sélection expliquée famille par famille, les
+    exigences avec la famille qui les satisfait, et le conflit éventuel.
+    """
+    by_id = {f["family_id"]: f for f in families}
+    hard: dict[str, list[str]] = coverage.get("hard", {})
+    requirements: list[dict[str, Any]] = coverage.get("requirements", [])
+    selection: dict[str, dict[str, Any]] = {}
+    if len(hard) > cap:
+        return {
+            "retained": [],
+            "deferred": [],
+            "selection": {fid: {"role": "hard", "reasons": why} for fid, why in hard.items()},
+            "requirements": requirements,
+            "unsatisfied": [],
+            "hard_conflict": True,
+            "hard_count": len(hard),
+        }
+    retained_ids: list[str] = []
+    for fid in sorted(hard, key=lambda x: int(x[1:])):
+        retained_ids.append(fid)
+        selection[fid] = {"role": "hard", "reasons": list(hard[fid])}
+
+    def _satisfied(req: dict[str, Any]) -> str | None:
+        return next((c for c in req["candidates"] if c in retained_ids), None)
+
+    for req in requirements:
+        req["satisfied_by"] = _satisfied(req)
+    open_reqs = [r for r in requirements if r["satisfied_by"] is None]
+    while open_reqs and len(retained_ids) < cap:
+        req = open_reqs[0]
+        # Candidate préférée : celle qui satisfait le plus d'exigences encore ouvertes, puis
+        # l'ordre de préférence propre à l'exigence (désaccord, multi-dimensions, soutien, id).
+        best = max(
+            req["candidates"],
+            key=lambda c: (
+                sum(1 for r in open_reqs if c in r["candidates"]),
+                -req["candidates"].index(c),
+            ),
+        )
+        retained_ids.append(best)
+        satisfied_now = [r["id"] for r in open_reqs if best in r["candidates"]]
+        selection[best] = {
+            "role": "coverage",
+            "reasons": [
+                next(r["label"] for r in requirements if r["id"] == rid) for rid in satisfied_now
+            ],
+        }
+        for r in open_reqs:
+            if best in r["candidates"]:
+                r["satisfied_by"] = best
+        open_reqs = [r for r in open_reqs if r["satisfied_by"] is None]
+    unsatisfied = [r["id"] for r in open_reqs]
+    optional = sorted(
+        [f for f in families if f["family_id"] not in retained_ids],
         key=lambda f: (
             -len(f.get("supporting_experts", [])),
             -len(f.get("option_ids", [])),
             int(f["family_id"][1:]),
         ),
     )
-    for f in ranked:
-        if len(retained) >= cap:
+    for f in optional:
+        if len(retained_ids) >= cap:
             break
-        if f not in retained:
-            retained.append(f)
-    retained_ids = {f["family_id"] for f in retained}
-    deferred = [
-        {
-            "family_id": f["family_id"],
-            "label": f["label"],
-            "kind": f["kind"],
-            "reason": (
-                "au-delà du plafond de familles comparées ; non obligatoire pour la couverture "
-                "stratégique ; conservée dans le rapport et la synthèse, non comparée"
-            ),
+        retained_ids.append(f["family_id"])
+        selection[f["family_id"]] = {
+            "role": "optional",
+            "reasons": ["place disponible sous le plafond ; retenue par soutien"],
         }
-        for f in families
-        if f["family_id"] not in retained_ids
-    ]
-    retained.sort(key=lambda f: int(f["family_id"][1:]))
-    return retained, deferred
+    deferred = []
+    for f in families:
+        if f["family_id"] in retained_ids:
+            continue
+        reason = (
+            "au-delà du plafond de familles comparées ; ni indispensable ni nécessaire à la "
+            "couverture stratégique (représentée par une autre famille) ; conservée dans le "
+            "rapport et la synthèse, non comparée"
+        )
+        selection[f["family_id"]] = {"role": "deferred", "reasons": [reason]}
+        deferred.append(
+            {"family_id": f["family_id"], "label": f["label"], "kind": f["kind"], "reason": reason}
+        )
+    retained = sorted((by_id[i] for i in retained_ids), key=lambda f: int(f["family_id"][1:]))
+    return {
+        "retained": retained,
+        "deferred": deferred,
+        "selection": selection,
+        "requirements": requirements,
+        "unsatisfied": unsatisfied,
+        "hard_conflict": False,
+        "hard_count": len(hard),
+    }
 
 
 def build_compact_comparison_prompt(
