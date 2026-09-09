@@ -106,6 +106,7 @@ def _framing_estimate(client: TestClient, use_llm: Callable[..., Any]) -> float:
 # --- D. Sémantique de coût : rejet explicite / ambigu / usage connu -------------------------------
 def test_cost_semantics_distinguish_rejected_ambiguous_and_known() -> None:
     # Rejets explicites avant traitement : aucun coût engagé (contrat formalisé dans le module).
+    exc: BaseException
     for exc in (
         overloaded(),
         FakeProviderError(429, "rate_limit_error"),
