@@ -1844,9 +1844,26 @@ def get_mission_journal(mission_id: int, db: DbSession) -> list[MissionJournalEn
 def get_mission_report_markdown(mission_id: int, db: DbSession) -> MissionReportMarkdownOut:
     """Rapport de situation en Markdown déterministe (aucun appel LLM, aucune mutation)."""
     mission = _get_mission_or_404(db, mission_id)
-    report = mission_payload(mission)["report"]
+    payload = mission_payload(mission)
+    report = payload["report"]
     if report is None:
-        raise HTTPException(status_code=409, detail="rapport non disponible (mission non terminée)")
+        # Contrat explicite (B11) : « pas de rapport » ne veut pas dire « encore en cours ».
+        if mission.status == "failed":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "state": "failed",
+                    "message": "mission échouée : aucun rapport n'a pu être produit",
+                    "failure": payload.get("failure") or {},
+                },
+            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "state": "running" if mission.status == "running" else mission.status,
+                "message": "rapport non disponible : mission encore en cours",
+            },
+        )
     return MissionReportMarkdownOut(
         mission_id=mission.id, markdown=render_situation_report_markdown(report)
     )

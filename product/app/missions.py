@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -127,7 +128,26 @@ from app.mission_schemas import (
     parse_structured,
 )
 from app.observability import observed
+from app.provider_errors import (
+    LOCAL_ERROR,
+    PERMANENT_PROVIDER_ERROR,
+    TRANSIENT_PROVIDER_ERROR,
+    classify_provider_error,
+    retry_delay_seconds,
+)
 from app.schemas import MissionCreateRequest
+
+# Attente entre deux tentatives fournisseur : remplaçable en test (aucun vrai sommeil).
+provider_sleep: Callable[[float], None] = time.sleep
+
+
+class MissionCallFailedError(Exception):
+    """Un appel logique a échoué définitivement (relances épuisées ou erreur non relançable)."""
+
+    def __init__(self, failure: dict[str, Any]) -> None:
+        super().__init__(failure.get("reason", "call_failed"))
+        self.failure = failure
+
 
 PHASE = "otv1_inc1"
 PROVISIONAL_CLASS = "importante_provisoire"
@@ -199,6 +219,14 @@ class _Run:
     # comparaison). Les étapes optionnelles ne sont financées qu'au-delà de ce pire cas.
     core_worst_calls: int = SYNTHESIS_CORE_CALLS + 1
     core_plan: dict[str, int] = field(default_factory=dict)
+    # B10 — comptabilité des tentatives fournisseur, distincte des appels logiques du registre :
+    # `llm_calls_used` compte les appels logiques réussis ; les tentatives physiques, relances et
+    # échecs sont comptés ici et journalisés par tentative.
+    logical_calls: int = 0
+    provider_attempts: int = 0
+    provider_retries: int = 0
+    provider_failures: int = 0
+    failure: dict[str, Any] = field(default_factory=dict)
 
 
 def _journal(
@@ -285,8 +313,17 @@ def _call(
         price_in_per_mtok=settings.llm_price_input_eur_per_mtok,
         price_out_per_mtok=settings.llm_price_output_eur_per_mtok,
     )
-    response = client.complete_structured(
-        system=system, prompt=prompt, call_type=call_type, max_tokens=max_tokens
+    response, attempt = _call_with_retries(
+        session,
+        run,
+        settings,
+        client=client,
+        step=step,
+        actor=actor,
+        system=system,
+        prompt=prompt,
+        call_type=call_type,
+        max_tokens=max_tokens,
     )
     cost = run.ledger.record(response.usage)
     _sync_budget(session, run)
@@ -298,6 +335,11 @@ def _call(
         actor,
         {
             "call_type": call_type,
+            "logical_call_id": f"LC-{run.logical_calls}",
+            "attempt_number": attempt,
+            "recovered_after_retries": attempt - 1,
+            "provider": "anthropic",
+            "model": settings.anthropic_model,
             "input_tokens": response.usage.input_tokens,
             "output_tokens": response.usage.output_tokens,
             "max_tokens": max_tokens,
@@ -309,6 +351,111 @@ def _call(
         },
     )
     return response
+
+
+def _call_with_retries(
+    session: Session,
+    run: _Run,
+    settings: Settings,
+    *,
+    client: Any,
+    step: str,
+    actor: str,
+    system: str,
+    prompt: str,
+    call_type: str,
+    max_tokens: int,
+) -> tuple[LLMResponse, int]:
+    """Tentatives physiques bornées d'UN appel logique déjà admis par le budget (B10).
+
+    Une erreur classée transitoire est relancée avec attente exponentielle bornée (ou `Retry-After`
+    plafonné), au plus `mission_provider_max_attempts` tentatives par appel logique et
+    `mission_provider_max_retries_total` relances par mission ; une erreur permanente, locale ou
+    inconnue n'est jamais relancée. Chaque tentative est journalisée (`call_attempt_failed`) et
+    tracée dans `llm_call_logs` par le client observé. Les tentatives échouées ne consomment ni
+    appel logique ni coût au registre (aucun usage rapporté) : elles ne peuvent donc jamais
+    entamer les réserves des étapes obligatoires (B8). Limite : si le fournisseur a traité une
+    requête dont la réponse s'est perdue, il n'y a pas de garantie « exactement une fois » côté
+    fournisseur ; côté mission, un seul résultat logique est enregistré.
+    """
+    run.logical_calls += 1
+    logical_call_id = f"LC-{run.logical_calls}"
+    max_attempts = max(1, settings.mission_provider_max_attempts)
+    attempt = 0
+    while True:
+        attempt += 1
+        run.provider_attempts += 1
+        try:
+            response: LLMResponse = client.complete_structured(
+                system=system, prompt=prompt, call_type=call_type, max_tokens=max_tokens
+            )
+            return response, attempt
+        except Exception as exc:
+            info = classify_provider_error(exc)
+            run.provider_failures += 1
+            total_cap_reached = run.provider_retries >= settings.mission_provider_max_retries_total
+            can_retry = info.retryable and attempt < max_attempts and not total_cap_reached
+            delay = (
+                retry_delay_seconds(
+                    attempt,
+                    info,
+                    base=settings.mission_provider_backoff_base_seconds,
+                    cap=settings.mission_provider_backoff_cap_seconds,
+                    retry_after_cap=settings.mission_provider_retry_after_cap_seconds,
+                )
+                if can_retry
+                else None
+            )
+            _journal(
+                session,
+                run,
+                step,
+                "call_attempt_failed",
+                actor,
+                {
+                    "logical_call_id": logical_call_id,
+                    "call_type": call_type,
+                    "provider": "anthropic",
+                    "model": settings.anthropic_model,
+                    "attempt_number": attempt,
+                    "max_attempts": max_attempts,
+                    "status": "error",
+                    **info.to_dict(),
+                    "will_retry": can_retry,
+                    "retry_delay_seconds": delay,
+                    "retries_total_used": run.provider_retries,
+                    "retries_total_max": settings.mission_provider_max_retries_total,
+                    "budget": run.ledger.snapshot(),
+                },
+            )
+            if can_retry and delay is not None:
+                run.provider_retries += 1
+                provider_sleep(delay)
+                continue
+            if info.category == TRANSIENT_PROVIDER_ERROR:
+                reason = "transient_retries_exhausted"
+            elif info.category == PERMANENT_PROVIDER_ERROR:
+                reason = "permanent_provider_error"
+            elif info.category == LOCAL_ERROR:
+                reason = "local_error"
+            else:
+                reason = "unknown_error"
+            failure = {
+                "reason": reason,
+                "step": step,
+                "actor": actor,
+                "call_type": call_type,
+                "logical_call_id": logical_call_id,
+                "provider": "anthropic",
+                "model": settings.anthropic_model,
+                "attempts": attempt,
+                "max_attempts": max_attempts,
+                "retries_total_used": run.provider_retries,
+                "retries_total_max": settings.mission_provider_max_retries_total,
+                "total_retry_cap_reached": total_cap_reached and info.retryable,
+                **info.to_dict(),
+            }
+            raise MissionCallFailedError(failure) from exc
 
 
 def _classify_parse_error(response: LLMResponse, error: str) -> str:
@@ -443,53 +590,114 @@ def run_mission(
             "budget": run.ledger.snapshot(),
         },
     )
+    class_info: dict[str, Any] = {
+        "declared": mission.declared_class,
+        "effective": mission.effective_class,
+        "provisional": mission.class_is_provisional,
+        "escalation": "",
+    }
     try:
-        _step_framing(session, run, llm, settings)
-        class_info = _escalate_class(session, run)
-        _apply_budget_plan_after_escalation(session, run, settings)
-        if run.framing is None:
-            # Arrêt réel : sans cadrage valide (panne de parsing ou appel refusé par le budget),
-            # aucune composition fictive, aucun Tour 0, aucune auto-qualification, aucun greffier,
-            # aucun autre appel LLM. Le rapport diagnostic partiel est produit tel quel.
-            _journal(
-                session,
-                run,
-                "mission",
-                "stopped_after_framing_failure",
-                "facilitateur",
-                {
-                    "stop_reason": run.stop_reason,
-                    "framing_error": run.framing_error,
-                    "skipped_steps": ["composition", "tour0", "auto_qualification", "greffier"],
-                    "llm_calls_used": run.ledger.calls_used,
-                    "budget": run.ledger.snapshot(),
-                },
-            )
-        else:
-            _step_composition(session, run, settings)
-            _check_uncovered_critical_dimension(session, run)
-            _step_tour0(session, run, llm, settings)
-            _step_self_qualification(session, run, llm, settings)
-            _step_clerk(session, run, llm, settings)
-            _build_interim_cartography(run)
-            # Incrément 2 — délibération probante (chaque étape se saute proprement sous budget).
-            _check_deliberation_affordable(session, run)
-            _step_confrontation(session, run, llm, settings)
-            _step_steelman(session, run, llm, settings)
-            _step_research(session, run, llm, settings)
-            _step_revision(session, run, llm, settings)
-            _step_consolidation(session, run, llm, settings)
-            _step_comparison(session, run, llm, settings)
-            _step_synthesis(session, run, llm, settings)
-            _step_gate(session, run, llm, settings)
-        _finalize(session, run, class_info)
+        try:
+            _run_pipeline(session, run, llm, settings, class_info)
+        except MissionCallFailedError as exc:
+            # B10 — échec définitif d'un appel fournisseur : état terminal explicite, données
+            # déjà produites conservées, rapport diagnostic partiel, aucune recommandation.
+            _fail_mission(session, run, exc.failure)
     except Exception as exc:
         mission.status = "failed"
         mission.stop_reason = f"{type(exc).__name__}: {str(exc)[:200]}"
+        run.failure = run.failure or {
+            "reason": "local_error",
+            "step": "mission",
+            "error_category": LOCAL_ERROR,
+            "exception_type": type(exc).__name__,
+            "message": str(exc)[:300],
+        }
+        mission.failure_json = json.dumps(run.failure, ensure_ascii=False, default=str)
         session.commit()
         _journal(session, run, "mission", "failed", "facilitateur", {"error": mission.stop_reason})
         raise
     return mission
+
+
+def _run_pipeline(
+    session: Session, run: _Run, llm: LLMClient, settings: Settings, class_info: dict[str, Any]
+) -> None:
+    """Enchaînement complet d'une mission (cadrage → … → porte), puis finalisation."""
+    _step_framing(session, run, llm, settings)
+    class_info.update(_escalate_class(session, run))
+    _apply_budget_plan_after_escalation(session, run, settings)
+    if run.framing is None:
+        # Arrêt réel : sans cadrage valide (panne de parsing ou appel refusé par le budget),
+        # aucune composition fictive, aucun Tour 0, aucune auto-qualification, aucun greffier,
+        # aucun autre appel LLM. Le rapport diagnostic partiel est produit tel quel.
+        _journal(
+            session,
+            run,
+            "mission",
+            "stopped_after_framing_failure",
+            "facilitateur",
+            {
+                "stop_reason": run.stop_reason,
+                "framing_error": run.framing_error,
+                "skipped_steps": ["composition", "tour0", "auto_qualification", "greffier"],
+                "llm_calls_used": run.ledger.calls_used,
+                "budget": run.ledger.snapshot(),
+            },
+        )
+    else:
+        _step_composition(session, run, settings)
+        _check_uncovered_critical_dimension(session, run)
+        _step_tour0(session, run, llm, settings)
+        _step_self_qualification(session, run, llm, settings)
+        _step_clerk(session, run, llm, settings)
+        _build_interim_cartography(run)
+        # Incrément 2 — délibération probante (chaque étape se saute proprement sous budget).
+        _check_deliberation_affordable(session, run)
+        _step_confrontation(session, run, llm, settings)
+        _step_steelman(session, run, llm, settings)
+        _step_research(session, run, llm, settings)
+        _step_revision(session, run, llm, settings)
+        _step_consolidation(session, run, llm, settings)
+        _step_comparison(session, run, llm, settings)
+        _step_synthesis(session, run, llm, settings)
+        _step_gate(session, run, llm, settings)
+    _finalize(session, run, class_info)
+
+
+def _fail_mission(session: Session, run: _Run, failure: dict[str, Any]) -> None:
+    """État terminal `failed` après échec définitif d'un appel fournisseur (B10).
+
+    Ce qui a été produit (cadrage, composition, exposés réussis) est conservé ; un rapport
+    diagnostic partiel est écrit ; aucune recommandation, aucun `decision_ready`.
+    """
+    m = run.mission
+    run.failure = failure
+    run.stop_reason = str(failure.get("reason", "provider_error"))
+    m.failure_json = json.dumps(failure, ensure_ascii=False, default=str)
+    session.commit()
+    _journal(
+        session,
+        run,
+        "mission",
+        "failed_provider_call",
+        "facilitateur",
+        {
+            **{k: v for k, v in failure.items() if k != "message"},
+            "message": str(failure.get("message", ""))[:300],
+            "provider_attempts": run.provider_attempts,
+            "provider_retries": run.provider_retries,
+            "provider_failures": run.provider_failures,
+            "budget": run.ledger.snapshot(),
+        },
+    )
+    class_info = {
+        "declared": m.declared_class,
+        "effective": m.effective_class,
+        "provisional": m.class_is_provisional,
+        "escalation": "",
+    }
+    _finalize(session, run, class_info, failed=True)
 
 
 def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
@@ -848,7 +1056,20 @@ def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings)
     )
 
 
-def _finalize(session: Session, run: _Run, class_info: dict[str, Any]) -> None:
+def _budget_snapshot(run: _Run) -> dict[str, Any]:
+    """Registre budgétaire + comptabilité des tentatives fournisseur (B10)."""
+    return {
+        **run.ledger.snapshot(),
+        "logical_calls": run.logical_calls,
+        "provider_attempts": run.provider_attempts,
+        "provider_retries": run.provider_retries,
+        "provider_failures": run.provider_failures,
+    }
+
+
+def _finalize(
+    session: Session, run: _Run, class_info: dict[str, Any], *, failed: bool = False
+) -> None:
     m = run.mission
     if not run.cartography:
         _build_interim_cartography(run)
@@ -869,15 +1090,16 @@ def _finalize(session: Session, run: _Run, class_info: dict[str, Any]) -> None:
         framing_error=run.framing_error,
         composition=run.composition,
         cartography=cartography,
-        budget=run.ledger.snapshot(),
+        budget=_budget_snapshot(run),
         stop_reason=run.stop_reason,
         deliberation=deliberation,
         recommendation=run.recommendation or None,
     )
-    # Une panne de cadrage n'est pas un rapport candidat : la mission est `failed`, le rapport
-    # partiel et la réponse brute restent disponibles pour le diagnostic.
-    m.status = "failed" if run.stop_reason.startswith("framing_failed") else "candidate"
+    # Une panne de cadrage ou un échec définitif d'appel fournisseur n'est pas un rapport
+    # candidat : la mission est `failed`, le rapport partiel reste disponible pour le diagnostic.
+    m.status = "failed" if (failed or run.stop_reason.startswith("framing_failed")) else "candidate"
     report["status"] = m.status
+    report["failure"] = run.failure or None
     m.cartography_json = json.dumps(cartography, ensure_ascii=False, default=str)
     m.report_json = json.dumps(report, ensure_ascii=False, default=str)
     m.stop_reason = run.stop_reason
@@ -893,7 +1115,8 @@ def _finalize(session: Session, run: _Run, class_info: dict[str, Any]) -> None:
             "stop_reason": run.stop_reason,
             "distinct_option_groups": cartography["distinct_option_groups"],
             "divergence_index": cartography["divergence_index"],
-            "budget": run.ledger.snapshot(),
+            "budget": _budget_snapshot(run),
+            "status": m.status,
         },
     )
 
@@ -2711,4 +2934,5 @@ def mission_payload(mission: Mission) -> dict[str, Any]:
         "report": _load(mission.report_json),
         "deliberation": _load(mission.deliberation_json),
         "recommendation": _load(mission.recommendation_json),
+        "failure": _load(mission.failure_json),
     }

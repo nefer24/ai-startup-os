@@ -901,6 +901,8 @@ class MissionOut(BaseModel):
     # OT-V1 incrément 2 : trace de la délibération et recommandation décisionnelle (14 champs).
     deliberation: dict[str, Any] | None = None
     recommendation: dict[str, Any] | None = None
+    # B10 / B11 : échec structuré (étape, acteur, catégorie, tentatives, raison) si `failed`.
+    failure: dict[str, Any] | None = None
 
 
 class MissionJournalEntryOut(BaseModel):

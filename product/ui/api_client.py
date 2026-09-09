@@ -7,9 +7,13 @@ entièrement côté backend. L'interface Streamlit passe uniquement par ce clien
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
+
+from ui.mission_state import poll_until_terminal
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 
@@ -789,6 +793,23 @@ class SolutionPlansAPIClient:
         """Rapport de situation Markdown (`GET /missions/{id}/report/markdown`)."""
         result: dict[str, Any] = self._request("GET", f"/missions/{mission_id}/report/markdown")
         return result
+
+    def wait_for_mission(
+        self,
+        mission_id: int,
+        *,
+        sleeper: Callable[[float], None] = time.sleep,
+        interval_seconds: float = 5.0,
+        max_polls: int = 60,
+    ) -> tuple[dict[str, Any], int, bool]:
+        """Interroge la mission jusqu'à un état terminal (succès, action CEO ou `failed`), au plus
+        `max_polls` fois : jamais d'attente infinie sur une mission déjà échouée (B11)."""
+        return poll_until_terminal(
+            lambda: self.get_mission(mission_id),
+            sleeper=sleeper,
+            interval_seconds=interval_seconds,
+            max_polls=max_polls,
+        )
 
     def mission_ceo_action(
         self, mission_id: int, action: str, ceo_notes: str = ""

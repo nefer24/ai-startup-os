@@ -1020,6 +1020,24 @@ révision ne sont financés qu'au-delà du **pire cas borné** du cœur (nominal
 restent finançables (`retry_refused_budget`, statut `failed` explicite, porte exécutée). La porte
 qualité ne peut plus être sacrifiée à une relance.
 
+**Résilience fournisseur (B10)** : une erreur que le fournisseur expose comme transitoire (429,
+529, 5xx, surcharge, coupure réseau) est relancée avec attente exponentielle bornée ou
+`Retry-After` plafonné — au plus 3 tentatives par appel logique et 6 relances par mission
+(`MISSION_PROVIDER_*`) ; une erreur permanente (authentification, requête invalide, modèle
+inexistant), locale (validation, contrat) ou inconnue n'est jamais relancée. `llm_calls_used`
+compte les appels logiques réussis ; tentatives, relances et échecs sont comptés à part et
+journalisés par tentative. Une tentative échouée ne consomme ni appel ni euro : les réserves du cœur
+(B8) et les plafonds restent intacts. Après épuisement : mission `failed`, `stop_reason`
+`transient_retries_exhausted` (ou `permanent_provider_error`), échec structuré `failure` (étape,
+acteur, tentatives, catégorie, code), données déjà produites conservées, rapport diagnostic
+partiel, aucune recommandation.
+
+**État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
+`GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec
+`detail.state` = `running` ou `failed` (+ `failure`), 404 si inexistante. L'interface annonce
+« MISSION ÉCHOUÉE » (étape, cause, tentatives, statut, « inutile d'attendre ») avant toute lecture
+de rapport et n'interroge une mission que jusqu'à un état terminal (`wait_for_mission`, borné).
+
 **Garde-fou épistémique** : les hypothèses de la demande et des experts sont étiquetées
 (`calcul conditionnel` / `hypothèse comportementale` / `inconnue déclarée` / `prévision` /
 `affirmation`) dans la matière soumise aux instances, et la règle est explicite dans les consignes

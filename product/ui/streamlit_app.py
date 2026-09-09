@@ -19,6 +19,7 @@ from typing import Any
 import streamlit as st
 
 from ui.api_client import DEFAULT_API_URL, APIError, SolutionPlansAPIClient
+from ui.mission_state import mission_state_summary
 
 FOUNDING_PHRASE = (
     "Chaque problème, chaque idée ou chaque objectif mérite une équipe d'experts. "
@@ -2305,9 +2306,22 @@ def render_mission_create(client: SolutionPlansAPIClient) -> None:
         ):
             mission = client.create_mission(payload)
     except APIError as exc:
-        st.error(str(exc))
+        st.error(
+            str(exc)
+            + "  \nSi la requête a expiré côté interface, la mission peut encore tourner ou avoir "
+            "échoué côté serveur : consultez l'onglet Missions, qui affiche son état réel."
+        )
         return
     st.session_state["selected_mission_id"] = mission["id"]
+    summary = mission_state_summary(mission)
+    if summary["kind"] == "failed":
+        st.error(
+            "**"
+            + summary["headline"]
+            + f" (#{mission['id']})**  \n"
+            + "  \n".join(summary["details"])
+        )
+        return
     st.success(
         f"Mission #{mission['id']} : rapport `{mission['status']}` — "
         f"{mission['llm_calls_used']} appel(s), {mission['cost_eur']:.4f} €"
@@ -2390,7 +2404,6 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
     )
     try:
         mission = client.get_mission(int(mission_id))
-        markdown = client.get_mission_report_markdown(int(mission_id))["markdown"]
     except APIError as exc:
         st.error(str(exc))
         return
@@ -2399,6 +2412,29 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
     c2.metric("Appels", f"{mission['llm_calls_used']}/{mission['max_llm_calls']}")
     c3.metric("Coût (€)", f"{mission['cost_eur']:.4f}")
     c4.metric("Classe", mission["effective_class"])
+    # B11 — l'état de la mission est dit avant toute lecture de rapport : « pas de rapport »
+    # n'implique jamais « encore en cours ». Une mission échouée est annoncée comme telle.
+    summary = mission_state_summary(mission)
+    if summary["kind"] == "failed":
+        st.error("**" + summary["headline"] + "**  \n" + "  \n".join(summary["details"]))
+        with st.expander("Détail technique de l'échec"):
+            st.json(mission.get("failure") or {})
+    elif summary["kind"] == "running":
+        st.info(
+            summary["headline"] + " — " + " ".join(summary["details"]) + " Utilisez « Rafraîchir »."
+        )
+        if st.button("Rafraîchir", key=f"mission_refresh_{mission_id}"):
+            st.rerun()
+        return
+    markdown = ""
+    try:
+        markdown = client.get_mission_report_markdown(int(mission_id))["markdown"]
+    except APIError as exc:
+        if summary["kind"] == "failed":
+            st.caption(f"Aucun rapport (même partiel) pour cette mission échouée : {exc}")
+        else:
+            st.error(str(exc))
+            return
     if mission["stop_reason"]:
         st.warning(f"Rapport partiel — arrêt : {mission['stop_reason']}")
     _render_mission_recommendation(mission)
@@ -2418,13 +2454,14 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
                 f"Borne d'angles par cellule : {bounds.get('max_angles_per_cell')} — "
                 f"{bounds.get('max_angles_per_cell_nature', '')}"
             )
-    st.markdown(markdown)
-    st.download_button(
-        "Télécharger le rapport (.md)",
-        data=markdown,
-        file_name=f"mission_{mission_id}_situation.md",
-        mime="text/markdown",
-    )
+    if markdown:
+        st.markdown(markdown)
+        st.download_button(
+            "Télécharger le rapport (.md)",
+            data=markdown,
+            file_name=f"mission_{mission_id}_situation.md",
+            mime="text/markdown",
+        )
     if mission["status"] != "candidate":
         st.caption("Actions CEO indisponibles : le rapport n'est plus `candidate`.")
         return

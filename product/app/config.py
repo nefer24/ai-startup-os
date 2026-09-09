@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     mission_max_tokens_synthesis: int = 8000
     mission_max_tokens_gate: int = 2500
     mission_max_tokens_research: int = 4000
+    # Résilience aux erreurs fournisseur transitoires (B10) : tentatives par appel logique
+    # (1 initiale + relances), plafond de relances par mission, attente exponentielle bornée,
+    # prise en compte d'un `Retry-After` raisonnable. Une erreur permanente ou locale n'est
+    # jamais relancée. Les relances n'entament ni les plafonds d'appels ni les réserves (B8).
+    mission_provider_max_attempts: int = 3
+    mission_provider_max_retries_total: int = 6
+    mission_provider_backoff_base_seconds: float = 1.0
+    mission_provider_backoff_cap_seconds: float = 8.0
+    mission_provider_retry_after_cap_seconds: float = 30.0
     # Barème d'estimation du coût (euros par million de tokens) — à aligner sur la grille du
     # fournisseur pour le modèle configuré. Sert à l'estimation avant appel et au coût journalisé.
     llm_price_input_eur_per_mtok: float = 3.0
