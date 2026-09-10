@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -125,7 +126,6 @@ from app.mission_schemas import (
     RevisionOutput,
     SelfQualificationOutput,
     SteelmanOutput,
-    parse_structured,
 )
 from app.observability import observed
 from app.provider_errors import (
@@ -140,6 +140,13 @@ from app.provider_errors import (
     retry_delay_seconds,
 )
 from app.schemas import MissionCreateRequest
+from app.structured_output import (
+    MAX_STRUCTURED_RETRIES_PER_CALL,
+    STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED,
+    STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET,
+    analyze_structured_output,
+    build_correction_block,
+)
 
 # Attente entre deux tentatives fournisseur : remplaçable en test (aucun vrai sommeil).
 provider_sleep: Callable[[float], None] = time.sleep
@@ -230,6 +237,13 @@ class _Run:
     provider_attempts: int = 0
     provider_retries: int = 0
     provider_failures: int = 0
+    # B13 — couche de sortie structurée (après réponse fournisseur) : réponses invalides,
+    # récupérations locales appliquées, relances correctives LLM (chacune est un appel logique
+    # réel, visible dans `llm_calls_used`), épuisements.
+    structured_output_failures: int = 0
+    structured_output_recoveries: int = 0
+    structured_output_retries: int = 0
+    structured_output_exhausted: int = 0
     failure: dict[str, Any] = field(default_factory=dict)
 
 
@@ -549,21 +563,242 @@ def _account_failed_attempt(
     }
 
 
-def _classify_parse_error(response: LLMResponse, error: str) -> str:
-    """Distingue une sortie tronquée à `max_tokens` d'un JSON réellement invalide.
+# --- B13 — appel structuré : analyse, récupération locale, relance corrective bornée ------------
+# Réserve d'appels exigée avant une relance corrective, par étape (B8) : les étapes préalables au
+# cœur exigent que le pire cas du cœur reste finançable ; le cadrage n'exige rien (sans cadrage,
+# rien n'existe) ; la synthèse réserve la porte ; la porte ne réserve rien. La consolidation et la
+# comparaison possèdent déjà une relance bornée propre (lot scindé, compaction) : la relance B13
+# y est désactivée (récupération locale seulement) pour ne pas dépasser le pire cas réservé.
+_STRUCTURED_RETRY_DISABLED_STEPS = frozenset({"consolidation", "comparaison"})
 
-    Une réponse coupée par le fournisseur produit typiquement « Unterminated string » : ce n'est
-    pas une faute de format du modèle mais une limite de sortie atteinte. La classe d'erreur est
-    conservée dans le journal et le rapport pour que la cause soit prouvable après coup.
+
+def _structured_retry_reserve(run: _Run, step: str) -> int:
+    if step == "cadrage":
+        return 0
+    if step == "synthese":
+        return 1
+    if step == "porte_qualite":
+        return 0
+    return run.core_worst_calls
+
+
+def _call_structured[T: BaseModel](
+    session: Session,
+    run: _Run,
+    llm: LLMClient,
+    settings: Settings,
+    *,
+    step: str,
+    actor: str,
+    system: str,
+    prompt: str,
+    call_type: str,
+    max_tokens: int,
+    model: type[T],
+) -> tuple[LLMResponse | None, T | None, str]:
+    """Appel LLM dont la réponse doit satisfaire un contrat de sortie (B13).
+
+    Retourne (dernière réponse, sortie validée ou None, erreur classée). Chemin : appel sous budget
+    (B10 / B12 à l'intérieur) → analyse (`analyze_structured_output` : récupération locale
+    déterministe de l'enveloppe, parsing, validation stricte) → si invalide et finançable, **une**
+    relance corrective ciblée sur le contrat (nouvel appel logique, même `max_tokens`, même
+    schéma) → si toujours invalide, `structured_output_recovery_exhausted`. Une relance non
+    finançable (appels, coût connu + exposition incertaine, réserve B8 de l'étape) est refusée
+    fail-closed : `structured_output_retry_refused_budget`. Une étape logique n'accepte jamais plus
+    d'un résultat ; toutes les tentatives sont journalisées.
     """
-    if not error:
-        return ""
-    if response.truncated:
-        return (
-            f"truncated_output: sortie coupée à max_tokens "
-            f"({response.usage.output_tokens} tokens, {len(response.text)} caractères) — {error}"
+    response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor=actor,
+        system=system,
+        prompt=prompt,
+        call_type=call_type,
+        max_tokens=max_tokens,
+    )
+    if response is None:
+        return None, None, ""
+    outcome = analyze_structured_output(response, model)
+    logical_call_id = f"LC-{run.logical_calls}"
+    if outcome.recovery.applied:
+        run.structured_output_recoveries += 1
+        _journal(
+            session,
+            run,
+            step,
+            "structured_output_recovered",
+            actor,
+            {
+                "logical_call_id": logical_call_id,
+                "call_type": call_type,
+                "valid_after_recovery": outcome.valid,
+                **outcome.to_journal(),
+            },
         )
-    return error
+    if outcome.valid:
+        return response, outcome.output, ""
+    run.structured_output_failures += 1
+    error = f"{outcome.category}: {outcome.error}"
+    retry_prompt = (
+        prompt
+        + "\n\n"
+        + build_correction_block(
+            model, outcome, max_tokens=max_tokens, output_tokens=response.usage.output_tokens
+        )
+    )
+    estimate = run.ledger.estimate_call_cost_eur(system, retry_prompt, max_tokens)
+    reserve = _structured_retry_reserve(run, step)
+    refusal = ""
+    if step in _STRUCTURED_RETRY_DISABLED_STEPS:
+        refusal = "step_has_own_bounded_retry"
+    elif run.stop_reason:
+        refusal = f"mission_stopping:{run.stop_reason}"
+    elif run.ledger.remaining_calls - 1 < reserve:
+        refusal = STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
+    elif not run.ledger.retry_allowed_by_cost(estimate):
+        refusal = STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
+    will_retry = refusal == ""
+    _journal(
+        session,
+        run,
+        step,
+        "structured_output_invalid",
+        actor,
+        {
+            "logical_call_id": logical_call_id,
+            "call_type": call_type,
+            "provider": "anthropic",
+            "model": settings.anthropic_model,
+            "structured_attempt": 1,
+            "max_structured_retries": MAX_STRUCTURED_RETRIES_PER_CALL,
+            **outcome.to_journal(),
+            "output_tokens": response.usage.output_tokens,
+            "max_tokens": max_tokens,
+            "stop_reason": response.stop_reason,
+            "will_retry": will_retry,
+            "retry_refusal_reason": refusal,
+            "estimated_retry_cost_eur": estimate,
+            "remaining_calls": run.ledger.remaining_calls,
+            "reserved_calls_for_step": reserve,
+            "known_cost_eur": run.ledger.known_cost_eur,
+            "uncertain_cost_upper_bound_eur": round(run.ledger.uncertain_cost_upper_bound_eur, 6),
+            "potential_total_cost_upper_bound_eur": (
+                run.ledger.potential_total_cost_upper_bound_eur
+            ),
+            "max_cost_eur": run.ledger.max_cost_eur,
+            "budget": run.ledger.snapshot(),
+        },
+    )
+    if not will_retry:
+        prefix = (
+            STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
+            if refusal == STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
+            else "structured_output_not_retried"
+        )
+        return response, None, f"{prefix}: {error}"
+    run.structured_output_retries += 1
+    _journal(
+        session,
+        run,
+        step,
+        "structured_output_retry_planned",
+        actor,
+        {
+            "original_logical_call_id": logical_call_id,
+            "structured_retry_number": run.structured_output_retries,
+            "category": outcome.category,
+            "estimated_cost_eur": estimate,
+        },
+    )
+    retry_response = _call(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor=actor,
+        system=system,
+        prompt=retry_prompt,
+        call_type=call_type,
+        max_tokens=max_tokens,
+    )
+    if retry_response is None:
+        # Refus du registre au moment de l'appel : même sémantique fail-closed.
+        return response, None, f"{STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET}: {error}"
+    retry_outcome = analyze_structured_output(retry_response, model)
+    retry_logical_call_id = f"LC-{run.logical_calls}"
+    if retry_outcome.recovery.applied:
+        run.structured_output_recoveries += 1
+    if not retry_outcome.valid:
+        run.structured_output_failures += 1
+        run.structured_output_exhausted += 1
+    _journal(
+        session,
+        run,
+        step,
+        "structured_output_retry_result",
+        actor,
+        {
+            "original_logical_call_id": logical_call_id,
+            "logical_call_id": retry_logical_call_id,
+            "call_type": call_type,
+            "structured_attempt": 2,
+            "valid": retry_outcome.valid,
+            "final": ("accepted" if retry_outcome.valid else STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED),
+            **retry_outcome.to_journal(),
+            "output_tokens": retry_response.usage.output_tokens,
+            "max_tokens": max_tokens,
+            "stop_reason": retry_response.stop_reason,
+            "budget": run.ledger.snapshot(),
+        },
+    )
+    if retry_outcome.valid:
+        return retry_response, retry_outcome.output, ""
+    return (
+        retry_response,
+        None,
+        f"{STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED}: {retry_outcome.category}: {retry_outcome.error}",
+    )
+
+
+def _structured_failure(
+    run: _Run,
+    settings: Settings,
+    *,
+    step: str,
+    actor: str,
+    call_type: str,
+    error: str,
+) -> dict[str, Any]:
+    """Échec structuré terminal d'une étape sans laquelle la mission ne peut exister (cadrage)."""
+    refused = error.startswith(STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET)
+    reason = (
+        STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET if refused else STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED
+    )
+    # `error` = "<raison>: <catégorie>: <détail>" ; la catégorie est le second segment.
+    parts = error.split(": ", 2)
+    category = parts[1] if len(parts) >= 2 else ""
+    detail = parts[2] if len(parts) == 3 else error
+    return {
+        "reason": reason,
+        "kind": "structured_output",
+        "step": step,
+        "actor": actor,
+        "call_type": call_type,
+        "logical_call_id": f"LC-{run.logical_calls}",
+        "provider": "anthropic",
+        "model": settings.anthropic_model,
+        "attempts": 1 if refused else 1 + MAX_STRUCTURED_RETRIES_PER_CALL,
+        "max_attempts": 1 + MAX_STRUCTURED_RETRIES_PER_CALL,
+        "category": category,
+        "error_category": category,
+        "retryable": False,
+        "message": detail[:300],
+        "structured_output_retries": run.structured_output_retries,
+    }
 
 
 def _escalate_class(session: Session, run: _Run) -> dict[str, Any]:
@@ -767,11 +1002,16 @@ def _fail_mission(session: Session, run: _Run, failure: dict[str, Any]) -> None:
     run.stop_reason = str(failure.get("reason", "provider_error"))
     m.failure_json = json.dumps(failure, ensure_ascii=False, default=str)
     session.commit()
+    entry_type = (
+        "failed_structured_output"
+        if failure.get("kind") == "structured_output"
+        else "failed_provider_call"
+    )
     _journal(
         session,
         run,
         "mission",
-        "failed_provider_call",
+        entry_type,
         "facilitateur",
         {
             **{k: v for k, v in failure.items() if k != "message"},
@@ -779,6 +1019,7 @@ def _fail_mission(session: Session, run: _Run, failure: dict[str, Any]) -> None:
             "provider_attempts": run.provider_attempts,
             "provider_retries": run.provider_retries,
             "provider_failures": run.provider_failures,
+            "structured_output_retries": run.structured_output_retries,
             "budget": run.ledger.snapshot(),
         },
     )
@@ -800,7 +1041,7 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
         ceo_preference=m.ceo_preference,
         effective_class=m.effective_class,
     )
-    response = _call(
+    response, framing, error = _call_structured(
         session,
         run,
         llm,
@@ -811,12 +1052,11 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
         prompt=prompt,
         call_type=FRAMING_CALL_TYPE,
         max_tokens=settings.mission_max_tokens_framing,
+        model=FramingOutput,
     )
     if response is None:
         run.framing_error = f"cadrage non exécuté ({run.stop_reason})"
         return
-    framing, error = parse_structured(response.text, FramingOutput)
-    error = _classify_parse_error(response, error)
     run.framing = framing
     run.framing_error = error
     m.framing_json = json.dumps(
@@ -832,11 +1072,18 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
     )
     session.commit()
     if framing is None:
-        # Panne de cadrage : la mission ne continue pas sur un cadrage fictif. Elle s'arrête
-        # proprement, conserve la réponse brute pour diagnostic, et le rapport est marqué
-        # partiel et la mission `failed` — jamais un rapport `candidate` presque vide.
-        kind = "truncated_output" if response.truncated else "json_invalid"
-        run.stop_reason = f"framing_failed:{kind}"
+        # Panne de cadrage après récupération bornée (B13) : la mission ne continue pas sur un
+        # cadrage fictif. État terminal `failed` explicite (raison, catégorie, tentatives), réponse
+        # brute de la dernière tentative conservée pour diagnostic, rapport partiel — jamais un
+        # rapport `candidate` presque vide, aucune composition, aucune recommandation.
+        failure = _structured_failure(
+            run,
+            settings,
+            step="cadrage",
+            actor="Cadrage",
+            call_type=FRAMING_CALL_TYPE,
+            error=error,
+        )
         _journal(
             session,
             run,
@@ -844,7 +1091,8 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
             "framing_failed",
             "facilitateur",
             {
-                "kind": kind,
+                "kind": failure["category"],
+                "reason": failure["reason"],
                 "error": error,
                 "stop_reason": response.stop_reason,
                 "output_tokens": response.usage.output_tokens,
@@ -852,6 +1100,7 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
                 "raw_length_chars": len(response.text),
             },
         )
+        raise MissionCallFailedError(failure)
     _journal(
         session,
         run,
@@ -979,7 +1228,7 @@ def _step_tour0(session: Session, run: _Run, llm: LLMClient, settings: Settings)
             context_text=m.context_text,
             ceo_preference=m.ceo_preference,
         )
-        response = _call(
+        response, output, error = _call_structured(
             session,
             run,
             llm,
@@ -990,11 +1239,10 @@ def _step_tour0(session: Session, run: _Run, llm: LLMClient, settings: Settings)
             prompt=prompt,
             call_type=EXPERT_CALL_TYPE,
             max_tokens=settings.mission_max_tokens_expert,
+            model=ExpertOutput,
         )
         if response is None:
             continue
-        output, error = parse_structured(response.text, ExpertOutput)
-        error = _classify_parse_error(response, error)
         run.expert_results.append(
             {
                 "expert_id": spec.expert_id,
@@ -1064,7 +1312,7 @@ def _step_self_qualification(
         prompt = build_self_qualification_prompt(
             own_label=labels[r["expert_id"]], own_position=r["output"].position, others=others
         )
-        response = _call(
+        response, output, error = _call_structured(
             session,
             run,
             llm,
@@ -1075,11 +1323,10 @@ def _step_self_qualification(
             prompt=prompt,
             call_type=SELF_QUAL_CALL_TYPE,
             max_tokens=settings.mission_max_tokens_self_qualification,
+            model=SelfQualificationOutput,
         )
         if response is None:
             break
-        output, error = parse_structured(response.text, SelfQualificationOutput)
-        error = _classify_parse_error(response, error)
         run.self_qual[r["expert_id"]] = output
         _journal(
             session,
@@ -1116,7 +1363,7 @@ def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings)
         positions=[(labels[r["expert_id"]], r["output"].position) for r in answered],
         ambiguities=ambiguities,
     )
-    response = _call(
+    response, output, error = _call_structured(
         session,
         run,
         llm,
@@ -1127,11 +1374,10 @@ def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings)
         prompt=prompt,
         call_type=CLERK_CALL_TYPE,
         max_tokens=settings.mission_max_tokens_clerk,
+        model=ClerkOutput,
     )
     if response is None:
         return
-    output, error = parse_structured(response.text, ClerkOutput)
-    error = _classify_parse_error(response, error)
     run.clerk = output
     _journal(
         session,
@@ -1155,6 +1401,10 @@ def _budget_snapshot(run: _Run) -> dict[str, Any]:
         "provider_attempts": run.provider_attempts,
         "provider_retries": run.provider_retries,
         "provider_failures": run.provider_failures,
+        "structured_output_failures": run.structured_output_failures,
+        "structured_output_recoveries": run.structured_output_recoveries,
+        "structured_output_retries": run.structured_output_retries,
+        "structured_output_exhausted": run.structured_output_exhausted,
     }
 
 
@@ -1434,7 +1684,7 @@ def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: S
             own_position=r["output"].position,
             map_view=build_map_view(run.cartography, exclude_label=own_label),
         )
-        response = _call(
+        response, output, error = _call_structured(
             session,
             run,
             llm,
@@ -1445,11 +1695,10 @@ def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: S
             prompt=prompt,
             call_type=CONFRONTATION_CALL_TYPE,
             max_tokens=settings.mission_max_tokens_confrontation,
+            model=ConfrontationOutput,
         )
         if response is None:
             break
-        output, error = parse_structured(response.text, ConfrontationOutput)
-        error = _classify_parse_error(response, error)
         registered: list[str] = []
         rejected: list[dict[str, Any]] = []
         valid_acts = []
@@ -1578,7 +1827,7 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
             "dominant_cluster": [run.labels[e] for e in dominant],
         }
     )
-    response = _call(
+    response, output, error = _call_structured(
         session,
         run,
         llm,
@@ -1594,12 +1843,11 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
         ),
         call_type=STEELMAN_CALL_TYPE,
         max_tokens=settings.mission_max_tokens_steelman,
+        model=SteelmanOutput,
     )
     if response is None:
         run.steelman["status"] = "budget_stop"
         return
-    output, error = parse_structured(response.text, SteelmanOutput)
-    error = _classify_parse_error(response, error)
     if output is None:
         run.steelman.update({"status": "failed", "parse_error": error})
         _journal(session, run, step, "failed", contradictor, {"parse_error": error})
@@ -1627,7 +1875,7 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
         },
     )
     # Reconnaissance par le tenant de la position : la reformulation le représente-t-elle ?
-    rec_response = _call(
+    rec_response, rec_out, rec_err = _call_structured(
         session,
         run,
         llm,
@@ -1643,15 +1891,15 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
         ),
         call_type=RECOGNITION_CALL_TYPE,
         max_tokens=settings.mission_max_tokens_recognition,
+        model=RecognitionOutput,
     )
     recognition = "no"
     missing: list[str] = []
     if rec_response is not None:
-        rec_out, rec_err = parse_structured(rec_response.text, RecognitionOutput)
         if rec_out is not None:
             recognition = rec_out.recognized
             missing = rec_out.missing_points
-        run.steelman["recognition_parse_error"] = _classify_parse_error(rec_response, rec_err)
+        run.steelman["recognition_parse_error"] = rec_err
     else:
         run.steelman["recognition_parse_error"] = "reconnaissance non exécutée (budget)"
     if flags or recognition == "no":
@@ -1954,7 +2202,7 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
                 for e in found_evidence
             ],
         )
-        response = _call(
+        response, output, error = _call_structured(
             session,
             run,
             llm,
@@ -1965,11 +2213,10 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
             prompt=prompt,
             call_type=REVISION_CALL_TYPE,
             max_tokens=settings.mission_max_tokens_revision,
+            model=RevisionOutput,
         )
         if response is None:
             break
-        output, error = parse_structured(response.text, RevisionOutput)
-        error = _classify_parse_error(response, error)
         decision = output.decision if output else "maintain"
         revised = previous
         if output and decision != "maintain" and output.revised_position.strip():
@@ -2028,7 +2275,7 @@ def _consolidation_output(
     what: str,
 ) -> tuple[ConsolidationOutput | None, str, bool]:
     """Un appel de consolidation sous budget : (sortie, erreur classée, budget_stop)."""
-    response = _call(
+    response, output, error = _call_structured(
         session,
         run,
         llm,
@@ -2039,11 +2286,10 @@ def _consolidation_output(
         prompt=prompt,
         call_type=CONSOLIDATION_CALL_TYPE,
         max_tokens=settings.mission_max_tokens_consolidation,
+        model=ConsolidationOutput,
     )
     if response is None:
         return None, "budget", True
-    output, error = parse_structured(response.text, ConsolidationOutput)
-    error = _classify_parse_error(response, error)
     if output is None:
         _journal(
             session,
@@ -2445,7 +2691,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
     compared = retained
     coverage_note = ""
     for attempt in (1, 2):
-        response = _call(
+        response, output, error = _call_structured(
             session,
             run,
             llm,
@@ -2462,6 +2708,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             ),
             call_type=COMPARISON_CALL_TYPE,
             max_tokens=settings.mission_max_tokens_comparison,
+            model=ComparisonOutput,
         )
         if response is None:
             run.comparison = {
@@ -2478,8 +2725,6 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
                 "parse_error": "budget",
             }
             return
-        output, error = parse_structured(response.text, ComparisonOutput)
-        error = _classify_parse_error(response, error)
         attempts.append({"attempt": attempt, "families": len(compared), "parse_error": error})
         if output is not None or attempt == 2:
             break
@@ -2705,7 +2950,7 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
         _skip(session, run, step, "aucune matière consolidée")
         return
     residual = _residual_disagreements(run)
-    response = _call(
+    response, output, error = _call_structured(
         session,
         run,
         llm,
@@ -2716,11 +2961,10 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
         prompt=build_synthesis_prompt(matter=_synthesis_matter(run, residual)),
         call_type=SYNTHESIS_CALL_TYPE,
         max_tokens=settings.mission_max_tokens_synthesis,
+        model=RecommendationOutput,
     )
     if response is None:
         return
-    output, error = parse_structured(response.text, RecommendationOutput)
-    error = _classify_parse_error(response, error)
     if output is None:
         run.recommendation = {"status": "failed", "error": error}
         _journal(session, run, step, "failed", "Synthétiseur", {"parse_error": error})
@@ -2829,7 +3073,7 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
     steelman_required = bool(st.get("required"))
     steelman_done = st.get("status") in {"accepted", "accepted_partial"}
     unknowns = list(run.framing.global_unknowns) if run.framing else []
-    response = _call(
+    response, output, error = _call_structured(
         session,
         run,
         llm,
@@ -2847,11 +3091,10 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
         ),
         call_type=GATE_CALL_TYPE,
         max_tokens=settings.mission_max_tokens_gate,
+        model=GateOutput,
     )
     if response is None:
         return
-    output, error = parse_structured(response.text, GateOutput)
-    error = _classify_parse_error(response, error)
     checks: dict[str, bool] = dict(output.checks) if output else {}
     issues: list[str] = (
         list(output.issues) if output else [f"porte qualité non exploitable : {error}"]
@@ -2906,7 +3149,10 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
 
 def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, Any]:
     reason: str
-    if run.stop_reason.startswith("framing_failed"):
+    framing_output_failed = (
+        run.failure.get("kind") == "structured_output" and run.failure.get("step") == "cadrage"
+    )
+    if run.stop_reason.startswith("framing_failed") or framing_output_failed:
         reason = "framing_failed"
     elif (
         run.stop_reason in BUDGET_STOP_REASONS or run.stop_reason == "critical_dimension_uncovered"

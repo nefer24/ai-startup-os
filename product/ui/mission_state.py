@@ -20,12 +20,22 @@ CATEGORY_LABELS = {
     "permanent_provider_error": "erreur permanente du fournisseur (authentification, requête)",
     "local_error": "erreur locale du produit (validation, contrat)",
     "unknown_error": "erreur non classée",
+    "structured_output_parse_error": "réponse du modèle non parsable en JSON",
+    "structured_output_schema_error": "réponse du modèle non conforme au contrat de sortie",
+    "structured_output_truncated": "réponse du modèle coupée par la limite de sortie",
+    "structured_output_empty": "réponse du modèle vide",
 }
 REASON_LABELS = {
     "transient_retries_exhausted": "échec après épuisement des relances",
     "retry_refused_uncertain_cost_budget": (
         "relance refusée : l'exposition financière potentielle (coût connu + tentatives au coût "
         "inconnu) atteindrait le plafond CEO"
+    ),
+    "structured_output_recovery_exhausted": (
+        "sortie structurée invalide après récupération bornée (aucune donnée inventée)"
+    ),
+    "structured_output_retry_refused_budget": (
+        "sortie structurée invalide ; relance corrective refusée par le budget"
     ),
     "permanent_provider_error": "erreur permanente : aucune relance",
     "local_error": "erreur locale : aucune relance",

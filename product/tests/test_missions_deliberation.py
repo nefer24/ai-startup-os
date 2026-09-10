@@ -1874,7 +1874,11 @@ def test_consolidation_truncation_retries_once_then_fails_closed(
     mission = run(client, llm, "consolidation tronquée : échec fermé")
     cons = mission["deliberation"]["consolidation"]
     assert cons["status"] == "failed"
-    assert cons["parse_error"].startswith("truncated_output")
+    # B13 : la troncature est classée comme telle ; la consolidation garde sa propre relance
+    # bornée (lot scindé), aucune relance corrective B13 ne s'y ajoute.
+    assert "structured_output_truncated" in cons["parse_error"]
+    assert cons["parse_error"].startswith("structured_output_not_retried")
+    assert mission["report"]["budget"]["structured_output_retries"] == 0
     # Une relance par lot au plus (lot scindé en deux) : 2 lots → 2 + 4 appels, jamais plus.
     assert cons["retries"] == 2
     assert cons["calls"] == 6
@@ -1933,7 +1937,8 @@ def test_comparison_failure_is_explicit_and_blocks_the_gate(
     mission = run(client, llm, "comparaison tronquée : échec explicite")
     comp = mission["deliberation"]["comparison"]
     assert comp["status"] == "failed"
-    assert comp["parse_error"].startswith("truncated_output")
+    assert "structured_output_truncated" in comp["parse_error"]
+    assert comp["parse_error"].startswith("structured_output_not_retried")  # relance propre
     # Une relance compacte au plus, STRATIFIÉE : les 5 familles nécessaires à la couverture (une
     # par nature ; désaccord interne et multi-dimensions déjà représentés) sont conservées ; les
     # facultatives sont écartées. Aucune famille n'est « hard » (rien n'est cité dans la demande).
@@ -1992,7 +1997,10 @@ def test_gate_llm_verdict_cannot_override_upstream_failures(
     mission = run(client, llm, "synthèse tronquée")
     rec = mission["recommendation"]
     assert rec["status"] == "failed"
-    assert rec["error"].startswith("truncated_output")
+    # B13 : une relance corrective (même schéma), toujours tronquée → épuisement explicite.
+    assert rec["error"].startswith("structured_output_recovery_exhausted: structured_output_trunc")
+    assert len([c for c in llm.calls if c["call_type"] == "synthesis"]) == 2
+    assert mission["report"]["budget"]["structured_output_retries"] == 1
     assert mission["report"]["recommendation_produced"] is False
     assert any(
         s["step"] == "porte_qualite" and "aucune recommandation" in s["reason"]

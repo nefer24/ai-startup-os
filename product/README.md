@@ -1056,6 +1056,35 @@ s'applique à cette borne pour **tout** appel (obligatoire compris) et pour tout
 rapport et l'interface affichent « coût connu · exposition incertaine ≤ · borne supérieure
 potentielle ≤ · plafond CEO ».
 
+**Sortie structurée (B13)** : couche générique (`app/structured_output.py`, `_call_structured`)
+pour **tous** les appels à contrat JSON (cadrage, exposés, auto-qualification, greffier,
+confrontation, steelman, reconnaissance, révision, consolidation, comparaison, synthèse, porte).
+Distincte de B10 (erreurs fournisseur) : elle gouverne ce qui arrive **après** une réponse obtenue.
+Taxonomie par tentative : `structured_output_empty`, `structured_output_truncated`
+(`stop_reason = max_tokens` observé), `structured_output_parse_error` (syntaxe, enveloppe non
+récupérable, plusieurs objets candidats), `structured_output_schema_error` (racine non objet, champ
+obligatoire absent, type incorrect) ; états terminaux `structured_output_recovery_exhausted` et
+`structured_output_retry_refused_budget`. **Récupération locale déterministe** (gratuite) : retrait
+d'un code fence, isolement de l'unique objet JSON complet d'un texte enveloppant (scanner
+respectant chaînes et échappements) ; jamais d'invention de champ, de complétion d'une troncature ni
+de choix entre plusieurs objets ; validation stricte avec exactement le même schéma. **Une relance
+corrective LLM au plus** par appel logique structuré (demande d'origine + bloc de correction :
+catégorie, message de validation borné, contrat attendu, interdiction d'inventer ; même
+`max_tokens`), financée seulement si `max_llm_calls`, coût connu + exposition incertaine (B12) et
+réserve B8 de l'étape le permettent (cadrage : aucune réserve ; étapes préalables et optionnelles :
+pire cas du cœur ; synthèse : la porte ; consolidation et comparaison : relance B13 désactivée car
+elles possèdent déjà une relance bornée propre). Compteurs : `llm_calls_used` compte tout appel
+logique réussi côté fournisseur, relance corrective comprise (un vrai appel, jamais masqué) ;
+`structured_output_failures` / `_recoveries` / `_retries` / `_exhausted` s'ajoutent à
+`provider_attempts` / `provider_retries` (B10) sans redéfinition. Journal sanitisé par tentative
+(`structured_output_invalid`, `_recovered`, `_retry_planned`, `_retry_result` : catégorie, parse /
+schéma, troncature oui / non / inconnue, récupération locale, relance, raison de refus, estimation,
+plafonds, extraits bornés à 120 caractères). Après épuisement sur le **cadrage** : mission `failed`
+immédiate (`failure` : raison, catégorie, tentatives 2 / 2), rapport diagnostic partiel, aucune
+composition ni recommandation ; sur une autre étape : comportement partiel existant (perspective
+non exploitée, veto d'intégrité de la porte). L'interface B11 affiche « sortie structurée invalide
+après récupération bornée ».
+
 **État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
 `GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec
 `detail.state` = `running` ou `failed` (+ `failure`), 404 si inexistante. L'interface annonce

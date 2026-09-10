@@ -366,15 +366,16 @@ def test_permanent_error_is_never_retried(
 def test_local_errors_do_not_enter_the_transient_retry_path(
     client: TestClient, use_llm: Callable[..., Any], sleeps: list[float]
 ) -> None:
-    # Une sortie JSON invalide n'est PAS une erreur fournisseur : aucune relance réseau (freeze
-    # v3.1 : la mission échoue honnêtement sur le cadrage, un seul appel).
+    # Une sortie JSON invalide n'est PAS une erreur fournisseur : aucune relance réseau B10. Elle
+    # relève de la couche de sortie structurée (B13) : une relance corrective au plus, puis échec
+    # honnête du cadrage — deux appels, aucun sommeil, aucune tentative fournisseur échouée.
     from tests.test_missions_truncation import FailureModeLLM
 
     llm = use_llm(FailureModeLLM(framing_mode="invalid"))
     mission = _post(client)
     assert mission["status"] == "failed"
-    assert mission["stop_reason"] == "framing_failed:json_invalid"
-    assert len(llm.calls) == 1
+    assert mission["stop_reason"] == "structured_output_recovery_exhausted"
+    assert len(llm.calls) == 2
     assert sleeps == []
     assert not [
         e for e in _journal(client, mission["id"]) if e["entry_type"] == "call_attempt_failed"
