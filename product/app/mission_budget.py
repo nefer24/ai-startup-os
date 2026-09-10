@@ -155,16 +155,6 @@ class BudgetLedger:
         bound = self.potential_total_cost_upper_bound_eur + estimated_retry_cost_eur
         return bound <= self.max_cost_eur
 
-    def max_affordable_experts(self, *, reserved_calls: int, calls_per_expert: int = 2) -> int:
-        """Nombre maximal d'experts finançables au Tour 0 avec les appels restants.
-
-        Chaque expert coûte `calls_per_expert` appels (exposé + auto-qualification) ; des appels
-        sont réservés (greffier). Cette borne est **économique** — elle découle du plafond d'appels
-        du CEO — et n'est jamais une doctrine sur le nombre d'experts.
-        """
-        available = self.remaining_calls - reserved_calls
-        return max(0, available // max(1, calls_per_expert))
-
     def raise_caps(self, max_calls: int, max_cost_eur: float) -> dict[str, Any]:
         """Relève les plafonds (jamais à la baisse) — escalade de classe sans surcharge CEO."""
         before = {"max_calls": self.max_calls, "max_cost_eur": self.max_cost_eur}
@@ -247,15 +237,90 @@ def plan_budget(
     return ceiling_calls, ceiling_cost, "class_ceiling"
 
 
-def reserved_downstream_calls(effective_class: str, research_cap: int) -> int:
-    """Appels réservés aux étapes transverses, selon la classe (ordre de grandeur, pas une
-    cible).
+def mandatory_steelman_calls(effective_class: str) -> int:
+    """Steelman + reconnaissance : obligatoires pour les classes qui l'imposent (2 appels)."""
+    return 2 if normalize_class(effective_class) in {"structurante", "critique"} else 0
+
+
+def consolidation_core_bound(
+    n_experts: int, options_per_expert: int, *, batch_size: int, meta_chunk_size: int
+) -> dict[str, int]:
+    """Borne supérieure du cœur de synthèse (B14-prime — O2), dérivée de contrats contrôlés.
+
+    Au pire, chaque expert produit `options_per_expert` options toutes distinctes : autant de
+    groupes après prétraitement, découpés en lots de `batch_size`, puis une méta-passe par
+    tranche de `meta_chunk_size` familles si plusieurs lots. Cœur nominal = lots + méta-passes +
+    comparaison + synthèse + porte. Aucune moyenne empirique : uniquement le maximum autorisé.
     """
-    cls = normalize_class(effective_class)
-    reserved = 1  # greffier (cartographie)
-    if cls in {"structurante", "critique"}:
-        reserved += 2  # steelman + reconnaissance
-    if cls != "courante":
-        reserved += max(0, research_cap)
-    reserved += SYNTHESIS_CORE_CALLS
-    return reserved
+    groups = max(0, n_experts) * max(0, options_per_expert)
+    batches = -(-groups // batch_size) if groups else 0
+    meta = -(-groups // meta_chunk_size) if batches > 1 else 0
+    nominal = batches + meta
+    return {
+        "options_upper_bound": groups,
+        "groups_upper_bound": groups,
+        "batches_upper_bound": batches,
+        "meta_passes_upper_bound": meta,
+        "consolidation_calls_upper_bound": nominal,
+        "core_nominal_bound": (SYNTHESIS_CORE_CALLS - 1) + nominal,
+    }
+
+
+def minimal_deliberation_bound(
+    n_experts: int,
+    *,
+    effective_class: str,
+    options_per_expert: int,
+    batch_size: int,
+    meta_chunk_size: int,
+) -> dict[str, int]:
+    """Appels nécessaires, après le cadrage, pour mener `n_experts` jusqu'à la porte qualité.
+
+    Pré-délibération : exposé + auto-qualification par expert (le greffier est facultatif et
+    protégé séparément par la réserve). Cycle minimal : une confrontation par position + cœur
+    borné ; steelman et reconnaissance si la classe l'impose. Recherche et révision restent
+    adaptatives (non comptées).
+    """
+    core = consolidation_core_bound(
+        n_experts, options_per_expert, batch_size=batch_size, meta_chunk_size=meta_chunk_size
+    )
+    # Une seule position : ni auto-qualification, ni confrontation, ni steelman (rien à
+    # confronter) ; la porte tranchera (B4). À partir de deux positions : cycle complet.
+    plural = n_experts >= 2
+    steelman = mandatory_steelman_calls(effective_class) if plural else 0
+    pre = (2 if plural else 1) * n_experts
+    minimal = (n_experts if plural else 0) + core["core_nominal_bound"] + steelman
+    return {
+        **core,
+        "pre_deliberation_calls": pre,
+        "mandatory_steelman_calls": steelman,
+        "minimal_deliberation_reserve": minimal,
+        "total_required_calls": pre + minimal,
+    }
+
+
+def feasible_expert_count(
+    remaining_calls: int,
+    *,
+    effective_class: str,
+    options_per_expert: int,
+    batch_size: int,
+    meta_chunk_size: int,
+    upper: int = 64,
+) -> int:
+    """Plus grand nombre d'experts dont le noyau obligatoire tient dans `remaining_calls`.
+
+    Invariant B14-prime : `remaining ≥ pré-délibération + cycle minimal borné`. L'égalité est
+    admise.
+    """
+    for n in range(upper, 0, -1):
+        bound = minimal_deliberation_bound(
+            n,
+            effective_class=effective_class,
+            options_per_expert=options_per_expert,
+            batch_size=batch_size,
+            meta_chunk_size=meta_chunk_size,
+        )
+        if bound["total_required_calls"] <= remaining_calls:
+            return n
+    return 0

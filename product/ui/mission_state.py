@@ -37,6 +37,14 @@ REASON_LABELS = {
     "structured_output_retry_refused_budget": (
         "sortie structurée invalide ; relance corrective refusée par le budget"
     ),
+    "structured_output_retry_refused_output_budget": (
+        "sortie coupée à la limite de sortie de l'étape ; aucune relance à l'identique (limite "
+        "déjà au plafond)"
+    ),
+    "structured_output_retry_refused_deliberation_reserve": (
+        "sortie structurée invalide ; relance refusée pour préserver le cycle minimal de "
+        "délibération"
+    ),
     "permanent_provider_error": "erreur permanente : aucune relance",
     "local_error": "erreur locale : aucune relance",
     "unknown_error": "erreur non classée : aucune relance",

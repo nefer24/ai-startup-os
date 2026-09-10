@@ -181,22 +181,23 @@ def test_framing_truncated_at_max_tokens_fails_mission_honestly(
     llm = use_llm(FailureModeLLM(framing_mode="truncated"))
     mission = _post(client)
     assert mission["status"] == "failed"
-    # B13 : la troncature est une catégorie distincte ; une relance corrective bornée (même
-    # `max_tokens`, même schéma) est tentée, puis l'échec est explicite — jamais « JSON invalide »
-    # tout court, jamais de complétion locale du contenu manquant.
-    assert mission["stop_reason"] == "structured_output_recovery_exhausted"
+    # B13 : la troncature est une catégorie distincte. B14-prime (F) : le cadrage a une limite fixe
+    # (plancher = plafond) ; une sortie coupée à cette limite n'est pas relancée à l'identique —
+    # refus explicite et motivé, un seul appel, jamais « JSON invalide » tout court, jamais de
+    # complétion locale du contenu manquant.
+    assert mission["stop_reason"] == "structured_output_retry_refused_output_budget"
     assert mission["failure"]["category"] == "structured_output_truncated"
-    assert mission["failure"]["attempts"] == 2
+    assert mission["failure"]["attempts"] == 1
     assert mission["report"]["partial"] is True
     assert mission["report"]["status"] == "failed"
     assert mission["report"]["framing_error"].startswith(
-        "structured_output_recovery_exhausted: structured_output_truncated"
+        "structured_output_retry_refused_output_budget: structured_output_truncated"
     )
     assert "Unterminated string" in mission["report"]["framing_error"]
-    # Aucun expert n'est consulté sur un cadrage fictif : deux appels de cadrage, rien d'autre.
-    assert [c["call_type"] for c in llm.calls] == ["framing", "framing"]
-    assert mission["llm_calls_used"] == 2
-    assert mission["report"]["budget"]["structured_output_retries"] == 1
+    # Aucun expert n'est consulté sur un cadrage fictif : un appel de cadrage, rien d'autre.
+    assert [c["call_type"] for c in llm.calls] == ["framing"]
+    assert mission["llm_calls_used"] == 1
+    assert mission["report"]["budget"]["structured_output_retries"] == 0
     # La réponse brute, la raison d'arrêt et les tokens sont conservés pour prouver la cause.
     framing = mission["framing"]
     assert framing["stop_reason"] == "max_tokens"
@@ -209,6 +210,14 @@ def test_framing_truncated_at_max_tokens_fails_mission_honestly(
     invalid = next(e for e in journal if e["entry_type"] == "structured_output_invalid")
     assert invalid["payload"]["truncated"] is True
     assert invalid["payload"]["local_recovery_applied"] is False
+    assert invalid["payload"]["will_retry"] is False
+    assert (
+        invalid["payload"]["retry_refusal_reason"]
+        == "structured_output_retry_refused_output_budget"
+    )
+    assert invalid["payload"]["truncation_retry_plan"]["allowed"] is False
+    assert invalid["payload"]["output_budget"]["floor"] == 8000
+    assert invalid["payload"]["output_budget"]["ceiling"] == 8000
     done = next(e for e in journal if e["entry_type"] == "call_done")
     assert done["payload"]["truncated"] is True
     assert done["payload"]["stop_reason"] == "max_tokens"
@@ -256,14 +265,15 @@ def test_expert_truncation_is_labelled_and_mission_continues(
     assert mission["status"] == "candidate"  # le cadrage est valide ; seuls les exposés ont échoué
     positions = mission["cartography"]["positions"]
     assert positions
-    # B13 : une relance corrective par exposé au plus, puis épuisement explicite et étiqueté.
+    # B14-prime (F) : l'exposé a une limite fixe ; une sortie coupée à cette limite n'est pas
+    # relancée à l'identique — un appel par expert, refus explicite et étiqueté.
     assert all(
         p["parse_error"].startswith(
-            "structured_output_recovery_exhausted: structured_output_truncated"
+            "structured_output_retry_refused_output_budget: structured_output_truncated"
         )
         for p in positions
     )
-    assert len([c for c in llm.calls if c["call_type"] == "expert_tour0"]) == 2 * len(positions)
+    assert len([c for c in llm.calls if c["call_type"] == "expert_tour0"]) == len(positions)
     assert mission["cartography"]["experts_answered"] == 0
     assert mission["report"]["alternatives"] == []
 
@@ -346,24 +356,35 @@ def test_format_instruction_is_the_only_prompt_change() -> None:
 
 # --- Arrêt réel après échec du cadrage (freeze v3.1) ------------------------------------------
 @pytest.mark.parametrize(
-    ("mode", "expected_category"),
+    ("mode", "expected_category", "expected_reason", "calls"),
     [
-        ("truncated", "structured_output_truncated"),
-        ("invalid", "structured_output_parse_error"),
+        (
+            "truncated",
+            "structured_output_truncated",
+            "structured_output_retry_refused_output_budget",
+            1,
+        ),
+        ("invalid", "structured_output_parse_error", "structured_output_recovery_exhausted", 2),
     ],
 )
 def test_framing_failure_stops_everything_without_artificial_composition(
-    client: TestClient, use_llm: Callable[..., FailureModeLLM], mode: str, expected_category: str
+    client: TestClient,
+    use_llm: Callable[..., FailureModeLLM],
+    mode: str,
+    expected_category: str,
+    expected_reason: str,
+    calls: int,
 ) -> None:
     llm = use_llm(FailureModeLLM(framing_mode=mode))
     mission = _post(client)
     assert mission["status"] == "failed"
-    assert mission["stop_reason"] == "structured_output_recovery_exhausted"
+    assert mission["stop_reason"] == expected_reason
     assert mission["failure"]["category"] == expected_category
-    # Deux appels LLM au plus : le cadrage et sa relance corrective (B13). Rien d'autre n'est
-    # appelé ni facturé ; aucun troisième appel.
-    assert [c["call_type"] for c in llm.calls] == ["framing", "framing"]
-    assert mission["llm_calls_used"] == 2
+    # Au plus deux appels LLM : le cadrage et, pour une erreur de syntaxe, sa relance corrective
+    # (B13) ; une troncature à limite fixe n'est pas relancée (B14-prime). Rien d'autre n'est
+    # appelé ni facturé.
+    assert [c["call_type"] for c in llm.calls] == ["framing"] * calls
+    assert mission["llm_calls_used"] == calls
     # Aucune composition fictive persistée, aucun expert, aucune cartographie exploitée.
     assert mission["composition"] is None
     assert mission["report"]["composition"]["cells"] == []
@@ -378,10 +399,10 @@ def test_framing_failure_stops_everything_without_artificial_composition(
     # aval.
     journal = client.get(f"/missions/{mission['id']}/journal").json()
     stopped = next(e for e in journal if e["entry_type"] == "failed_structured_output")
-    assert stopped["payload"]["reason"] == "structured_output_recovery_exhausted"
+    assert stopped["payload"]["reason"] == expected_reason
     assert stopped["payload"]["step"] == "cadrage"
     assert stopped["payload"]["category"] == expected_category
-    assert stopped["payload"]["structured_output_retries"] == 1
+    assert stopped["payload"]["structured_output_retries"] == calls - 1
     assert mission["deliberation"]["stop"]["reason"] == "framing_failed"
     assert not [e for e in journal if e["step"] in {"composition", "tour0"}]
     assert not [e for e in journal if e["step"] in {"auto_qualification", "greffier"}]

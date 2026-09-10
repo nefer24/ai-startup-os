@@ -543,6 +543,21 @@ def use_llm() -> Callable[[DeliberationLLM], DeliberationLLM]:
 
 
 @pytest.fixture
+def options_cap(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[int], None]]:
+    """B14-prime : contrat de cardinalité des options par expert (défaut 5). Les scénarios de
+    « grand Tour 0 » (B2, B3, B6, B7, B9) déclarent explicitement un plafond plus large : la borne
+    de composition est alors calculée avec ce plafond, jamais avec une moyenne."""
+    from app.config import get_settings
+
+    def _set(cap: int) -> None:
+        monkeypatch.setenv("MISSION_MAX_OPTIONS_PER_EXPERT", str(cap))
+        get_settings.cache_clear()
+
+    yield _set
+    get_settings.cache_clear()
+
+
+@pytest.fixture
 def research(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
     def _set(provider: Any) -> Any:
         monkeypatch.setattr("app.missions.build_research_provider", lambda settings: provider)
@@ -1206,7 +1221,12 @@ def test_minimal_cycle_is_financed_and_optional_steps_yield_to_synthesis(
     # Trois options (un lot de consolidation) : cœur nominal = 4 appels (consolidation,
     # comparaison, synthèse, porte) ; pire cas = 7 (relance scindée + relance de comparaison).
     mission = run(client, llm, "cycle minimal sous 14 appels", max_llm_calls=14)
-    assert mission["composition"]["bounds"]["budget_plan"] == "coverage_first"
+    # B14-prime : 3 experts x 2 + 3 confrontations + cœur borné 4 = 13 ≤ 13 restants (égalité
+    # admise) : plan délibérable, largeur préservée.
+    bounds = mission["composition"]["bounds"]
+    assert bounds["budget_plan"] == "full_deliberation"
+    assert bounds["plan_feasible"] is True
+    assert bounds["total_required_calls"] == 13 == bounds["remaining_calls_at_composition"]
     assert len(mission["composition"]["experts"]) == 3  # largeur préservée
     assert mission["stop_reason"] == ""
     assert mission["llm_calls_used"] == 14
@@ -1231,36 +1251,38 @@ def test_minimal_cycle_is_financed_and_optional_steps_yield_to_synthesis(
 def test_deliberation_is_not_started_when_budget_cannot_afford_a_minimal_cycle(
     client: TestClient, use_llm: Callable[..., DeliberationLLM]
 ) -> None:
+    # B14-prime : à 9 appels, aucun plan à ≥ 2 positions ne tient (2 x 2 + 2 + cœur 4 = 10 > 8) ;
+    # la composition s'arrête après le seul cadrage au lieu de dépenser Tour 0 et
+    # auto-qualification « pour voir ». Demande chiffrée pour les 3 positions qu'appelle le
+    # cadrage : 3 x 2 + 3 + 4 = 13 appels, soit 5 de plus que les 8 restants.
     llm = use_llm(DeliberationLLM())
     mission = run(client, llm, "délibération non entamée (9 appels)", max_llm_calls=9)
-    assert mission["llm_calls_used"] == 7  # cadrage + 3 exposés + 3 auto-qualifications
+    assert mission["llm_calls_used"] == 1
+    assert [c["call_type"] for c in llm.calls] == ["framing"]
     assert mission["stop_reason"] == "deliberation_budget_insufficient"
     assert mission["report"]["partial"] is True
     assert mission["recommendation"] is None
+    assert mission["composition"]["experts"] == []
+    assert mission["composition"]["bounds"]["max_experts_feasible_deliberation"] == 1
+    assert mission["composition"]["bounds"]["min_positions"] == 2
     d = mission["deliberation"]
     assert d["steps_done"] == []
-    assert {s["step"] for s in d["steps_skipped"]} == {
-        "confrontation",
-        "steelman",
-        "recherche",
-        "revision",
-        "consolidation",
-        "comparaison",
-        "synthese",
-        "porte_qualite",
-    }
-    assert d["budget_request"]["minimal_deliberation_calls"] == 7  # 3 confrontations + cœur 4
-    assert d["budget_request"]["additional_calls_estimate"] == 5
-    assert not [
-        c
-        for c in llm.calls
-        if c["call_type"] not in {"framing", "expert_tour0", "self_qualification"}
-    ]
-    # Le rapport de situation du Tour 0 reste exploitable et honnête.
+    br = d["budget_request"]
+    assert br["detected_at_step"] == "composition"
+    assert br["minimal_deliberation_calls"] == 13
+    assert br["remaining_calls"] == 8
+    assert br["additional_calls_estimate"] == 5
+    assert "uncovered_critical_dimensions" not in br
+    # Le rapport reste honnête : aucune option examinée, aucune recommandation.
     fields = mission["report"]["fourteen_fields"]
-    assert len(fields["05_options_examinees"]) == 3
+    assert fields["05_options_examinees"] == []
     assert "aucune recommandation" in fields["10_recommandation"]["status"]
     assert fields["10_recommandation"]["budget_request"]["additional_calls_estimate"] == 5
+    assert not any("dimension critique" in a for a in fields["14_prochaine_action"])
+    md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
+    assert "Demande de budget" in md
+    assert "cycle minimal" in md
+    assert "Dimensions critiques non couvertes" not in md
 
 
 # --- 17. Dimension critique non couverte : arrêt explicite + demande de budget --------------------
@@ -1272,11 +1294,13 @@ def test_critical_dimension_uncovered_stops_with_budget_request(
     assert mission["stop_reason"] == "critical_dimension_uncovered"
     assert mission["llm_calls_used"] == 1  # le cadrage seulement : rien n'est dépensé pour rien
     assert [c["call_type"] for c in llm.calls] == ["framing"]
+    # B14-prime : à 5 appels, aucune position n'est délibérable jusqu'à la porte (1 + cœur 4 > 4) :
+    # les quatre dimensions critiques seraient retirées → arrêt explicite, jamais silencieux.
     uncovered = mission["composition"]["uncovered_dimensions"]
-    assert len(uncovered) == 3
+    assert len(uncovered) == 4
     br = mission["deliberation"]["budget_request"]
     assert br["uncovered_critical_dimensions"] == uncovered
-    assert br["additional_calls_estimate"] == 3 * 3
+    assert br["additional_calls_estimate"] == 4 * 3
     assert mission["recommendation"] is None
     assert mission["report"]["partial"] is True
     fields = mission["report"]["fourteen_fields"]
@@ -1796,8 +1820,11 @@ def large_options() -> dict[str, OptionSpec]:
 
 
 def test_large_tour0_is_consolidated_in_bounded_batches_without_truncation(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
+    options_cap(25)
     llm = use_llm(DeliberationLLM(options=large_options(), consolidation=competent_clerk))
     mission = run(client, llm, "66 options : consolidation par lots")
     cons = mission["deliberation"]["consolidation"]
@@ -1862,8 +1889,11 @@ def test_large_tour0_is_consolidated_in_bounded_batches_without_truncation(
 
 
 def test_consolidation_truncation_retries_once_then_fails_closed(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
+    options_cap(25)
     truncated = '{"families": [{"family_id": "F1", "label": "coup'  # coupé en plein champ
     llm = use_llm(
         DeliberationLLM(
@@ -1901,8 +1931,12 @@ def test_consolidation_truncation_retries_once_then_fails_closed(
 
 
 def test_consolidation_retry_recovers_when_halves_fit(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
+    options_cap(25)
+
     def flaky_clerk(label: str, prompt: str) -> dict[str, Any]:
         n = len([ln for ln in prompt.splitlines() if ln.startswith("- ")])
         if n >= 16:  # un lot de 16 déborde ; ses deux moitiés (8) tiennent
@@ -1922,8 +1956,11 @@ def test_consolidation_retry_recovers_when_halves_fit(
 
 
 def test_comparison_failure_is_explicit_and_blocks_the_gate(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
+    options_cap(25)
     llm = use_llm(
         DeliberationLLM(
             options=large_options(),
@@ -1997,10 +2034,13 @@ def test_gate_llm_verdict_cannot_override_upstream_failures(
     mission = run(client, llm, "synthèse tronquée")
     rec = mission["recommendation"]
     assert rec["status"] == "failed"
-    # B13 : une relance corrective (même schéma), toujours tronquée → épuisement explicite.
-    assert rec["error"].startswith("structured_output_recovery_exhausted: structured_output_trunc")
-    assert len([c for c in llm.calls if c["call_type"] == "synthesis"]) == 2
-    assert mission["report"]["budget"]["structured_output_retries"] == 1
+    # B14-prime (F) : la synthèse a une limite fixe (plancher = plafond) ; une sortie coupée à
+    # cette limite n'est pas relancée à l'identique — refus explicite, aucun appel gaspillé.
+    assert rec["error"].startswith(
+        "structured_output_retry_refused_output_budget: structured_output_truncated"
+    )
+    assert len([c for c in llm.calls if c["call_type"] == "synthesis"]) == 1
+    assert mission["report"]["budget"]["structured_output_retries"] == 0
     assert mission["report"]["recommendation_produced"] is False
     assert any(
         s["step"] == "porte_qualite" and "aucune recommandation" in s["reason"]
@@ -2095,8 +2135,11 @@ def cross_kind_options() -> dict[str, OptionSpec]:
 
 
 def test_cross_kind_duplicates_are_consolidated_with_canonical_kind_and_trace(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
+    options_cap(25)
     llm = use_llm(DeliberationLLM(options=cross_kind_options(), consolidation=competent_clerk))
     mission = run(client, llm, "42 options : consolidation inter-natures")
     cons = mission["deliberation"]["consolidation"]
@@ -2251,8 +2294,11 @@ def coverage_options() -> dict[str, OptionSpec]:
 
 
 def test_comparison_retry_preserves_strategic_coverage(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
+    options_cap(8)
     llm = use_llm(
         DeliberationLLM(
             options=coverage_options(),
@@ -2314,14 +2360,22 @@ def test_comparison_retry_preserves_strategic_coverage(
 
 
 def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
     # Budget : après la première comparaison il reste exactement synthèse + porte ; la relance
     # (qui aurait préservé la couverture) n'est pas financée → statut != ok, porte exécutée et
-    # bloquante. Appels : 1 + 3 + 3 + 3 + 1 (consolidation) + 1 (comparaison) + 1 + 1 = 14.
+    # bloquante. B14-prime : la composition n'accepte 3 experts (cap 8 options) que si
+    # 3 x 2 + 3 + cœur borné (24 options → 2 lots + 1 méta = 3 → 6) = 15 ≤ restant → plafond 16 ;
+    # 17 groupes réels → consolidation en 2 lots + méta (3 appels). Appels : 1 + 3 + 3 + 3 + 3 + 1
+    # (comparaison) + 1 + 1 = 16.
+    options_cap(8)
+    wide = coverage_options()
+    wide["E3"] = [*wide["E3"], ("Stratégie A9", "build"), ("Stratégie A10", "build")]
     llm = use_llm(
         DeliberationLLM(
-            options=coverage_options(),
+            options=wide,
             consolidation=competent_clerk,
             comparison=truncate_first(1, compare_all),
         )
@@ -2331,7 +2385,7 @@ def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
         llm,
         "relance de comparaison non finançable",
         input_text=COVERAGE_INPUT,
-        max_llm_calls=14,
+        max_llm_calls=16,
     )
     comp = mission["deliberation"]["comparison"]
     assert comp["status"] == "failed"
@@ -2346,7 +2400,7 @@ def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
     assert rec["gate"]["passed"] is False
     assert rec["decision_ready"] is False
     assert "upstream_stage_failed:comparaison" in rec["gate"]["integrity_failures"]
-    assert mission["llm_calls_used"] == 14 == mission["max_llm_calls"]
+    assert mission["llm_calls_used"] == 16 == mission["max_llm_calls"]
     assert mission["stop_reason"] == ""  # la porte n'a pas été sacrifiée : aucun arrêt dur
 
 
@@ -2685,8 +2739,11 @@ def _b9_mission(
 
 
 def test_b9_stress_coverage_without_mandatory_explosion(
-    client: TestClient, use_llm: Callable[..., DeliberationLLM]
+    client: TestClient,
+    use_llm: Callable[..., DeliberationLLM],
+    options_cap: Callable[[int], None],
 ) -> None:
+    options_cap(8)
     mission, _ = _b9_mission(
         client, use_llm, "B9 stress : 33 familles, 2 dimensions critiques", input_text=B9_INPUT
     )

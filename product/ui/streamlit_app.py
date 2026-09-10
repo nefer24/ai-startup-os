@@ -2342,12 +2342,25 @@ def _render_mission_recommendation(mission: dict[str, Any]) -> None:
         )
         if delib.get("budget_request"):
             br = delib["budget_request"]
-            st.warning(
-                "Dimension(s) critique(s) non couverte(s) : "
-                + ", ".join(br.get("uncovered_critical_dimensions", []))
-                + f" — ≈ {br.get('additional_calls_estimate')} appel(s) supplémentaire(s) "
-                "seraient nécessaires. La mission s'est arrêtée plutôt que de les ignorer."
-            )
+            uncovered = br.get("uncovered_critical_dimensions") or []
+            if uncovered:
+                st.warning(
+                    "Dimension(s) critique(s) non couverte(s) : "
+                    + ", ".join(uncovered)
+                    + f" — ≈ {br.get('additional_calls_estimate')} appel(s) supplémentaire(s) "
+                    "seraient nécessaires. La mission s'est arrêtée plutôt que de les ignorer."
+                )
+            else:
+                # B14-prime (E) : arrêt pour délibération non finançable — aucune mention de
+                # dimension critique quand aucune n'est absente.
+                st.warning(
+                    f"Délibération non finançable (détectée à l'étape "
+                    f"« {br.get('detected_at_step', 'deliberation')} ») : "
+                    f"{br.get('remaining_calls')} appel(s) restant(s) pour un cycle minimal "
+                    f"estimé à {br.get('minimal_deliberation_calls')} — déficit ≈ "
+                    f"{br.get('additional_calls_estimate')} appel(s). La mission s'est arrêtée "
+                    "plutôt que de produire une recommandation incomplète."
+                )
         return
     body = rec.get("recommendation", {})
     conf = rec.get("confidence", {})

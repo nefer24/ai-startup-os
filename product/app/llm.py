@@ -49,6 +49,10 @@ class LLMResponse:
     # Raison d'arrêt rapportée par le fournisseur (`end_turn`, `max_tokens`, …). Indispensable pour
     # distinguer une sortie TRONQUÉE (limite de sortie atteinte) d'un JSON réellement invalide.
     stop_reason: str = ""
+    # B14-prime (D) — métadonnées des blocs de contenu reçus : nombre de blocs par type (`text`,
+    # autres). Aucun contenu de bloc non textuel n'est conservé ; None si le client ne les expose
+    # pas (faux clients, chemin historique).
+    content_blocks: dict[str, int] | None = None
 
     @property
     def truncated(self) -> bool:
@@ -143,6 +147,7 @@ class AnthropicLLMClient:
                 output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
             ),
             stop_reason=str(getattr(message, "stop_reason", "") or ""),
+            content_blocks=count_content_blocks(message.content),
         )
 
 
@@ -154,6 +159,22 @@ def _concat_text(content: object) -> str:
         if isinstance(text, str):
             parts.append(text)
     return "".join(parts)
+
+
+def count_content_blocks(content: object) -> dict[str, int]:
+    """Nombre de blocs par type (`text`, `thinking`, `tool_use`, …) — métadonnées seulement.
+
+    Le contenu des blocs non textuels n'est jamais lu ni conservé : seul le type (attribut `type`
+    du SDK, sinon le nom de la classe) est compté, pour mesurer la part de la sortie qui n'est pas
+    du texte exploitable (B14-prime — D).
+    """
+    counts: dict[str, int] = {}
+    for block in content if isinstance(content, list) else []:
+        block_type = getattr(block, "type", None)
+        if not isinstance(block_type, str) or not block_type:
+            block_type = "text" if isinstance(getattr(block, "text", None), str) else "unknown"
+        counts[block_type] = counts.get(block_type, 0) + 1
+    return counts
 
 
 def build_llm_client(settings: Settings) -> LLMClient:

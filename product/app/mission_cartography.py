@@ -227,6 +227,10 @@ def build_cartography(
     clusters = position_clusters(answered, relations)
     largest = len(clusters[0]) if clusters else 0
     divergence = 0.0 if len(answered) <= 1 else round(1 - largest / len(answered), 3)
+    # B14-prime — auto-qualification partielle : les positions sans relations (relance refusée ou
+    # épuisée) restent des singletons ; l'indice de divergence est alors marqué partiel, jamais
+    # complété par des relations inventées.
+    relations_missing = [labels.get(e, e) for e in answered if self_qual.get(e) is None]
 
     evidence: list[dict[str, Any]] = []
     for res in expert_results:
@@ -305,6 +309,11 @@ def build_cartography(
         "clerk_used": clerk is not None,
         "position_clusters": clusters,
         "divergence_index": divergence,
+        "divergence_index_partial": bool(relations_missing) and len(answered) > 1,
+        "relations_missing_labels": relations_missing,
+        "self_qualification_coverage": (
+            f"{len(answered) - len(relations_missing)}/{len(answered)}" if answered else "0/0"
+        ),
         "hypotheses": _aggregate(expert_results, "assumptions"),
         "unknowns": _aggregate(expert_results, "unknowns"),
         "risks": _aggregate(expert_results, "risks"),

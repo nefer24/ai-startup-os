@@ -344,12 +344,16 @@ def test_no_fixed_number_of_experts_is_doctrine(
     assert "expérimentale" in bounds["max_angles_per_cell_nature"]
     assert "non doctrinale" in bounds["max_angles_per_cell_nature"]
     # Le plafond de la classe borne économiquement la composition : le cas M est escaladé en
-    # `structurante` (60 appels) ; réservation aval 10 ; 3 appels planifiés par expert →
-    # (59 - 10) // 3 = 16 experts finançables. Le nombre effectif (6) émerge des dimensions et
-    # de leur criticité (3 + 2 + 1), pas de la classe ni du budget.
+    # `structurante` (60 appels). B14-prime : le plus grand n dont le noyau obligatoire tient dans
+    # les 59 appels restants — 3n (exposé, auto-qualification, confrontation) + cœur borné par
+    # 5 options par expert + steelman 2 — vaut 15 (n = 16 : 48 + 11 + 2 = 61 > 59). Le nombre
+    # effectif (6) émerge des dimensions et de leur criticité (3 + 2 + 1), pas de la classe ni du
+    # budget.
     assert mission["effective_class"] == "structurante"
     assert bounds["budget_plan"] == "full_deliberation"
-    assert bounds["max_experts_by_budget"] == (60 - 1 - 10) // 3 == 16
+    assert bounds["max_experts_by_budget"] == 15
+    assert bounds["options_per_expert_bound"] == 5
+    assert bounds["plan_feasible"] is True
     assert len(mission["composition"]["experts"]) == 6
     assert mission["llm_calls_used"] <= mission["max_llm_calls"] == 60
 
@@ -609,7 +613,7 @@ def test_hard_stop_before_exceeding_max_calls(
 ) -> None:
     # La composition réserve normalement les appels ; on la force à planifier plus d'experts que
     # le plafond ne permet, pour prouver que l'arrêt dur du registre s'exerce quand même.
-    monkeypatch.setattr(BudgetLedger, "max_affordable_experts", lambda self, **_: 5)
+    monkeypatch.setattr("app.missions.feasible_expert_count", lambda *_a, **_k: 5)
     llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client, max_llm_calls=4)
     assert len(mission["composition"]["experts"]) == 5
@@ -664,18 +668,20 @@ def test_partial_report_is_coherent_after_budget_stop(
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
     assert "partiel" in md
     assert "budget_insufficient_for_exploration" in md
-    # Budget intermédiaire : la composition se contraint d'elle-même (couverture du Tour 0
-    # privilégiée : 2 experts), puis la délibération n'est pas entamée « pour voir » — arrêt
-    # partiel explicite avec demande de budget chiffrée, sans aucun appel gaspillé.
+    # Budget intermédiaire (B14-prime) : une seule position serait délibérable, le cadrage en
+    # appelle trois → la délibération n'est pas entamée « pour voir » ; arrêt explicite dès la
+    # composition avec demande de budget chiffrée, un seul appel dépensé.
     use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
     mission = _post_mission(client, max_llm_calls=6)
     assert mission["composition"]["bounds"]["budget_plan"] == "coverage_first"
-    assert len(mission["composition"]["experts"]) == 2
-    assert mission["llm_calls_used"] <= 6
+    assert mission["composition"]["bounds"]["max_experts_feasible_deliberation"] == 1
+    assert mission["composition"]["experts"] == []
+    assert mission["llm_calls_used"] == 1
     assert mission["stop_reason"] == "deliberation_budget_insufficient"
     assert mission["report"]["partial"] is True
+    assert mission["deliberation"]["budget_request"]["detected_at_step"] == "composition"
     assert mission["deliberation"]["budget_request"]["additional_calls_estimate"] >= 1
-    assert mission["report"]["composition"]["experts_answered"] == 2
+    assert mission["report"]["composition"]["experts_answered"] == 0
 
 
 # --- Gouvernance : rapport candidate, actions CEO, aucune exécution -------------------------

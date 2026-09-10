@@ -1070,10 +1070,11 @@ respectant chaînes et échappements) ; jamais d'invention de champ, de complét
 de choix entre plusieurs objets ; validation stricte avec exactement le même schéma. **Une relance
 corrective LLM au plus** par appel logique structuré (demande d'origine + bloc de correction :
 catégorie, message de validation borné, contrat attendu, interdiction d'inventer ; même
-`max_tokens`), financée seulement si `max_llm_calls`, coût connu + exposition incertaine (B12) et
-réserve B8 de l'étape le permettent (cadrage : aucune réserve ; étapes préalables et optionnelles :
-pire cas du cœur ; synthèse : la porte ; consolidation et comparaison : relance B13 désactivée car
-elles possèdent déjà une relance bornée propre). Compteurs : `llm_calls_used` compte tout appel
+`max_tokens`, sauf troncature : limite recalculée ou refus, voir B14-prime), financée seulement si
+`max_llm_calls`, coût connu + exposition incertaine (B12) et réserve de l'étape le permettent
+(cadrage : aucune réserve ; étapes préalables — Tour 0, auto-qualification, greffier — : réserve de
+délibération B14-prime, à défaut pire cas du cœur ; synthèse : la porte ; consolidation et
+comparaison : relance B13 désactivée car elles possèdent déjà une relance bornée propre). Compteurs : `llm_calls_used` compte tout appel
 logique réussi côté fournisseur, relance corrective comprise (un vrai appel, jamais masqué) ;
 `structured_output_failures` / `_recoveries` / `_retries` / `_exhausted` s'ajoutent à
 `provider_attempts` / `provider_retries` (B10) sans redéfinition. Journal sanitisé par tentative
@@ -1084,6 +1085,38 @@ immédiate (`failure` : raison, catégorie, tentatives 2 / 2), rapport diagnosti
 composition ni recommandation ; sur une autre étape : comportement partiel existant (perspective
 non exploitée, veto d'intégrité de la porte). L'interface B11 affiche « sortie structurée invalide
 après récupération bornée ».
+
+**Budget de sortie et réserve de délibération (B14-prime)** : quatre correctifs liés au post-mortem
+de Mission #8 (16 positions, auto-qualifications coupées ou vides à 1 500 tokens, 18 relances B13,
+arrêt `deliberation_budget_insufficient` après 52 appels sur 60 sans une seule confrontation).
+(1) **Limites de sortie proportionnées** (`app/output_budget.py`) pour les étapes à cardinalité
+variable — auto-qualification, greffier, consolidation, comparaison :
+`required = ceil((base + per_item x n_items) x 1,5)`, `granted = min(ceiling, max(floor, required))`,
+`floor` = limite historique de l'étape (aucune régression pour les petites équipes), `ceiling` =
+plafond configurable (`MISSION_OUTPUT_CEILING_*` : 4 000 / 8 000) ; formule journalisée dans
+`call_planned.output_budget` avec `number_of_required_items` ; aucun facteur empirique de tokens
+non textuels, aucun doublement arbitraire. (2) **Réserve de composition prouvable**
+(`minimal_deliberation_bound`, `feasible_expert_count`) : le nombre d'experts retenu est le plus
+grand `n` tel que `pré-délibération (2n) + cycle minimal (n confrontations + cœur borné + steelman
+si la classe l'impose) ≤ appels restants`, le cœur borné (`consolidation_core_bound`) étant dérivé
+du **maximum d'options par expert** (`MISSION_MAX_OPTIONS_PER_EXPERT = 5`, appliqué au Tour 0 :
+options excédentaires journalisées `options_capped`, jamais inventées) — plus aucune moyenne
+empirique ni `reserved_downstream_calls`. Une équipe qui ne peut pas délibérer n'est pas engagée :
+arrêt `deliberation_budget_insufficient` **à la composition** (`detected_at_step = composition`),
+zéro exposé payé pour rien. (3) **Plan réel après le Tour 0** (`_plan_deliberation_core`) : sur les
+options réelles, réserve `= positions + cœur nominal + steelman obligatoire`, journal
+`deliberation_core_planned` ; l'auto-qualification (appel sauté → relation `None`, cartographie
+`divergence_index_partial`, `self_qualification_coverage`), le greffier (sauté → cartographie sans
+regroupement) et toute relance B13 pré-délibération (`structured_output_retry_refused_deliberation_reserve`)
+s'effacent devant cette réserve : aucune relation inventée, mission poursuivie. (4) **Relance après
+troncature** (`plan_truncation_retry`) : jamais à l'identique ; limite recalculée par extrapolation
+déterministe sur les éléments complets observés (marge 1,25), ou plafond de l'étape si aucun
+élément complet, ou refus explicite (`structured_output_retry_refused_output_budget`) si le plafond
+est déjà atteint ; une seule relance B13 au plus. **Observabilité des blocs** : `call_done`
+journalise `content_blocks` (compte par type), `text_blocks`, `non_text_blocks`, `text_chars`,
+`output_tokens_per_text_char` — métadonnées seulement, jamais le contenu d'un bloc non textuel ni
+un raisonnement privé. **Gabarit** : « dimensions critiques non couvertes » seulement si la liste
+est non vide ; sinon « appels restants / cycle minimal / déficit / étape de détection ».
 
 **État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
 `GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec

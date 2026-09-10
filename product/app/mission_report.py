@@ -223,11 +223,7 @@ def build_situation_report(
             "13_conditions_de_changement": gap,
             "14_prochaine_action": [
                 "vérifier les éléments listés « à rechercher »" if to_research else "",
-                (
-                    "relever le plafond ou réduire le périmètre (dimension critique non couverte)"
-                    if delib.get("budget_request")
-                    else ""
-                ),
+                _budget_request_next_action(delib.get("budget_request") or {}),
                 "reprendre la délibération (confrontation / steelman / révision / synthèse)",
             ],
         }
@@ -505,15 +501,42 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
         for issue in gate.get("issues", []):
             lines.append(f"- ⚠ {issue}")
     if d.get("budget_request"):
-        br = d["budget_request"]
-        lines += ["", "### Demande de budget"]
-        lines.append(
-            f"- Dimensions critiques non couvertes : "
-            f"{', '.join(br.get('uncovered_critical_dimensions', []))} — "
+        lines += ["", "### Demande de budget", *budget_request_lines(d["budget_request"])]
+    return lines
+
+
+def budget_request_lines(br: dict[str, Any]) -> list[str]:
+    """Lignes d'une demande de budget selon sa cause réelle (B14-prime — E).
+
+    « Dimensions critiques non couvertes » n'apparaît que si la liste existe et n'est pas vide ;
+    un arrêt pour délibération non finançable expose appels restants, cycle minimal, déficit et
+    étape de détection, sans jamais mentionner de dimension critique absente.
+    """
+    uncovered = br.get("uncovered_critical_dimensions") or []
+    if uncovered:
+        return [
+            f"- Dimensions critiques non couvertes : {', '.join(uncovered)} — "
             f"≈ {br.get('additional_calls_estimate')} appel(s) supplémentaire(s) — "
             f"{br.get('advice')}"
-        )
-    return lines
+        ]
+    return [
+        "- Délibération non finançable : "
+        f"{br.get('remaining_calls')} appel(s) restant(s) pour un cycle minimal estimé à "
+        f"{br.get('minimal_deliberation_calls')} — déficit ≈ "
+        f"{br.get('additional_calls_estimate')} appel(s) — détecté à l'étape "
+        f"« {br.get('detected_at_step', 'deliberation')} » — {br.get('advice')}"
+    ]
+
+
+def _budget_request_next_action(br: dict[str, Any]) -> str:
+    if not br:
+        return ""
+    if br.get("uncovered_critical_dimensions"):
+        return "relever le plafond ou réduire le périmètre (dimension critique non couverte)"
+    return (
+        f"relever le plafond d'appels (délibération non finançable : déficit ≈ "
+        f"{br.get('additional_calls_estimate')} appel(s))"
+    )
 
 
 def _render_cost_exposure(b: dict[str, Any]) -> list[str]:

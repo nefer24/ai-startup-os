@@ -440,16 +440,20 @@ def test_retry_is_refused_when_calls_or_cost_cap_would_be_violated(
     assert mission["cost_eur"] <= mission["max_cost_eur"]
 
 
-# --- TEST H — troncature observable : catégorie distincte, relance bornée, rien complété ----------
-def test_observable_truncation_is_labelled_and_retried_once_without_local_completion(
+# --- TEST H — troncature observable : catégorie distincte, aucune relance à l'identique ----------
+def test_observable_truncation_is_labelled_and_never_retried_blindly(
     client: TestClient, use_llm: Callable[..., Any]
 ) -> None:
-    baseline = _baseline(client, use_llm)
+    # B14-prime (F) : le cadrage a une limite fixe (plancher = plafond) ; une sortie coupée à
+    # cette limite n'est pas relancée « en espérant » une compression : refus explicite, rien
+    # n'est complété localement. (La relance après troncature avec limite recalculée est testée
+    # sur les étapes à cardinalité variable dans `test_missions_output_budget.py`.)
     llm = use_llm(
         ShapedLLM(ScriptedStructuredLLM(SIMPLE_FRAMING), {"framing": ["truncated", "ok"]})
     )
     mission = _post(client)
-    assert mission["status"] == "candidate"
+    assert mission["status"] == "failed"
+    assert mission["stop_reason"] == "structured_output_retry_refused_output_budget"
     p = _entries(client, mission["id"], "structured_output_invalid")[0]["payload"]
     assert p["category"] == STRUCTURED_OUTPUT_TRUNCATED
     assert p["truncated"] is True
@@ -458,11 +462,12 @@ def test_observable_truncation_is_labelled_and_retried_once_without_local_comple
     assert p["local_recovery_attempted"] is True
     assert p["local_recovery_applied"] is False
     assert p["json_candidates"] == 0
-    retry_prompt = [c for c in llm.calls if c["call_type"] == "framing"][1]["prompt"]
-    assert "limite de sortie" in retry_prompt
-    assert f"sur {p['max_tokens']}" in retry_prompt
-    assert mission["report"]["budget"]["structured_output_retries"] == 1
-    assert mission["framing"]["parsed"] == baseline["framing"]["parsed"]
+    assert p["will_retry"] is False
+    assert p["retry_refusal_reason"] == "structured_output_retry_refused_output_budget"
+    assert p["truncation_retry_plan"]["allowed"] is False
+    assert [c["call_type"] for c in llm.calls if c["call_type"] == "framing"] == ["framing"]
+    assert mission["report"]["budget"]["structured_output_retries"] == 0
+    assert mission["framing"]["parsed"] is None
 
 
 # --- TEST I — plusieurs objets JSON : aucune sélection locale ------------------------------------

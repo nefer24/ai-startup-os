@@ -273,6 +273,8 @@ def compose(
     def total() -> int:
         return sum(len(p["angles"]) for p in plan)
 
+    result.bounds["experts_proposed"] = total()
+
     while total() > max_experts:
         candidates = [p for p in plan if len(p["angles"]) > 1]
         if candidates:
@@ -384,6 +386,7 @@ def compose(
             )
 
     # 4) Fiches d'experts et journal dimension → angle → justification.
+    result.bounds["experts_retained"] = total()
     counter = 0
     for p in plan:
         dimension: DimensionOut = p["dimension"]

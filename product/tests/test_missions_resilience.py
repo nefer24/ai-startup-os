@@ -73,7 +73,7 @@ class FlakyLLM:
 
     def __init__(
         self,
-        inner: ScriptedStructuredLLM,
+        inner: Any,
         plan: dict[str, list[BaseException]] | None = None,
         *,
         plan_all: dict[str, BaseException] | None = None,
@@ -405,9 +405,13 @@ def test_provider_retries_never_borrow_budget_or_reserves(
             ScriptedStructuredLLM(SIMPLE_FRAMING), {"quality_gate": [overloaded(), overloaded()]}
         )
     )
-    mission = _post(client, max_llm_calls=5)
+    # B14-prime : la borne de composition d'une position unique vaut 1 (exposé) + cœur borné 4 = 5
+    # appels après le cadrage → plafond 6 ; la consolidation d'une option unique étant directe
+    # (aucun appel), la mission consomme 5 appels.
+    mission = _post(client, max_llm_calls=6)
     assert mission["status"] == "candidate"
-    assert mission["llm_calls_used"] == 5 == mission["max_llm_calls"]
+    assert mission["llm_calls_used"] == 5
+    assert mission["max_llm_calls"] == 6
     assert mission["report"]["budget"]["refusals"] == []
     assert mission["report"]["budget"]["provider_retries"] == 2
     # La porte (dernier appel admis) a bien été exécutée après ses deux relances ; avec une

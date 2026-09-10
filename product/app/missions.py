@@ -29,8 +29,10 @@ from app.mission_budget import (
     SYNTHESIS_CORE_CALLS,
     BudgetExceededError,
     BudgetLedger,
+    feasible_expert_count,
+    mandatory_steelman_calls,
+    minimal_deliberation_bound,
     plan_budget,
-    reserved_downstream_calls,
 )
 from app.mission_cartography import (
     anonymize_labels,
@@ -128,6 +130,15 @@ from app.mission_schemas import (
     SteelmanOutput,
 )
 from app.observability import observed
+from app.output_budget import (
+    RULES as OUTPUT_BUDGET_RULES,
+)
+from app.output_budget import (
+    OutputBudget,
+    fixed_output_budget,
+    output_budget,
+    plan_truncation_retry,
+)
 from app.provider_errors import (
     COST_KNOWN,
     COST_KNOWN_ZERO,
@@ -244,6 +255,11 @@ class _Run:
     structured_output_recoveries: int = 0
     structured_output_retries: int = 0
     structured_output_exhausted: int = 0
+    # B14-prime (O3) — réserve du cycle minimal de délibération, calculée dès la clôture du Tour 0
+    # (confrontations + cœur réel + steelman obligatoire de la classe) et opposable aux dépenses
+    # pré-délibération restantes (auto-qualification, greffier, relances correctives).
+    deliberation_reserve: int | None = None
+    deliberation_plan: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, Any] = field(default_factory=dict)
 
 
@@ -285,10 +301,12 @@ def _call(
     prompt: str,
     call_type: str,
     max_tokens: int,
+    planned_extra: dict[str, Any] | None = None,
 ) -> LLMResponse | None:
     """Appel structuré sous budget : estimation, refus/arrêt, appel, enregistrement, journal.
 
     Retourne None si le budget interdit l'appel (la mission s'arrête proprement : `stop_reason`).
+    `planned_extra` : métadonnées ajoutées à `call_planned` (budget de sortie dérivé, B14-prime).
     """
     try:
         estimate = run.ledger.check_before_call(
@@ -318,6 +336,7 @@ def _call(
             "prompt_sha256": prompt_fingerprint(system, prompt),
             "prompt_text": prompt,
             "system_text": system,
+            **(planned_extra or {}),
         },
     )
     client = observed(
@@ -365,6 +384,7 @@ def _call(
             "stop_reason": response.stop_reason,
             "truncated": response.truncated,
             "raw_length_chars": len(response.text),
+            **_content_block_view(response),
             "cost_eur": cost,
             "budget": run.ledger.snapshot(),
         },
@@ -563,23 +583,83 @@ def _account_failed_attempt(
     }
 
 
+def _content_block_view(response: LLMResponse) -> dict[str, Any]:
+    """Métadonnées des blocs de sortie (B14-prime — D) : types, comptes, texte retenu, ratio.
+
+    Aucun contenu de bloc non textuel n'est journalisé. Le ratio tokens de sortie / caractères de
+    texte est une mesure brute, sans interprétation sémantique.
+    """
+    blocks = response.content_blocks
+    text_chars = len(response.text)
+    out = response.usage.output_tokens
+    if blocks is None:
+        text_blocks: int | None = None
+        non_text: int | None = None
+    else:
+        text_blocks = blocks.get("text", 0)
+        non_text = sum(v for k, v in blocks.items() if k != "text")
+    return {
+        "content_blocks": blocks if blocks is not None else "unknown",
+        "content_blocks_total": None if blocks is None else sum(blocks.values()),
+        "text_blocks": text_blocks,
+        "non_text_blocks": non_text,
+        "text_chars": text_chars,
+        "output_tokens_per_text_char": (
+            round(out / text_chars, 3) if text_chars else ("n/a" if out == 0 else "no_text")
+        ),
+    }
+
+
 # --- B13 — appel structuré : analyse, récupération locale, relance corrective bornée ------------
-# Réserve d'appels exigée avant une relance corrective, par étape (B8) : les étapes préalables au
-# cœur exigent que le pire cas du cœur reste finançable ; le cadrage n'exige rien (sans cadrage,
-# rien n'existe) ; la synthèse réserve la porte ; la porte ne réserve rien. La consolidation et la
-# comparaison possèdent déjà une relance bornée propre (lot scindé, compaction) : la relance B13
-# y est désactivée (récupération locale seulement) pour ne pas dépasser le pire cas réservé.
+# Réserve d'appels exigée avant une relance corrective, par étape (B8, B14-prime) : après la
+# clôture du
+# Tour 0, la réserve du cycle minimal de délibération (confrontations + cœur réel + steelman
+# obligatoire) est opposable ; avant, les étapes préalables exigent que le pire cas du cœur reste
+# finançable ; le cadrage n'exige rien (sans cadrage, rien n'existe) ; la synthèse réserve la
+# porte ; la porte ne réserve rien. La consolidation et la comparaison possèdent déjà une relance
+# bornée propre (lot scindé, compaction) : la relance B13 y est désactivée (récupération locale
+# seulement) pour ne pas dépasser le pire cas réservé.
 _STRUCTURED_RETRY_DISABLED_STEPS = frozenset({"consolidation", "comparaison"})
+_PRE_DELIBERATION_STEPS = frozenset({"tour0", "auto_qualification", "greffier"})
+RETRY_REFUSED_DELIBERATION_RESERVE = "structured_output_retry_refused_deliberation_reserve"
 
 
-def _structured_retry_reserve(run: _Run, step: str) -> int:
+def _structured_retry_reserve(run: _Run, step: str) -> tuple[int, str]:
+    """(réserve exigée, nom de la réserve) pour une relance corrective à cette étape."""
     if step == "cadrage":
-        return 0
+        return 0, "none"
     if step == "synthese":
-        return 1
+        return 1, "quality_gate"
     if step == "porte_qualite":
-        return 0
-    return run.core_worst_calls
+        return 0, "none"
+    if step in _PRE_DELIBERATION_STEPS and run.deliberation_reserve is not None:
+        return run.deliberation_reserve, "deliberation_reserve"
+    return run.core_worst_calls, "core_worst_case"
+
+
+def _output_budget_for(settings: Settings, call_type: str, n_items: int | None) -> OutputBudget:
+    """Limite de sortie d'un appel : formule proportionnée (O1) ou limite fixe de l'étape."""
+    floor = int(getattr(settings, f"mission_max_tokens_{_SETTING_SUFFIX[call_type]}"))
+    if n_items is None or call_type not in OUTPUT_BUDGET_RULES:
+        return fixed_output_budget(call_type, floor)
+    ceiling = int(getattr(settings, f"mission_output_ceiling_{_SETTING_SUFFIX[call_type]}"))
+    return output_budget(call_type, n_items, floor=floor, ceiling=ceiling)
+
+
+_SETTING_SUFFIX = {
+    "framing": "framing",
+    "expert_tour0": "expert",
+    "self_qualification": "self_qualification",
+    "clerk": "clerk",
+    "confrontation": "confrontation",
+    "steelman": "steelman",
+    "steelman_recognition": "recognition",
+    "revision": "revision",
+    "consolidation": "consolidation",
+    "comparison": "comparison",
+    "synthesis": "synthesis",
+    "quality_gate": "gate",
+}
 
 
 def _call_structured[T: BaseModel](
@@ -593,20 +673,29 @@ def _call_structured[T: BaseModel](
     system: str,
     prompt: str,
     call_type: str,
-    max_tokens: int,
     model: type[T],
+    n_items: int | None = None,
 ) -> tuple[LLMResponse | None, T | None, str]:
-    """Appel LLM dont la réponse doit satisfaire un contrat de sortie (B13).
+    """Appel LLM dont la réponse doit satisfaire un contrat de sortie (B13, B14-prime).
 
-    Retourne (dernière réponse, sortie validée ou None, erreur classée). Chemin : appel sous budget
-    (B10 / B12 à l'intérieur) → analyse (`analyze_structured_output` : récupération locale
-    déterministe de l'enveloppe, parsing, validation stricte) → si invalide et finançable, **une**
-    relance corrective ciblée sur le contrat (nouvel appel logique, même `max_tokens`, même
-    schéma) → si toujours invalide, `structured_output_recovery_exhausted`. Une relance non
-    finançable (appels, coût connu + exposition incertaine, réserve B8 de l'étape) est refusée
-    fail-closed : `structured_output_retry_refused_budget`. Une étape logique n'accepte jamais plus
-    d'un résultat ; toutes les tentatives sont journalisées.
+    Retourne (dernière réponse, sortie validée ou None, erreur classée). Chemin : limite de sortie
+    proportionnée à la tâche (O1, `n_items`) ou fixe → appel sous budget (B10 / B12 à l'intérieur)
+    → analyse (`analyze_structured_output` : récupération locale déterministe de l'enveloppe,
+    parsing, validation stricte) → si invalide et finançable, **une** relance corrective ciblée sur
+    le contrat (nouvel appel logique, même schéma) → si toujours invalide,
+    `structured_output_recovery_exhausted`.
+
+    Relance après troncature (F) : jamais à l'identique ; seulement avec une limite
+    déterministement suffisante (extrapolation sur les éléments complets observés, ou plafond de
+    l'étape), sinon `structured_output_retry_refused_output_budget`. Une relance qui entamerait la
+    réserve du cycle minimal de délibération (O3) est refusée :
+    `structured_output_retry_refused_deliberation_reserve`. Une relance non finançable (appels,
+    coût connu + exposition incertaine) est refusée : `structured_output_retry_refused_budget`.
+    Une étape logique n'accepte jamais plus d'un résultat ; toutes les tentatives sont
+    journalisées.
     """
+    budget = _output_budget_for(settings, call_type, n_items)
+    max_tokens = budget.granted
     response = _call(
         session,
         run,
@@ -618,6 +707,11 @@ def _call_structured[T: BaseModel](
         prompt=prompt,
         call_type=call_type,
         max_tokens=max_tokens,
+        planned_extra={
+            "output_budget": budget.to_dict(),
+            "number_of_required_items": budget.n_items,
+            "deliberation_reserve": run.deliberation_reserve,
+        },
     )
     if response is None:
         return None, None, ""
@@ -642,6 +736,15 @@ def _call_structured[T: BaseModel](
         return response, outcome.output, ""
     run.structured_output_failures += 1
     error = f"{outcome.category}: {outcome.error}"
+    # Relance après troncature (F) : limite déterministement suffisante ou refus ; sinon (syntaxe,
+    # schéma, réponse vide à raison d'arrêt normale) : relance corrective à la même limite.
+    retry_max_tokens = max_tokens
+    truncation_plan = None
+    if outcome.truncated:
+        truncation_plan = plan_truncation_retry(
+            budget, output_tokens=response.usage.output_tokens, raw_text=response.text
+        )
+        retry_max_tokens = truncation_plan.max_tokens
     retry_prompt = (
         prompt
         + "\n\n"
@@ -649,15 +752,21 @@ def _call_structured[T: BaseModel](
             model, outcome, max_tokens=max_tokens, output_tokens=response.usage.output_tokens
         )
     )
-    estimate = run.ledger.estimate_call_cost_eur(system, retry_prompt, max_tokens)
-    reserve = _structured_retry_reserve(run, step)
+    estimate = run.ledger.estimate_call_cost_eur(system, retry_prompt, retry_max_tokens)
+    reserve, reserve_name = _structured_retry_reserve(run, step)
     refusal = ""
     if step in _STRUCTURED_RETRY_DISABLED_STEPS:
         refusal = "step_has_own_bounded_retry"
     elif run.stop_reason:
         refusal = f"mission_stopping:{run.stop_reason}"
+    elif truncation_plan is not None and not truncation_plan.allowed:
+        refusal = truncation_plan.reason
     elif run.ledger.remaining_calls - 1 < reserve:
-        refusal = STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
+        refusal = (
+            RETRY_REFUSED_DELIBERATION_RESERVE
+            if reserve_name == "deliberation_reserve"
+            else STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
+        )
     elif not run.ledger.retry_allowed_by_cost(estimate):
         refusal = STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
     will_retry = refusal == ""
@@ -677,12 +786,23 @@ def _call_structured[T: BaseModel](
             **outcome.to_journal(),
             "output_tokens": response.usage.output_tokens,
             "max_tokens": max_tokens,
+            "output_budget": budget.to_dict(),
             "stop_reason": response.stop_reason,
+            **_content_block_view(response),
+            "truncation_retry_plan": (
+                truncation_plan.to_dict() if truncation_plan is not None else None
+            ),
+            "retry_requested": True,
             "will_retry": will_retry,
+            "retry_allowed": will_retry,
+            "retry_max_tokens": retry_max_tokens if will_retry else None,
             "retry_refusal_reason": refusal,
             "estimated_retry_cost_eur": estimate,
             "remaining_calls": run.ledger.remaining_calls,
             "reserved_calls_for_step": reserve,
+            "reserve_kind": reserve_name,
+            "deliberation_reserve_before": run.deliberation_reserve,
+            "deliberation_reserve_after": run.deliberation_reserve,
             "known_cost_eur": run.ledger.known_cost_eur,
             "uncertain_cost_upper_bound_eur": round(run.ledger.uncertain_cost_upper_bound_eur, 6),
             "potential_total_cost_upper_bound_eur": (
@@ -693,11 +813,14 @@ def _call_structured[T: BaseModel](
         },
     )
     if not will_retry:
-        prefix = (
-            STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
-            if refusal == STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET
-            else "structured_output_not_retried"
-        )
+        if refusal in (
+            STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET,
+            RETRY_REFUSED_DELIBERATION_RESERVE,
+            "structured_output_retry_refused_output_budget",
+        ):
+            prefix = refusal
+        else:
+            prefix = "structured_output_not_retried"
         return response, None, f"{prefix}: {error}"
     run.structured_output_retries += 1
     _journal(
@@ -711,6 +834,8 @@ def _call_structured[T: BaseModel](
             "structured_retry_number": run.structured_output_retries,
             "category": outcome.category,
             "estimated_cost_eur": estimate,
+            "max_tokens": retry_max_tokens,
+            "max_tokens_initial": max_tokens,
         },
     )
     retry_response = _call(
@@ -723,7 +848,14 @@ def _call_structured[T: BaseModel](
         system=system,
         prompt=retry_prompt,
         call_type=call_type,
-        max_tokens=max_tokens,
+        max_tokens=retry_max_tokens,
+        planned_extra={
+            "output_budget": budget.to_dict(),
+            "number_of_required_items": budget.n_items,
+            "structured_retry_of": logical_call_id,
+            "max_tokens_initial": max_tokens,
+            "deliberation_reserve": run.deliberation_reserve,
+        },
     )
     if retry_response is None:
         # Refus du registre au moment de l'appel : même sémantique fail-closed.
@@ -750,8 +882,9 @@ def _call_structured[T: BaseModel](
             "final": ("accepted" if retry_outcome.valid else STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED),
             **retry_outcome.to_journal(),
             "output_tokens": retry_response.usage.output_tokens,
-            "max_tokens": max_tokens,
+            "max_tokens": retry_max_tokens,
             "stop_reason": retry_response.stop_reason,
+            **_content_block_view(retry_response),
             "budget": run.ledger.snapshot(),
         },
     )
@@ -774,10 +907,14 @@ def _structured_failure(
     error: str,
 ) -> dict[str, Any]:
     """Échec structuré terminal d'une étape sans laquelle la mission ne peut exister (cadrage)."""
-    refused = error.startswith(STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET)
-    reason = (
-        STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET if refused else STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED
+    refusal_prefixes = (
+        STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET,
+        RETRY_REFUSED_DELIBERATION_RESERVE,
+        "structured_output_retry_refused_output_budget",
     )
+    refused_as = next((r for r in refusal_prefixes if error.startswith(r)), "")
+    refused = bool(refused_as)
+    reason = refused_as or STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED
     # `error` = "<raison>: <catégorie>: <détail>" ; la catégorie est le second segment.
     parts = error.split(": ", 2)
     category = parts[1] if len(parts) >= 2 else ""
@@ -1051,7 +1188,6 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
         system=FRAMING_SYSTEM,
         prompt=prompt,
         call_type=FRAMING_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_framing,
         model=FramingOutput,
     )
     if response is None:
@@ -1119,43 +1255,66 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
 def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
     m = run.mission
     framing = run.framing or FramingOutput(problem_understood=m.input_text[:500])
-    # Plan budgétaire à deux niveaux (incrément 2). Niveau 1 : réserver toute la délibération
-    # (4 appels par expert + étapes transverses de la classe). Si ce niveau ne finance pas au
-    # moins une perspective par dimension émergente (et deux au total), la couverture du Tour 0
-    # prime : niveau 2 = réservation minimale de l'incrément 1 (greffier ; 2 appels par expert),
-    # et la délibération n'ira qu'aussi loin que le budget le permet — arrêt partiel explicite,
-    # jamais une « délibération » d'une seule perspective présentée comme probante.
-    reserved_full = reserved_downstream_calls(
-        m.effective_class, settings.mission_max_research_tasks
+    # B14-prime (O2) — invariant de composition : la largeur du Tour 0 est bornée par le plus grand
+    # nombre d'experts dont le noyau obligatoire (exposé + auto-qualification par expert, une
+    # confrontation par position, cœur de synthèse borné par la cardinalité maximale des options,
+    # steelman si la classe l'impose) tient dans le budget restant. La borne est dérivée de
+    # contrats contrôlés (options par expert ≤ `mission_max_options_per_expert`), jamais d'une
+    # moyenne empirique. Une largeur non délibérable n'est jamais engagée : si moins de deux
+    # positions sont délibérables, arrêt explicite après le cadrage avec demande de budget.
+    remaining = run.ledger.remaining_calls
+    options_cap = settings.mission_max_options_per_expert
+
+    def bound_for(n: int) -> dict[str, int]:
+        return minimal_deliberation_bound(
+            n,
+            effective_class=m.effective_class,
+            options_per_expert=options_cap,
+            batch_size=CONSOLIDATION_BATCH_SIZE,
+            meta_chunk_size=META_CHUNK_SIZE,
+        )
+
+    n_feasible = feasible_expert_count(
+        remaining,
+        effective_class=m.effective_class,
+        options_per_expert=options_cap,
+        batch_size=CONSOLIDATION_BATCH_SIZE,
+        meta_chunk_size=META_CHUNK_SIZE,
     )
-    n_full = run.ledger.max_affordable_experts(
-        reserved_calls=reserved_full, calls_per_expert=CALLS_PER_EXPERT
-    )
-    n_coverage = run.ledger.max_affordable_experts(reserved_calls=1, calls_per_expert=2)
     needed = max(2, len(framing.dimensions))
-    if n_full >= needed:
-        max_experts, budget_plan = n_full, "full_deliberation"
-    else:
-        max_experts, budget_plan = n_coverage, "coverage_first"
+    # Une seule dimension émergente : une seule position est légitime (aucune confrontation
+    # possible, porte fail-closed B4) ; à partir de deux dimensions, au moins deux positions.
+    min_positions = 1 if len(framing.dimensions) <= 1 else 2
+    budget_plan = "full_deliberation" if n_feasible >= needed else "coverage_first"
     result = compose(
         framing,
         effective_class=m.effective_class,
         ceo_preference=m.ceo_preference,
         max_angles_per_cell=settings.mission_max_angles_per_cell,
-        max_experts=max_experts,
+        max_experts=n_feasible,
     )
+    retained = len(result.experts)
+    bound = bound_for(retained)
+    critical = {d.name for d in framing.dimensions if d.presumed_criticality == "high"}
+    critical_dropped = any(d in critical for d in result.uncovered_dimensions)
     result.bounds.update(
         {
             "budget_plan": budget_plan,
-            "reserved_downstream_calls": reserved_full,
             "calls_per_expert_full_deliberation": CALLS_PER_EXPERT,
-            "max_experts_full_deliberation": n_full,
-            "max_experts_coverage_first": n_coverage,
+            "max_experts_by_budget": n_feasible,
+            "max_experts_feasible_deliberation": n_feasible,
+            "needed_experts_for_dimensions": needed,
+            "min_positions": min_positions,
+            "options_per_expert_bound": options_cap,
+            "remaining_calls_at_composition": remaining,
+            **bound,
+            "plan_feasible": bound["total_required_calls"] <= remaining
+            and retained >= min_positions,
         }
     )
     run.experts = result.experts
     run.composition = result.to_dict()
-    if budget_plan == "coverage_first":
+    if budget_plan == "coverage_first" and result.experts:
         _journal(
             session,
             run,
@@ -1164,16 +1323,20 @@ def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
             "facilitateur",
             {
                 "detail": (
-                    "le plafond ne finance pas une délibération complète sur toutes les "
-                    "dimensions émergentes : la couverture du Tour 0 est privilégiée ; la "
-                    "délibération ira aussi loin que le budget le permet (arrêt partiel explicite)"
+                    "le plafond ne finance pas une position délibérable par dimension émergente : "
+                    "la largeur est réduite à ce qui reste délibérable jusqu'à la porte "
+                    "(profondeur puis dimensions les moins critiques, journalisées) ; une "
+                    "dimension critique ne disparaît jamais silencieusement"
                 ),
-                "max_experts_full_deliberation": n_full,
-                "max_experts_coverage_first": n_coverage,
+                "max_experts_feasible_deliberation": n_feasible,
+                "needed_experts_for_dimensions": needed,
                 "budget": run.ledger.snapshot(),
             },
         )
-    if not result.experts and not run.stop_reason:
+    if run.stop_reason:
+        pass
+    elif remaining <= 1:
+        # Pas même un exposé finançable : rien n'est explorable.
         run.stop_reason = "budget_insufficient_for_exploration"
         _journal(
             session,
@@ -1182,6 +1345,52 @@ def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
             "budget_stop",
             "facilitateur",
             {"reason": run.stop_reason, "budget": run.ledger.snapshot()},
+        )
+    elif critical_dropped:
+        # Une dimension critique retirée par le budget est traitée par le contrôle dédié
+        # (`critical_dimension_uncovered`) : jamais masquée par un autre arrêt.
+        pass
+    elif not result.experts:
+        run.stop_reason = "budget_insufficient_for_exploration"
+        _journal(
+            session,
+            run,
+            "composition",
+            "budget_stop",
+            "facilitateur",
+            {"reason": run.stop_reason, "budget": run.ledger.snapshot()},
+        )
+    elif retained < min_positions:
+        # Moins de positions délibérables que le cadrage n'en exige : engager le Tour 0 « pour
+        # voir » consommerait le budget sans aucune recommandation possible. Arrêt fail-closed
+        # après un seul appel, avec demande de budget chiffrée (B14-prime).
+        need_bound = bound_for(needed)
+        run.stop_reason = "deliberation_budget_insufficient"
+        run.budget_request = {
+            "detected_at_step": "composition",
+            "minimal_deliberation_calls": need_bound["total_required_calls"],
+            "remaining_calls": remaining,
+            "additional_calls_estimate": need_bound["total_required_calls"] - remaining,
+            "feasible_experts": n_feasible,
+            "needed_experts": needed,
+            "current_max_calls": run.ledger.max_calls,
+            "current_max_cost_eur": run.ledger.max_cost_eur,
+            "advice": (
+                "relever le plafond d'appels de la mission : le budget restant ne finance pas "
+                "un cycle minimal de délibération pour les positions qu'appelle le cadrage ; "
+                "aucun appel n'a été dépensé au-delà du cadrage"
+            ),
+        }
+        run.experts = []
+        result.experts = []
+        run.composition = result.to_dict()
+        _journal(
+            session,
+            run,
+            "composition",
+            "budget_insufficient",
+            "facilitateur",
+            {**run.budget_request, "budget": run.ledger.snapshot()},
         )
     m.composition_json = json.dumps(run.composition, ensure_ascii=False)
     session.commit()
@@ -1238,11 +1447,29 @@ def _step_tour0(session: Session, run: _Run, llm: LLMClient, settings: Settings)
             system=EXPERT_SYSTEM,
             prompt=prompt,
             call_type=EXPERT_CALL_TYPE,
-            max_tokens=settings.mission_max_tokens_expert,
             model=ExpertOutput,
         )
         if response is None:
             continue
+        cap = settings.mission_max_options_per_expert
+        if output is not None and len(output.options) > cap:
+            # Contrat de cardinalité (B14-prime — O2) : au plus `cap` options par expert, annoncé
+            # dans la
+            # consigne ; l'excédent est écarté de façon déterministe et journalisée (jamais
+            # silencieusement), afin que la borne du plan de consolidation reste vraie.
+            _journal(
+                session,
+                run,
+                "tour0",
+                "options_capped",
+                spec.expert_id,
+                {
+                    "proposed": len(output.options),
+                    "kept": cap,
+                    "dropped_labels": [o.label for o in output.options[cap:]],
+                },
+            )
+            output = output.model_copy(update={"options": list(output.options[:cap])})
         run.expert_results.append(
             {
                 "expert_id": spec.expert_id,
@@ -1284,6 +1511,72 @@ def _step_tour0(session: Session, run: _Run, llm: LLMClient, settings: Settings)
             "planned": len(run.experts),
         },
     )
+    _plan_deliberation_core(session, run)
+
+
+def _plan_deliberation_core(session: Session, run: _Run) -> None:
+    """B14-prime (O3) — dès la clôture du Tour 0, le cœur réel et la réserve du cycle minimal.
+
+    Les options réelles sont connues : prétraitement déterministe, plan de consolidation réel
+    (lots, méta-passes), cœur nominal et pire cas (B8), cycle minimal (une confrontation par
+    position + cœur) et steelman obligatoire de la classe. Cette réserve est opposable aux
+    dépenses pré-délibération restantes : auto-qualification nominale, greffier, relances B13.
+    """
+    answered = _answered(run)
+    if len(answered) < 2:
+        return
+    options = collect_options(run.expert_results)
+    plan = plan_consolidation(options, CONSOLIDATION_BATCH_SIZE)
+    run.core_plan = plan
+    run.core_calls = (SYNTHESIS_CORE_CALLS - 1) + plan["nominal"]
+    run.core_worst_calls = run.core_calls + 2 * plan["batches"] + 1
+    steelman = mandatory_steelman_calls(run.mission.effective_class)
+    minimal = len(answered) + run.core_calls
+    run.deliberation_reserve = minimal + steelman
+    run.deliberation_plan = {
+        "answered_positions": len(answered),
+        "options": len(options),
+        "groups": plan["groups"],
+        "batches": plan["batches"],
+        "meta_passes": plan["meta"],
+        "core_nominal_calls": run.core_calls,
+        "core_worst_calls": run.core_worst_calls,
+        "minimal_cycle_calls": minimal,
+        "mandatory_steelman_calls": steelman,
+        "reserved_deliberation_calls": run.deliberation_reserve,
+        "remaining_calls": run.ledger.remaining_calls,
+        "pre_deliberation_margin": run.ledger.remaining_calls - run.deliberation_reserve,
+    }
+    _journal(
+        session,
+        run,
+        "tour0",
+        "deliberation_core_planned",
+        "facilitateur",
+        {**run.deliberation_plan, "consolidation_plan": plan, "budget": run.ledger.snapshot()},
+    )
+
+
+def _reserve_allows(session: Session, run: _Run, step: str, what: str) -> bool:
+    """Une dépense pré-délibération (un appel) n'est admise que si la réserve du cycle minimal
+    reste intacte après elle ; sinon elle est sautée et journalisée (jamais inventée)."""
+    if run.deliberation_reserve is None:
+        return True
+    if run.ledger.remaining_calls - 1 >= run.deliberation_reserve:
+        return True
+    _journal(
+        session,
+        run,
+        step,
+        "skipped_for_deliberation_reserve",
+        "facilitateur",
+        {
+            "skipped": what,
+            "remaining_calls": run.ledger.remaining_calls,
+            "reserved_deliberation_calls": run.deliberation_reserve,
+        },
+    )
+    return False
 
 
 def _step_self_qualification(
@@ -1304,6 +1597,13 @@ def _step_self_qualification(
     for r in answered:
         if run.stop_reason:
             break
+        if not _reserve_allows(
+            session, run, "auto_qualification", f"auto-qualification de {r['expert_id']}"
+        ):
+            # Information de second ordre : la position du Tour 0 est conservée, ses relations
+            # restent absentes (cartographie partielle), la confrontation reste finançable.
+            run.self_qual[r["expert_id"]] = None
+            continue
         others = [
             (labels[o["expert_id"]], o["output"].position)
             for o in answered
@@ -1322,8 +1622,8 @@ def _step_self_qualification(
             system=SELF_QUAL_SYSTEM,
             prompt=prompt,
             call_type=SELF_QUAL_CALL_TYPE,
-            max_tokens=settings.mission_max_tokens_self_qualification,
             model=SelfQualificationOutput,
+            n_items=len(others),
         )
         if response is None:
             break
@@ -1358,8 +1658,13 @@ def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings)
             {"reason": "aucune ambiguïté résiduelle après auto-qualification"},
         )
         return
+    if not _reserve_allows(session, run, "greffier", "greffier (facultatif)"):
+        # Le greffier est facultatif : la cartographie déterministe continue sans lui, et son
+        # absence est signalée (`clerk_used = false`), jamais compensée par une sortie inventée.
+        return
+    options = collect_options(run.expert_results)
     prompt = build_clerk_prompt(
-        options=collect_options(run.expert_results),
+        options=options,
         positions=[(labels[r["expert_id"]], r["output"].position) for r in answered],
         ambiguities=ambiguities,
     )
@@ -1373,8 +1678,8 @@ def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings)
         system=CLERK_SYSTEM,
         prompt=prompt,
         call_type=CLERK_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_clerk,
         model=ClerkOutput,
+        n_items=len(options) + len(ambiguities),
     )
     if response is None:
         return
@@ -1405,6 +1710,8 @@ def _budget_snapshot(run: _Run) -> dict[str, Any]:
         "structured_output_recoveries": run.structured_output_recoveries,
         "structured_output_retries": run.structured_output_retries,
         "structured_output_exhausted": run.structured_output_exhausted,
+        "reserved_deliberation_calls": run.deliberation_reserve,
+        "deliberation_plan": dict(run.deliberation_plan),
     }
 
 
@@ -1623,6 +1930,7 @@ def _check_deliberation_affordable(session: Session, run: _Run) -> None:
     ):
         run.steps_skipped.append({"step": step, "reason": "budget insuffisant pour délibérer"})
     run.budget_request = {
+        "detected_at_step": "deliberation",
         "minimal_deliberation_calls": minimal,
         "remaining_calls": run.ledger.remaining_calls,
         "additional_calls_estimate": minimal - run.ledger.remaining_calls,
@@ -1694,7 +2002,6 @@ def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: S
             system=CONFRONTATION_SYSTEM,
             prompt=prompt,
             call_type=CONFRONTATION_CALL_TYPE,
-            max_tokens=settings.mission_max_tokens_confrontation,
             model=ConfrontationOutput,
         )
         if response is None:
@@ -1842,7 +2149,6 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
             target_arguments=target_args,
         ),
         call_type=STEELMAN_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_steelman,
         model=SteelmanOutput,
     )
     if response is None:
@@ -1890,7 +2196,6 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
             strengths=output.strengths,
         ),
         call_type=RECOGNITION_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_recognition,
         model=RecognitionOutput,
     )
     recognition = "no"
@@ -2212,7 +2517,6 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
             system=REVISION_SYSTEM,
             prompt=prompt,
             call_type=REVISION_CALL_TYPE,
-            max_tokens=settings.mission_max_tokens_revision,
             model=RevisionOutput,
         )
         if response is None:
@@ -2273,6 +2577,7 @@ def _consolidation_output(
     *,
     prompt: str,
     what: str,
+    n_items: int,
 ) -> tuple[ConsolidationOutput | None, str, bool]:
     """Un appel de consolidation sous budget : (sortie, erreur classée, budget_stop)."""
     response, output, error = _call_structured(
@@ -2285,8 +2590,8 @@ def _consolidation_output(
         system=CONSOLIDATION_SYSTEM,
         prompt=prompt,
         call_type=CONSOLIDATION_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_consolidation,
         model=ConsolidationOutput,
+        n_items=n_items,
     )
     if response is None:
         return None, "budget", True
@@ -2397,6 +2702,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 settings,
                 prompt=build_batch_prompt(chunk),
                 what=f"lot de {len(chunk)} groupe(s)",
+                n_items=len(chunk),
             )
             if budget_stop:
                 unconsolidated += [m for g in chunk for m in g["member_ids"]]
@@ -2456,6 +2762,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 settings,
                 prompt=build_meta_prompt(chunk_f),
                 what=f"méta-consolidation ({len(chunk_f)} famille(s))",
+                n_items=len(chunk_f),
             )
             if output is not None:
                 merged = merge_families_from_meta(output, chunk_f, notes)
@@ -2707,8 +3014,8 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
                 unknowns=unknowns,
             ),
             call_type=COMPARISON_CALL_TYPE,
-            max_tokens=settings.mission_max_tokens_comparison,
             model=ComparisonOutput,
+            n_items=len(compared),
         )
         if response is None:
             run.comparison = {
@@ -2960,7 +3267,6 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
         system=SYNTHESIS_SYSTEM,
         prompt=build_synthesis_prompt(matter=_synthesis_matter(run, residual)),
         call_type=SYNTHESIS_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_synthesis,
         model=RecommendationOutput,
     )
     if response is None:
@@ -3090,7 +3396,6 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
             unknowns=unknowns,
         ),
         call_type=GATE_CALL_TYPE,
-        max_tokens=settings.mission_max_tokens_gate,
         model=GateOutput,
     )
     if response is None:

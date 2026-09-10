@@ -70,6 +70,18 @@ class Settings(BaseSettings):
     mission_max_tokens_synthesis: int = 8000
     mission_max_tokens_gate: int = 2500
     mission_max_tokens_research: int = 4000
+    # B14-prime (O1) — étapes dont la sortie grandit avec l'équipe ou la matière : la limite est
+    # dérivée
+    # du nombre d'éléments demandés (`app/output_budget.py`), jamais en dessous de la limite
+    # historique ci-dessus (plancher), jamais au-dessus de ces plafonds.
+    mission_output_ceiling_self_qualification: int = 4000
+    mission_output_ceiling_clerk: int = 8000
+    mission_output_ceiling_consolidation: int = 8000
+    mission_output_ceiling_comparison: int = 8000
+    # B14-prime (O2) — cardinalité maximale des options proposées par un expert au Tour 0 :
+    # contrat de
+    # sortie explicite qui borne le plan de consolidation (lots, méta-passes) à la composition.
+    mission_max_options_per_expert: int = 5
     # Résilience aux erreurs fournisseur transitoires (B10) : tentatives par appel logique
     # (1 initiale + relances), plafond de relances par mission, attente exponentielle bornée,
     # prise en compte d'un `Retry-After` raisonnable. Une erreur permanente ou locale n'est
