@@ -58,6 +58,9 @@ PROJECT_FEATURES = [
     "project_snapshot_import",
     "mission_framing_otv1_inc1 (cadrage → composition → Tour 0 isolé → cartographie → "
     "rapport de situation candidate, sous plafonds CEO)",
+    "mission_deliberation_otv1_inc2 (confrontation → steelman → recherche ciblée → révision "
+    "sous preuve → familles stratégiques → comparaison → recommandation en 14 champs → porte "
+    "qualité ; les agents recommandent, le CEO décide ; plafonds durs par classe)",
 ]
 
 # Opérations produit **déterministes** (aucun appel LLM), par phase.

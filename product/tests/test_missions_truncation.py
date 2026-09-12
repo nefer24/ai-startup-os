@@ -8,7 +8,7 @@ Reproduit techniquement l'échec observé en évaluation : le fournisseur coupe 
   invalide) ;
 * n'enchaîne pas sur un cadrage fictif : la mission est `failed`, le rapport partiel, la réponse
   brute conservée ;
-* respecte toujours les plafonds de mission (12 appels, 2,00 €) avec les nouvelles marges de sortie.
+* respecte toujours les plafonds durs de la classe avec les marges de sortie par type d'appel.
 
 Fixtures purement synthétiques ; aucun cas réel, aucun banc d'essai.
 """
@@ -22,11 +22,13 @@ from typing import Any
 import pytest
 from app.config import Settings
 from app.llm import LLMClient, LLMResponse, LLMUsage
-from app.mission_budget import BudgetLedger
+from app.mission_budget import BudgetExceededError, BudgetLedger, class_ceilings
 from app.mission_exploration import EXPERT_SYSTEM
 from app.mission_framing import FRAMING_SYSTEM
 from app.mission_schemas import FramingOutput, parse_structured
 from fastapi.testclient import TestClient
+
+from tests.test_missions_otv1 import self_qualification_payload
 
 FRAMING_OK: dict[str, Any] = {
     "problem_understood": "cas synthétique T : texte long pour éprouver la troncature " * 8,
@@ -119,8 +121,24 @@ class FailureModeLLM:
         if call_type == "expert_tour0":
             return self._respond(self.expert_mode, EXPERT_OK, max_tokens)
         if call_type == "self_qualification":
-            return self._respond("ok", {"relations": []}, max_tokens)
-        return self._respond("ok", {"groups": [], "disagreements": []}, max_tokens)
+            return self._respond("ok", self_qualification_payload(prompt, "different"), max_tokens)
+        if call_type == "clerk":
+            return self._respond("ok", {"groups": [], "disagreements": []}, max_tokens)
+        # Incrément 2 : réponses neutres et valides pour les étapes de délibération.
+        return self._respond("ok", NEUTRAL_DELIBERATION[call_type], max_tokens)
+
+
+NEUTRAL_DELIBERATION: dict[str, dict[str, Any]] = {
+    "confrontation": {"acts": [], "convergence_note": "rien à opposer"},
+    "steelman": {"steelman": "x" * 100, "strengths": ["f"], "critique": "c"},
+    "steelman_recognition": {"recognized": "yes"},
+    "steelman_challenge": {"recognized": "yes", "critique": "c"},
+    "revision": {"decision": "maintain"},
+    "consolidation": {"families": []},
+    "comparison": {"criteria": [], "rows": []},
+    "synthesis": {"recommendation": {"kind": "test", "statement": "s"}},
+    "quality_gate": {"passed": True},
+}
 
 
 _CURRENT: dict[str, FailureModeLLM] = {}
@@ -166,14 +184,23 @@ def test_framing_truncated_at_max_tokens_fails_mission_honestly(
     llm = use_llm(FailureModeLLM(framing_mode="truncated"))
     mission = _post(client)
     assert mission["status"] == "failed"
-    assert mission["stop_reason"] == "framing_failed:truncated_output"
+    # B13 : la troncature est une catégorie distincte. B14-prime (F) : le cadrage a une limite fixe
+    # (plancher = plafond) ; une sortie coupée à cette limite n'est pas relancée à l'identique —
+    # refus explicite et motivé, un seul appel, jamais « JSON invalide » tout court, jamais de
+    # complétion locale du contenu manquant.
+    assert mission["stop_reason"] == "structured_output_retry_refused_output_budget"
+    assert mission["failure"]["category"] == "structured_output_truncated"
+    assert mission["failure"]["attempts"] == 1
     assert mission["report"]["partial"] is True
     assert mission["report"]["status"] == "failed"
-    assert mission["report"]["framing_error"].startswith("truncated_output")
+    assert mission["report"]["framing_error"].startswith(
+        "structured_output_retry_refused_output_budget: structured_output_truncated"
+    )
     assert "Unterminated string" in mission["report"]["framing_error"]
-    # Aucun expert n'est consulté sur un cadrage fictif ; le budget n'est pas dépensé pour rien.
+    # Aucun expert n'est consulté sur un cadrage fictif : un appel de cadrage, rien d'autre.
     assert [c["call_type"] for c in llm.calls] == ["framing"]
     assert mission["llm_calls_used"] == 1
+    assert mission["report"]["budget"]["structured_output_retries"] == 0
     # La réponse brute, la raison d'arrêt et les tokens sont conservés pour prouver la cause.
     framing = mission["framing"]
     assert framing["stop_reason"] == "max_tokens"
@@ -182,7 +209,18 @@ def test_framing_truncated_at_max_tokens_fails_mission_honestly(
     assert framing["parsed"] is None
     journal = client.get(f"/missions/{mission['id']}/journal").json()
     failed = next(e for e in journal if e["entry_type"] == "framing_failed")
-    assert failed["payload"]["kind"] == "truncated_output"
+    assert failed["payload"]["kind"] == "structured_output_truncated"
+    invalid = next(e for e in journal if e["entry_type"] == "structured_output_invalid")
+    assert invalid["payload"]["truncated"] is True
+    assert invalid["payload"]["local_recovery_applied"] is False
+    assert invalid["payload"]["will_retry"] is False
+    assert (
+        invalid["payload"]["retry_refusal_reason"]
+        == "structured_output_retry_refused_output_budget"
+    )
+    assert invalid["payload"]["truncation_retry_plan"]["allowed"] is False
+    assert invalid["payload"]["output_budget"]["floor"] == 8000
+    assert invalid["payload"]["output_budget"]["ceiling"] == 8000
     done = next(e for e in journal if e["entry_type"] == "call_done")
     assert done["payload"]["truncated"] is True
     assert done["payload"]["stop_reason"] == "max_tokens"
@@ -196,8 +234,11 @@ def test_framing_invalid_json_without_truncation_is_classified_json_invalid(
     use_llm(FailureModeLLM(framing_mode="invalid"))
     mission = _post(client)
     assert mission["status"] == "failed"
-    assert mission["stop_reason"] == "framing_failed:json_invalid"
-    assert mission["report"]["framing_error"].startswith("json_invalide")
+    assert mission["stop_reason"] == "structured_output_recovery_exhausted"
+    assert mission["failure"]["category"] == "structured_output_parse_error"
+    assert mission["report"]["framing_error"].startswith(
+        "structured_output_recovery_exhausted: structured_output_parse_error: json_invalide"
+    )
     assert "truncated" not in mission["report"]["framing_error"]
     assert mission["framing"]["stop_reason"] == "end_turn"
 
@@ -222,55 +263,87 @@ def test_complete_json_keeps_normal_behaviour(
 def test_expert_truncation_is_labelled_and_mission_continues(
     client: TestClient, use_llm: Callable[..., FailureModeLLM]
 ) -> None:
-    use_llm(FailureModeLLM(expert_mode="truncated"))
+    llm = use_llm(FailureModeLLM(expert_mode="truncated"))
     mission = _post(client)
     assert mission["status"] == "candidate"  # le cadrage est valide ; seuls les exposés ont échoué
     positions = mission["cartography"]["positions"]
     assert positions
-    assert all(p["parse_error"].startswith("truncated_output") for p in positions)
+    # B14-prime (F) : l'exposé a une limite fixe ; une sortie coupée à cette limite n'est pas
+    # relancée à l'identique — un appel par expert, refus explicite et étiqueté.
+    assert all(
+        p["parse_error"].startswith(
+            "structured_output_retry_refused_output_budget: structured_output_truncated"
+        )
+        for p in positions
+    )
+    assert len([c for c in llm.calls if c["call_type"] == "expert_tour0"]) == len(positions)
     assert mission["cartography"]["experts_answered"] == 0
     assert mission["report"]["alternatives"] == []
 
 
 # --- Marges de sortie et budget --------------------------------------------------------------
-def test_output_limits_leave_margin_and_budget_defaults_unchanged() -> None:
+def test_output_limits_leave_margin_and_class_ceilings_are_the_defaults() -> None:
     settings = Settings.model_construct()
-    assert settings.mission_max_llm_calls == 12
-    assert settings.mission_max_cost_eur == 2.0
+    # Incrément 2 : plafonds durs par classe (plus de plafond unique 12 appels / 2 €). Le couloir
+    # de la classe initiale « importante provisoire » est celui d'« importante ».
+    assert class_ceilings(settings, "importante_provisoire") == (30, 3.0)
+    assert class_ceilings(settings, "courante") == (16, 1.5)
+    assert class_ceilings(settings, "structurante") == (60, 8.0)
+    assert class_ceilings(settings, "critique") == (90, 15.0)
     assert settings.mission_max_tokens_framing >= 8000
     assert settings.mission_max_tokens_expert >= 6000
 
 
-def test_worst_case_upper_bounds_fit_in_two_euros() -> None:
-    """Même avec les marges de sortie élargies, une mission complète tient sous le plafond CEO."""
+def test_worst_case_upper_bounds_of_a_full_importante_deliberation_fit_in_the_ceiling() -> None:
+    """Même avec les marges de sortie, une délibération complète tient sous le plafond de classe."""
     settings = Settings.model_construct()
+    max_calls, max_cost = class_ceilings(settings, "importante_provisoire")
     ledger = BudgetLedger(
-        max_calls=settings.mission_max_llm_calls,
-        max_cost_eur=settings.mission_max_cost_eur,
+        max_calls=max_calls,
+        max_cost_eur=max_cost,
         price_in_per_mtok=settings.llm_price_input_eur_per_mtok,
         price_out_per_mtok=settings.llm_price_output_eur_per_mtok,
     )
     long_prompt = "x" * 12_000  # entrée + dossier généreux (≈ 4 000 tokens estimés)
+    # Plan « importante » : 5 experts sur tout le cycle (exposé, auto-qualification,
+    # confrontation, révision), greffier, steelman de contrôle de convergence + reconnaissance,
+    # 3 recherches, consolidation, comparaison, synthèse, porte qualité = 30 appels.
+    experts = 5
     plan = (
         [(FRAMING_SYSTEM, settings.mission_max_tokens_framing)]
-        + [(EXPERT_SYSTEM, settings.mission_max_tokens_expert)] * 5
-        + [("s", settings.mission_max_tokens_self_qualification)] * 5
+        + [(EXPERT_SYSTEM, settings.mission_max_tokens_expert)] * experts
+        + [("s", settings.mission_max_tokens_self_qualification)] * experts
         + [("c", settings.mission_max_tokens_clerk)]
+        + [("conf", settings.mission_max_tokens_confrontation)] * experts
+        + [
+            ("st", settings.mission_max_tokens_steelman),
+            ("rec", settings.mission_max_tokens_recognition),
+        ]
+        + [("res", settings.mission_max_tokens_research)] * settings.mission_max_research_tasks
+        + [("rev", settings.mission_max_tokens_revision)] * (experts - 1)
+        + [
+            ("cons", settings.mission_max_tokens_consolidation),
+            ("comp", settings.mission_max_tokens_comparison),
+            ("syn", settings.mission_max_tokens_synthesis),
+            ("gate", settings.mission_max_tokens_gate),
+        ]
     )
-    assert len(plan) == 12
+    assert len(plan) == 30 == max_calls
     total_upper_bound = sum(
         ledger.estimate_call_cost_eur(system, long_prompt, max_tokens)
         for system, max_tokens in plan
     )
-    assert total_upper_bound < settings.mission_max_cost_eur
-    # Et l'estimation avant appel reste bloquante : un 13e appel est refusé.
+    assert total_upper_bound < max_cost
+    # Et l'estimation avant appel reste bloquante : le 31e appel est refusé.
     for system, max_tokens in plan:
         ledger.check_before_call(
             system=system, prompt=long_prompt, max_tokens=max_tokens, call_type="t"
         )
         ledger.record(LLMUsage(input_tokens=4000, output_tokens=max_tokens // 2))
     assert ledger.remaining_calls == 0
-    assert ledger.cost_eur <= settings.mission_max_cost_eur
+    assert ledger.cost_eur <= max_cost
+    with pytest.raises(BudgetExceededError):
+        ledger.check_before_call(system="s", prompt="p", max_tokens=10, call_type="t")
 
 
 def test_format_instruction_is_the_only_prompt_change() -> None:
@@ -286,22 +359,35 @@ def test_format_instruction_is_the_only_prompt_change() -> None:
 
 # --- Arrêt réel après échec du cadrage (freeze v3.1) ------------------------------------------
 @pytest.mark.parametrize(
-    ("mode", "expected_stop"),
+    ("mode", "expected_category", "expected_reason", "calls"),
     [
-        ("truncated", "framing_failed:truncated_output"),
-        ("invalid", "framing_failed:json_invalid"),
+        (
+            "truncated",
+            "structured_output_truncated",
+            "structured_output_retry_refused_output_budget",
+            1,
+        ),
+        ("invalid", "structured_output_parse_error", "structured_output_recovery_exhausted", 2),
     ],
 )
 def test_framing_failure_stops_everything_without_artificial_composition(
-    client: TestClient, use_llm: Callable[..., FailureModeLLM], mode: str, expected_stop: str
+    client: TestClient,
+    use_llm: Callable[..., FailureModeLLM],
+    mode: str,
+    expected_category: str,
+    expected_reason: str,
+    calls: int,
 ) -> None:
     llm = use_llm(FailureModeLLM(framing_mode=mode))
     mission = _post(client)
     assert mission["status"] == "failed"
-    assert mission["stop_reason"] == expected_stop
-    # Un seul appel LLM : le cadrage. Rien d'autre n'est appelé ni facturé.
-    assert [c["call_type"] for c in llm.calls] == ["framing"]
-    assert mission["llm_calls_used"] == 1
+    assert mission["stop_reason"] == expected_reason
+    assert mission["failure"]["category"] == expected_category
+    # Au plus deux appels LLM : le cadrage et, pour une erreur de syntaxe, sa relance corrective
+    # (B13) ; une troncature à limite fixe n'est pas relancée (B14-prime). Rien d'autre n'est
+    # appelé ni facturé.
+    assert [c["call_type"] for c in llm.calls] == ["framing"] * calls
+    assert mission["llm_calls_used"] == calls
     # Aucune composition fictive persistée, aucun expert, aucune cartographie exploitée.
     assert mission["composition"] is None
     assert mission["report"]["composition"]["cells"] == []
@@ -312,16 +398,15 @@ def test_framing_failure_stops_everything_without_artificial_composition(
     assert mission["report"]["framing_error"]
     assert mission["framing"]["raw"]
     assert mission["framing"]["parsed"] is None
-    # Le journal rend l'arrêt explicite et ne contient aucune étape aval.
+    # Le journal rend l'arrêt explicite (échec structuré terminal) et ne contient aucune étape
+    # aval.
     journal = client.get(f"/missions/{mission['id']}/journal").json()
-    stopped = next(e for e in journal if e["entry_type"] == "stopped_after_framing_failure")
-    assert stopped["payload"]["stop_reason"] == expected_stop
-    assert set(stopped["payload"]["skipped_steps"]) == {
-        "composition",
-        "tour0",
-        "auto_qualification",
-        "greffier",
-    }
+    stopped = next(e for e in journal if e["entry_type"] == "failed_structured_output")
+    assert stopped["payload"]["reason"] == expected_reason
+    assert stopped["payload"]["step"] == "cadrage"
+    assert stopped["payload"]["category"] == expected_category
+    assert stopped["payload"]["structured_output_retries"] == calls - 1
+    assert mission["deliberation"]["stop"]["reason"] == "framing_failed"
     assert not [e for e in journal if e["step"] in {"composition", "tour0"}]
     assert not [e for e in journal if e["step"] in {"auto_qualification", "greffier"}]
     assert not [e for e in journal if e["entry_type"] == "composition_result"]

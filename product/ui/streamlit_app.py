@@ -19,6 +19,7 @@ from typing import Any
 import streamlit as st
 
 from ui.api_client import DEFAULT_API_URL, APIError, SolutionPlansAPIClient
+from ui.mission_state import mission_state_summary
 
 FOUNDING_PHRASE = (
     "Chaque problème, chaque idée ou chaque objectif mérite une équipe d'experts. "
@@ -2243,9 +2244,11 @@ def _guide_list(title: str, rows: list[str]) -> None:
 
 
 MISSION_NOTICE = (
-    "Une mission de cadrage (OT-V1, incrément 1) **comprend, compose, explore et cartographie** ; "
-    "elle ne recommande rien : le rapport de situation reste `candidate` jusqu'à votre action. "
-    "Plafonds par mission : 12 appels LLM et 2,00 € (défauts CEO), arrêt propre si atteints."
+    "Une mission (OT-V1, incréments 1 et 2) **comprend, compose, explore, cartographie, "
+    "confronte, révise sous preuve et recommande** ; les agents recommandent, ils ne décident "
+    "pas : le rapport reste `candidate` jusqu'à votre action, aucune exécution. Plafonds durs "
+    "par classe (courante 16 appels / 1,5 €, importante 30 / 3 €, structurante 60 / 8 €, "
+    "critique 90 / 15 €), surchargeables par mission ; ce sont des plafonds, pas des cibles."
 )
 
 
@@ -2272,39 +2275,123 @@ def render_mission_create(client: SolutionPlansAPIClient) -> None:
             options=["", "courante", "importante", "structurante", "critique"],
             format_func=lambda v: v or "non déclarée",
         )
+        override = st.checkbox(
+            "Surcharger les plafonds de la classe (sinon : plafonds durs de la classe effective)",
+            value=False,
+        )
         col1, col2 = st.columns(2)
         with col1:
-            max_calls = st.number_input("Plafond d'appels LLM", min_value=1, value=12, step=1)
+            max_calls = st.number_input("Plafond d'appels LLM", min_value=1, value=30, step=1)
         with col2:
-            max_cost = st.number_input("Plafond en euros", min_value=0.05, value=2.0, step=0.05)
+            max_cost = st.number_input("Plafond en euros", min_value=0.05, value=3.0, step=0.05)
         submitted = st.form_submit_button("Lancer la mission")
     if not submitted:
         return
     if not input_text.strip():
         st.warning("L'entrée est obligatoire.")
         return
+    payload: dict[str, Any] = {
+        "input_type": input_type,
+        "input_text": input_text,
+        "context_text": context_text,
+        "ceo_preference": ceo_preference,
+        "declared_class": declared_class,
+    }
+    if override:
+        payload["max_llm_calls"] = int(max_calls)
+        payload["max_cost_eur"] = float(max_cost)
     try:
-        with st.spinner("Cadrage → composition → Tour 0 → cartographie…"):
-            mission = client.create_mission(
-                {
-                    "input_type": input_type,
-                    "input_text": input_text,
-                    "context_text": context_text,
-                    "ceo_preference": ceo_preference,
-                    "declared_class": declared_class,
-                    "max_llm_calls": int(max_calls),
-                    "max_cost_eur": float(max_cost),
-                }
-            )
+        with st.spinner(
+            "Cadrage → composition → Tour 0 → cartographie → confrontation → révision → synthèse…"
+        ):
+            mission = client.create_mission(payload)
     except APIError as exc:
-        st.error(str(exc))
+        st.error(
+            str(exc)
+            + "  \nSi la requête a expiré côté interface, la mission peut encore tourner ou avoir "
+            "échoué côté serveur : consultez l'onglet Missions, qui affiche son état réel."
+        )
         return
     st.session_state["selected_mission_id"] = mission["id"]
+    summary = mission_state_summary(mission)
+    if summary["kind"] == "failed":
+        st.error(
+            "**"
+            + summary["headline"]
+            + f" (#{mission['id']})**  \n"
+            + "  \n".join(summary["details"])
+        )
+        return
     st.success(
         f"Mission #{mission['id']} : rapport `{mission['status']}` — "
         f"{mission['llm_calls_used']} appel(s), {mission['cost_eur']:.4f} €"
         + (f" — arrêt : {mission['stop_reason']}" if mission["stop_reason"] else "")
     )
+
+
+def _render_mission_recommendation(mission: dict[str, Any]) -> None:
+    """Encart de la recommandation décisionnelle (incrément 2) — la décision reste au CEO."""
+    rec = mission.get("recommendation") or {}
+    delib = mission.get("deliberation") or {}
+    if rec.get("status") != "produced":
+        stop = (delib.get("stop") or {}).get("reason", "")
+        st.info(
+            "Aucune recommandation produite"
+            + (f" — délibération : {stop}" if stop else " — délibération non réalisée")
+            + ". Les champs non produits sont marqués explicitement dans le rapport."
+        )
+        if delib.get("budget_request"):
+            br = delib["budget_request"]
+            uncovered = br.get("uncovered_critical_dimensions") or []
+            if uncovered:
+                st.warning(
+                    "Dimension(s) critique(s) non couverte(s) : "
+                    + ", ".join(uncovered)
+                    + f" — ≈ {br.get('additional_calls_estimate')} appel(s) supplémentaire(s) "
+                    "seraient nécessaires. La mission s'est arrêtée plutôt que de les ignorer."
+                )
+            else:
+                # B14-prime (E) : arrêt pour délibération non finançable — aucune mention de
+                # dimension critique quand aucune n'est absente.
+                st.warning(
+                    f"Délibération non finançable (détectée à l'étape "
+                    f"« {br.get('detected_at_step', 'deliberation')} ») : "
+                    f"{br.get('remaining_calls')} appel(s) restant(s) pour un cycle minimal "
+                    f"estimé à {br.get('minimal_deliberation_calls')} — déficit ≈ "
+                    f"{br.get('additional_calls_estimate')} appel(s). La mission s'est arrêtée "
+                    "plutôt que de produire une recommandation incomplète."
+                )
+        return
+    body = rec.get("recommendation", {})
+    conf = rec.get("confidence", {})
+    gate = rec.get("gate", {})
+    st.markdown(
+        f"**Recommandation ({body.get('kind', '')})** — {body.get('statement', '')}  \n"
+        f"Confiance : `{conf.get('level', '')}` — {conf.get('justification', '')}  \n"
+        f"Porte qualité : `{gate.get('passed', 'non exécutée')}` — prête pour décision : "
+        f"`{bool(rec.get('decision_ready'))}`"
+        + (" (bloquée par la porte qualité)" if rec.get("quality_blocked") else "")
+        + (" — **arbitrage CEO requis (valeurs)**" if rec.get("ceo_arbitration_required") else "")
+        + (
+            " — décision CEO obligatoire pour la classe"
+            if rec.get("ceo_decision_mandatory_by_class")
+            else ""
+        )
+    )
+    if rec.get("information_insufficient"):
+        st.warning(
+            "Information insuffisante pour décider : la recommandation est de type test/attente."
+        )
+    residual = rec.get("residual_disagreements", [])
+    if residual:
+        with st.expander(f"Désaccords résiduels conservés ({len(residual)})"):
+            for d in residual:
+                st.markdown(
+                    f"- [{d.get('nature')}] {' / '.join(d.get('between', []))} : "
+                    f"{d.get('description')}"
+                )
+    for issue in gate.get("issues", []):
+        st.caption(f"Porte qualité : {issue}")
 
 
 def render_mission_detail(client: SolutionPlansAPIClient) -> None:
@@ -2330,17 +2417,52 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
     )
     try:
         mission = client.get_mission(int(mission_id))
-        markdown = client.get_mission_report_markdown(int(mission_id))["markdown"]
     except APIError as exc:
         st.error(str(exc))
         return
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Statut", mission["status"])
     c2.metric("Appels", f"{mission['llm_calls_used']}/{mission['max_llm_calls']}")
-    c3.metric("Coût (€)", f"{mission['cost_eur']:.4f}")
+    c3.metric("Coût connu (€)", f"{mission['cost_eur']:.4f}")
     c4.metric("Classe", mission["effective_class"])
+    # B12 — le coût connu n'est pas l'exposition : des tentatives fournisseur au coût inconnu sont
+    # comptées comme borne supérieure, et le plafond CEO s'applique à cette borne.
+    budget = (mission.get("report") or {}).get("budget") or {}
+    uncertain = float(budget.get("uncertain_cost_upper_bound_eur", 0.0) or 0.0)
+    if uncertain > 0:
+        potential = float(budget.get("potential_total_cost_upper_bound_eur", 0.0) or 0.0)
+        cap = float(budget.get("max_cost_eur", mission.get("max_cost_eur", 0.0)) or 0.0)
+        st.caption(
+            f"Exposition fournisseur incertaine ≤ {uncertain:.4f} € (borne supérieure sur "
+            f"{int(budget.get('uncertain_attempts', 0) or 0)} tentative(s) échouée(s), pas une "
+            f"facture) · borne totale potentielle ≤ {potential:.4f} € · plafond CEO {cap:.2f} €"
+        )
+    # B11 — l'état de la mission est dit avant toute lecture de rapport : « pas de rapport »
+    # n'implique jamais « encore en cours ». Une mission échouée est annoncée comme telle.
+    summary = mission_state_summary(mission)
+    if summary["kind"] == "failed":
+        st.error("**" + summary["headline"] + "**  \n" + "  \n".join(summary["details"]))
+        with st.expander("Détail technique de l'échec"):
+            st.json(mission.get("failure") or {})
+    elif summary["kind"] == "running":
+        st.info(
+            summary["headline"] + " — " + " ".join(summary["details"]) + " Utilisez « Rafraîchir »."
+        )
+        if st.button("Rafraîchir", key=f"mission_refresh_{mission_id}"):
+            st.rerun()
+        return
+    markdown = ""
+    try:
+        markdown = client.get_mission_report_markdown(int(mission_id))["markdown"]
+    except APIError as exc:
+        if summary["kind"] == "failed":
+            st.caption(f"Aucun rapport (même partiel) pour cette mission échouée : {exc}")
+        else:
+            st.error(str(exc))
+            return
     if mission["stop_reason"]:
         st.warning(f"Rapport partiel — arrêt : {mission['stop_reason']}")
+    _render_mission_recommendation(mission)
     composition = mission.get("composition") or {}
     with st.expander("Composition (dimension → angle → justification)"):
         for cell in composition.get("cells", []):
@@ -2357,13 +2479,14 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
                 f"Borne d'angles par cellule : {bounds.get('max_angles_per_cell')} — "
                 f"{bounds.get('max_angles_per_cell_nature', '')}"
             )
-    st.markdown(markdown)
-    st.download_button(
-        "Télécharger le rapport (.md)",
-        data=markdown,
-        file_name=f"mission_{mission_id}_situation.md",
-        mime="text/markdown",
-    )
+    if markdown:
+        st.markdown(markdown)
+        st.download_button(
+            "Télécharger le rapport (.md)",
+            data=markdown,
+            file_name=f"mission_{mission_id}_situation.md",
+            mime="text/markdown",
+        )
     if mission["status"] != "candidate":
         st.caption("Actions CEO indisponibles : le rapport n'est plus `candidate`.")
         return

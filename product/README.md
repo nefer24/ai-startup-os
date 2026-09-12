@@ -895,21 +895,309 @@ parce qu'il améliore de façon mesurable T02, T04, T05, T06, T10, T13, T14, T23
    budget ; 14 champs présents, ceux non produisibles honnêtement marqués « non encore délibéré ».
    Aucune recommandation. Approbation / révision / rejet = actions CEO explicites, sans exécution.
 
-**Budget (défauts CEO)** : 12 appels LLM et 2,00 € par mission, `max_tokens` par type d'appel
-(plafonds de sortie dimensionnés avec marge : cadrage 8 000, expert 6 000, auto-qualification
-1 500, greffier 3 000 — une sortie coupée à `max_tokens` rend le JSON invalide ; le `stop_reason`
-du fournisseur est journalisé et une panne de cadrage met la mission en `failed` au lieu de
-produire un rapport `candidate` vide),
-**estimation avant chaque appel** et refus/arrêt propre si le plafond pourrait être dépassé, tokens et
-coût réels journalisés (`llm_call_logs` : colonnes `input_tokens`, `output_tokens`, `cost_eur`,
-`call_type`, `mission_id`). Un arrêt produit un **rapport partiel** cohérent.
+**Budget (incrément 1, historique)** : 12 appels LLM et 2,00 € par mission ; remplacé à
+l'incrément 2 par des **plafonds durs par classe** (voir ci-dessous). Inchangés : `max_tokens` par
+type d'appel (plafonds de sortie dimensionnés avec marge : cadrage 8 000, expert 6 000,
+auto-qualification 1 500, greffier 3 000 — une sortie coupée à `max_tokens` rend le JSON invalide ;
+le `stop_reason` du fournisseur est journalisé et une panne de cadrage met la mission en `failed`
+au lieu de produire un rapport `candidate` vide), **estimation avant chaque appel** et refus/arrêt
+propre si le plafond pourrait être dépassé, tokens et coût réels journalisés (`llm_call_logs` :
+colonnes `input_tokens`, `output_tokens`, `cost_eur`, `call_type`, `mission_id`). Un arrêt produit
+un **rapport partiel** cohérent.
 
 **Endpoints** : `POST /missions`, `GET /missions`, `GET /missions/{id}`,
 `GET /missions/{id}/journal`, `GET /missions/{id}/report/markdown`,
 `POST /missions/{id}/approve|request-revision|reject`. Onglet Streamlit « Missions (cadrage) ».
 
-**Ce que l'incrément ne fait pas** : recherche externe, tours de critique, steelman, révision sous
-preuve, porte qualité indépendante, classification automatique complète, exécution d'actions.
+**Ce que l'incrément 1 ne faisait pas** (couvert à l'incrément 2 ci-dessous) : recherche externe,
+tours de critique, steelman, révision sous preuve, porte qualité indépendante. Toujours hors
+périmètre : classification automatique complète, exécution d'actions.
+
+## OT-V1 — Incrément 2 : délibération probante → recommandation décisionnelle
+
+Second incrément construit à rebours des tests d'acceptation : il vise T06, T07, T08, T09, T10 et
+T11 en préservant T02, T04, T05, T12, T13, T14, T15, T23, T25 et T26. Après la cartographie de
+l'incrément 1, la mission enchaîne (`app/missions.py`, prompts et règles déterministes dans
+`app/mission_deliberation.py`, recherche dans `app/mission_research.py`) :
+
+1. **Confrontation** — chaque expert voit la carte (positions anonymisées P1…Pn, hypothèses,
+   objections, inconnues, preuves, options) et produit des **actes adressés à une position
+   identifiable** : `critique`, `defend`, `complement`, `refute`, `third_way`, ou `none`
+   (légitime : une convergence déclarée n'est pas un désaccord fabriqué). Les actes d'objection
+   forment un registre (`OBJ-n`, statut `open` / `addressed` / `inadmissible_strawman`). Aucune
+   instance multi-persona : un appel = une perspective.
+2. **Steelman** — requis pour `structurante` / `critique`, ou en cas de **convergence prématurée**
+   (aucune objection, divergence nulle, classe ≥ importante). Un contradicteur désigné **hors de la
+   position dominante** (angle critique de préférence) reconstruit la meilleure version de la
+   position, puis, séparément, ses scénarios d'échec et sa critique ; le tenant **reconnaît** (ou
+   non) la reformulation. Contrôles déterministes de strawman (trop court, sans force attribuée,
+   identique à la critique, vocabulaire dépréciatif) + reconnaissance `no` ⇒ `rejected_strawman` :
+   la critique devient inadmissible et la porte qualité échoue sur `steelman_done_if_required`.
+3. **Recherche ciblée** — déclenchée **uniquement** lorsqu'un acte de confrontation dépend d'un
+   fait vérifiable (`depends_on_fact` + `fact_question`) ou qu'une objection typée « fait » du
+   Tour 0 le demande ; questions dédoublonnées et plafonnées (`MISSION_MAX_RESEARCH_TASKS`).
+   Capacité générique derrière un **fournisseur remplaçable** (`MISSION_RESEARCH_PROVIDER` :
+   `none` par défaut = recherche déclarée indisponible, aucun appel, aucun coût ;
+   `anthropic_web_search` = outil web du fournisseur, résultats limités aux citations réelles).
+   Chaque résultat conserve question, source, date, extrait, fiabilité (`unknown` tant qu'aucune
+   règle ne la qualifie — jamais inventée), claim et positions concernées ; provenance des preuves
+   étiquetée `ceo_input` / `external` / `model_knowledge` / `inference` / `hypothesis`.
+   **Intégrité sémantique** : des documents ne sont pas une réponse. Le statut est déterministe :
+   `found` exige des sources **et** un verdict explicite du fournisseur (`answer_found`) ; sinon
+   `not_found` motivé (documents sans réponse matérielle, ou sans verdict),
+   `requires_internal_data`, `error`, `unavailable`. Seule une preuve `found` atteint une révision,
+   et seulement les positions qu'elle concerne.
+4. **Révision** — seuls les experts ayant reçu une **information nouvelle** (objection adressée,
+   critique de steelman reconnue, preuve trouvée) sont appelés ; décision `maintain` / `modify` /
+   `nuance` / `abandon` avec la cause (`triggered_by`) et la trace position initiale → révisée.
+   Le Tour 0 reste immuable dans la cartographie. Un changement sans cause est marqué
+   `unexplained_change` ; jamais d'optimisation vers le changement d'avis.
+5. **Consolidation** (`app/mission_consolidation.py`) — jamais d'appel monolithique, et la
+   nature (`kind`) est un **signal, pas une frontière** : **précompression** déterministe des
+   doublons exacts de natures compatibles (égales ou `other`), **lots bornés inter-natures**
+   (16 groupes triés par libellé, représentation compacte), **méta-consolidation** bornée pouvant
+   réunir des familles équivalentes entre natures compatibles ; chaque famille porte
+   `canonical_kind` et `source_kinds`. Garde déterministe : action (`build` / `buy` / `integrate`
+   / `simplify` / `test`) et non-action (`wait` / `do_nothing`) ne se fusionnent jamais ; deux
+   natures concrètes différentes sous un même libellé ne sont jamais fusionnées d'office (le
+   greffier juge). Relance bornée (une par lot, lot scindé, journalisée, financée seulement si les
+   étapes plus prioritaires restent finançables). Variantes, désaccords intra-famille et
+   non-fusions motivées conservés ; trace atomique → famille complète. Après échec : options
+   **non consolidées** listées, `status = failed`, **jamais** de repli « chaque option devient une
+   famille » ; la porte qualité bloque alors la recommandation.
+6. **Comparaison** — **couverture stratégique protégée à chaque tentative**, sous un **plafond
+   dur de 12** : d'abord les familles individuellement indispensables (*hard* : citées dans la
+   demande / le cadrage / la préférence CEO, désaccord interne unique), puis **une** famille par
+   exigence de représentation (chaque nature, chaque dimension critique, non-action / attente,
+   minorité matérielle, désaccord interne, stratégie multi-dimensionnelle — appartenir au groupe
+   ne rend pas la famille obligatoire ; jamais de mots-clés métier), puis les facultatives par
+   soutien ; les autres sont listées « non comparées » avec motif et chaque famille porte son rôle
+   et ses raisons dans le journal (`selection`). Si les *hard* dépassent 12 : conflit déclaré,
+   aucune tentative, `failed`, porte bloquée.
+   Critères communs (noyau : résultat attendu, coût, délai, risque, réversibilité, dépendances,
+   preuves, inconnues), chaque appréciation qualitative avec sa **base**. Schéma **sans score ni
+   rang** (testé). Relance compacte bornée et **stratifiée** (n'écarte que des facultatives ;
+   refusée si la couverture ne laisse aucune marge ou si synthèse et porte ne resteraient pas
+   finançables). `status = ok` seulement si chaque famille retenue est évaluée sur tous les
+   critères et que toutes les obligatoires figurent dans la tentative valide ; sinon `partial` /
+   `failed`, cause explicite, porte bloquée.
+7. **Synthèse en 14 champs** — synthétiseur distinct des perspectives : problème compris, objectif,
+   contraintes, hypothèses, options examinées, preuves étiquetées, arguments pour / contre,
+   risques, recommandation (`build` / `buy` / `integrate` / `simplify` / `test` / `wait` /
+   `do_nothing` / `abandon` / `other` — jamais obligé de recommander de construire), confiance
+   justifiée, désaccords résiduels, conditions de changement, prochaine action,
+   `information_insufficient`. Les désaccords résiduels du facilitateur sont **réinjectés
+   déterministement** : la synthèse ne peut pas les faire disparaître ; un désaccord de **valeurs**
+   lève `ceo_arbitration_required`.
+8. **Porte qualité** — instance distincte : `conclusion_follows_options`, `evidence_labeled`,
+   `minorities_preserved`, `steelman_done_if_required`, `no_forced_consensus`, `honest_about_gaps`
+   ; les contrôles déterministes priment sur l'avis de l'instance. **Fail-closed** sur l'intégrité
+   du pipeline : confrontation valide ∧ steelman valide si requis ∧ consolidation valide ∧
+   comparaison valide ∧ synthèse valide ; toute étape invalide ⇒ `gate.passed = false`,
+   `quality_blocked = true`, `decision_ready = false`, cause `upstream_stage_failed:<étape>`, la
+   recommandation restant conservée pour audit. `decision_ready = gate.passed ∧
+   ¬information_insufficient`.
+
+**Gouvernance (Décision 026)** : les agents **recommandent**, ils ne décident jamais
+(`requires_ceo_decision = true`) ; `structurante` / `critique` ⇒ décision CEO obligatoire ; le
+rapport reste `candidate` ; aucune exécution, aucune chaîne Capability → Tool → Execution.
+
+**Budget adaptatif** : plafonds **durs** par classe, configurables (`MISSION_CEILING_CALLS_*`,
+`MISSION_CEILING_COST_*` ; défauts : courante 16 appels / 1,50 €, importante 30 / 3 €,
+structurante 60 / 8 €, critique 90 / 15 € — **écart déclaré** par rapport aux a priori du
+document canonique §6.1 pour `courante` et `importante`, à ratifier ou corriger par le CEO) ;
+surcharge CEO par mission **absolue** (l'escalade de classe ne la relève pas) ; sinon l'escalade au
+cadrage relève les plafonds jusqu'au couloir de la nouvelle classe. Plan à deux niveaux à la
+composition : `full_deliberation` (3 appels planifiés par expert + étapes transverses) ou
+`coverage_first` (la largeur du Tour 0 prime, la délibération ira aussi loin que possible).
+Cycle minimal vérifié avant de délibérer (une confrontation par position + cœur nominal :
+consolidation planifiée en lots, comparaison, synthèse, porte), sinon arrêt explicite
+`deliberation_budget_insufficient` avec **demande de budget chiffrée**. **Hiérarchie de
+protection** : porte qualité > synthèse > comparaison valide > consolidation valide > relance de
+comparaison > relance de consolidation > révisions > recherche > profondeur. Steelman, recherche et
+révision ne sont financés qu'au-delà du **pire cas borné** du cœur (nominal + relances autorisées,
+`budget_reserved_for_synthesis`) ; une relance n'est financée que si les étapes plus prioritaires
+restent finançables (`retry_refused_budget`, statut `failed` explicite, porte exécutée). La porte
+qualité ne peut plus être sacrifiée à une relance.
+
+**Résilience fournisseur (B10)** : une erreur que le fournisseur expose comme transitoire (429,
+529, 5xx, surcharge, coupure réseau) est relancée avec attente exponentielle bornée ou
+`Retry-After` plafonné — au plus 3 tentatives par appel logique et 6 relances par mission
+(`MISSION_PROVIDER_*`) ; une erreur permanente (authentification, requête invalide, modèle
+inexistant), locale (validation, contrat) ou inconnue n'est jamais relancée. `llm_calls_used`
+compte les appels logiques réussis ; tentatives, relances et échecs sont comptés à part et
+journalisés par tentative. Une tentative échouée ne consomme aucun appel : les réserves en appels du
+cœur (B8) restent intactes ; son coût suit la sémantique B12 ci-dessous. Après épuisement : mission
+`failed`, `stop_reason`
+`transient_retries_exhausted` (ou `permanent_provider_error`), échec structuré `failure` (étape,
+acteur, tentatives, catégorie, code), données déjà produites conservées, rapport diagnostic
+partiel, aucune recommandation.
+
+**Coût des tentatives fournisseur (B12)** : trois plafonds distincts — appels logiques réussis
+(`max_llm_calls`), relances physiques (`MISSION_PROVIDER_*`) et plafond financier conservateur.
+Une tentative échouée sans usage rapporté n'est jamais supposée gratuite si elle a pu être traitée :
+un **rejet explicite avant traitement** (429, 529, 408, 425, 4xx permanents, types
+`overloaded_error` / `rate_limit_error` / authentification…) vaut `known_zero` — assertion forte,
+réservée aux cas où le système a une base explicite, jamais déduite d'un statut ambigu ; un **échec
+ambigu** (délai, coupure, réponse perdue, 500 / 502 / 503 / 504, `service_unavailable`, erreur
+inconnue ou locale dans la frontière d'appel) vaut `uncertain` (B12.1 : un 503 générique est
+relançable techniquement mais financièrement incertain ; un adaptateur peut porter une garantie
+explicite `rejected_before_processing` qui prime) et ajoute la **borne pré-appel** de l'appel à
+`uncertain_cost_upper_bound_eur` (exposition potentielle, jamais présentée comme facturée) ; un usage
+réel exposé par l'exception vaut `known` et entre dans le coût connu. Le budget distingue
+`known_cost_eur` (observé), `uncertain_cost_upper_bound_eur` et
+`potential_total_cost_upper_bound_eur` (= connu + incertain) ; le plafond CEO `max_cost_eur`
+s'applique à cette borne pour **tout** appel (obligatoire compris) et pour toute relance :
+`connu + incertain + estimation ≤ plafond` (égalité admise), sinon aucune relance,
+`retry_refused_uncertain_cost_budget`, mission `failed`, `decision_ready = false`. Chaque tentative
+échouée journalise `cost_semantics`, coût connu, exposition, borne, estimation de relance, plafond,
+`retry_allowed_by_cost` et la raison d'un refus ; les expositions sont conservées individuellement
+(non réconciliées) pour qu'une réconciliation future remplace la borne au lieu de l'additionner. Le
+rapport et l'interface affichent « coût connu · exposition incertaine ≤ · borne supérieure
+potentielle ≤ · plafond CEO ».
+
+**Sortie structurée (B13)** : couche générique (`app/structured_output.py`, `_call_structured`)
+pour **tous** les appels à contrat JSON (cadrage, exposés, auto-qualification, greffier,
+confrontation, steelman, reconnaissance, révision, consolidation, comparaison, synthèse, porte).
+Distincte de B10 (erreurs fournisseur) : elle gouverne ce qui arrive **après** une réponse obtenue.
+Taxonomie par tentative : `structured_output_empty`, `structured_output_truncated`
+(`stop_reason = max_tokens` observé), `structured_output_parse_error` (syntaxe, enveloppe non
+récupérable, plusieurs objets candidats), `structured_output_schema_error` (racine non objet, champ
+obligatoire absent, type incorrect) ; états terminaux `structured_output_recovery_exhausted` et
+`structured_output_retry_refused_budget`. **Récupération locale déterministe** (gratuite) : retrait
+d'un code fence, isolement de l'unique objet JSON complet d'un texte enveloppant (scanner
+respectant chaînes et échappements) ; jamais d'invention de champ, de complétion d'une troncature ni
+de choix entre plusieurs objets ; validation stricte avec exactement le même schéma. **Une relance
+corrective LLM au plus** par appel logique structuré (demande d'origine + bloc de correction :
+catégorie, message de validation borné, contrat attendu, interdiction d'inventer ; même
+`max_tokens`, sauf troncature : limite recalculée ou refus, voir B14-prime), financée seulement si
+`max_llm_calls`, coût connu + exposition incertaine (B12) et réserve de l'étape le permettent
+(cadrage : aucune réserve ; étapes préalables — Tour 0, auto-qualification, greffier — : réserve de
+délibération B14-prime, à défaut pire cas du cœur ; synthèse : la porte ; consolidation et
+comparaison : relance B13 désactivée car elles possèdent déjà une relance bornée propre). Compteurs : `llm_calls_used` compte tout appel
+logique réussi côté fournisseur, relance corrective comprise (un vrai appel, jamais masqué) ;
+`structured_output_failures` / `_recoveries` / `_retries` / `_exhausted` s'ajoutent à
+`provider_attempts` / `provider_retries` (B10) sans redéfinition. Journal sanitisé par tentative
+(`structured_output_invalid`, `_recovered`, `_retry_planned`, `_retry_result` : catégorie, parse /
+schéma, troncature oui / non / inconnue, récupération locale, relance, raison de refus, estimation,
+plafonds, extraits bornés à 120 caractères). Après épuisement sur le **cadrage** : mission `failed`
+immédiate (`failure` : raison, catégorie, tentatives 2 / 2), rapport diagnostic partiel, aucune
+composition ni recommandation ; sur une autre étape : comportement partiel existant (perspective
+non exploitée, veto d'intégrité de la porte). L'interface B11 affiche « sortie structurée invalide
+après récupération bornée ».
+
+**Budget de sortie et réserve de délibération (B14-prime)** : quatre correctifs liés au post-mortem
+de Mission #8 (16 positions, auto-qualifications coupées ou vides à 1 500 tokens, 18 relances B13,
+arrêt `deliberation_budget_insufficient` après 52 appels sur 60 sans une seule confrontation).
+(1) **Limites de sortie proportionnées** (`app/output_budget.py`) pour les étapes à cardinalité
+variable — auto-qualification, greffier, consolidation, comparaison :
+`required = ceil((base + per_item x n_items) x 1,5)`, `granted = min(ceiling, max(floor, required))`,
+`floor` = limite historique de l'étape (aucune régression pour les petites équipes), `ceiling` =
+plafond configurable (`MISSION_OUTPUT_CEILING_*` : 4 000 / 8 000) ; formule journalisée dans
+`call_planned.output_budget` avec `number_of_required_items` ; aucun facteur empirique de tokens
+non textuels, aucun doublement arbitraire. (2) **Réserve de composition prouvable**
+(`minimal_deliberation_bound`, `feasible_expert_count`) : le nombre d'experts retenu est le plus
+grand `n` tel que `pré-délibération (2n) + cycle minimal (n confrontations + cœur borné + steelman
+si la classe l'impose) ≤ appels restants`, le cœur borné (`consolidation_core_bound`) étant dérivé
+du **maximum d'options par expert** (`MISSION_MAX_OPTIONS_PER_EXPERT = 5`, appliqué au Tour 0 :
+options excédentaires journalisées `options_capped`, jamais inventées) — plus aucune moyenne
+empirique ni `reserved_downstream_calls`. Une équipe qui ne peut pas délibérer n'est pas engagée :
+arrêt `deliberation_budget_insufficient` **à la composition** (`detected_at_step = composition`),
+zéro exposé payé pour rien. (3) **Plan réel après le Tour 0** (`_plan_deliberation_core`) : sur les
+options réelles, réserve `= positions + cœur nominal + steelman obligatoire`, journal
+`deliberation_core_planned` ; l'auto-qualification (appel sauté → relation `None`, cartographie
+`divergence_index_partial`, `self_qualification_coverage`), le greffier (sauté → cartographie sans
+regroupement) et toute relance B13 pré-délibération (`structured_output_retry_refused_deliberation_reserve`)
+s'effacent devant cette réserve : aucune relation inventée, mission poursuivie. (4) **Relance après
+troncature** (`plan_truncation_retry`) : jamais à l'identique ; limite recalculée par extrapolation
+déterministe sur les éléments complets observés (marge 1,25), ou plafond de l'étape si aucun
+élément complet, ou refus explicite (`structured_output_retry_refused_output_budget`) si le plafond
+est déjà atteint ; une seule relance B13 au plus. **Observabilité des blocs** : `call_done`
+journalise `content_blocks` (compte par type), `text_blocks`, `non_text_blocks`, `text_chars`,
+`output_tokens_per_text_char` — métadonnées seulement, jamais le contenu d'un bloc non textuel ni
+un raisonnement privé. **Gabarit** : « dimensions critiques non couvertes » seulement si la liste
+est non vide ; sinon « appels restants / cycle minimal / déficit / étape de détection ».
+
+**Réserve unique, politique de raisonnement, steelman de l'alternative écartée, preuve avant
+majorité (v1.3.6 — B15 / B16 / B17 / E1)** : correctifs du post-mortem de Mission #9 (15 positions,
+59 appels / 60, steelman sauté, aucune révision, consolidation puis comparaison coupées, 44 réponses
+sur 59 portant des blocs de raisonnement dont 5 sans aucun texte). (1) **B15 — une seule réserve**
+(`deliberation_reserve`) : confrontation (une par position) + steelman obligatoire (2 pour
+structurante / critique) + **allocation de révisions** (`revision_allowance = min(8, ⌈n/2⌉)`,
+`MISSION_MAX_REVISION_CALLS`) + consolidation (lots + méta-passes) + comparaison + synthèse + porte ;
+la même formule sert à la composition (`minimal_deliberation_bound` = exposés + auto-qualification
+groupée + réserve), au plan réel après le Tour 0 et à **toutes** les portes de dépense
+(`_reserve_remaining`, composante consommée par l'étape qui l'exécute, relâchée si elle ne l'utilise
+pas). `plan_feasible` est une promesse tenue : à la borne exacte, steelman requis, révisions
+réservées et porte sont exécutés (tests A/B). Les relances propres (lot scindé, comparaison
+compacte) et les relances B13 ne peuvent jamais entamer ce qui reste dû aux étapes obligatoires.
+(2) **§6 — auto-qualification proportionnée** : `g` positions qualifiées par appel
+(`MISSION_SELF_QUALIFICATION_GROUP_MAX = 3`, `g` dérivé du plafond de sortie relevé à 6 000),
+attribution par `from_id`, relation manquante déclarée par position (jamais inventée), `g = 1`
+= comportement historique. (3) **B16 — politique de raisonnement explicite**
+(`app/reasoning_policy.py`) : catégorie **A** (cadrage, exposés, confrontation, steelman et ses
+appels, révision, synthèse : raisonnement adaptatif, effort `high`), **B** (comparaison, porte :
+adaptatif, effort `medium`, marge de sortie 1 500 tokens), **C** (auto-qualification, greffier,
+consolidation : effort `low`, marge 500, raisonnement désactivable par `MISSION_REASONING_THINKING_C`
+seulement) ; transmise à l'API (`thinking`, `output_config.effort`) par l'adapter, journalisée dans
+`call_planned.reasoning_policy` et `call_done.reasoning_policy_applied` ; le contenu des blocs de
+raisonnement n'est jamais lu ni journalisé ; **jamais** la règle « sortie JSON = raisonnement
+coupé », jamais un doublement arbitraire de `max_tokens`. (4) **§8 — résilience consolidation /
+comparaison** : une sortie coupée est relancée **une fois à limite recalculée** (B13) sur le même
+périmètre ; si la relance est coupée aussi, **récupération déterministe des éléments complets**
+(`salvage_truncated_json` : tableau tronqué → éléments intégralement fermés, jamais de complétion)
+validée par le même schéma → statut `partial` avec options non consolidées / familles non évaluées
+**déclarées** ; la scission de lot et la compaction restent réservées aux erreurs de schéma ;
+`llm_calls_spent` compte tous les appels réellement dépensés. (5) **B17 — steelman de l'alternative
+écartée** : pour structurante / critique, si la demande met explicitement une alternative sur la
+table (`explicit_proposals` du cadrage, ou libellé d'option fortement recoupé par la demande) et
+qu'aucune position ne la défend, le steelman porte sur elle (avocat désigné, contradicteur distinct,
+`steelman_challenge` avec reconnaissance et scénarios d'échec ; `mode = discarded_alternative`) au
+lieu de renforcer la position dominante. (6) **§7 — distinctivité** : en réduction budgétaire, un
+angle déjà porté par une autre cellule est retiré avant tout angle unique
+(`duplicate_angles_removed`). (7) **§9 — recherche interne / externe** : `fact_source` déclaré par
+la perspective, repli lexical déterministe ; une donnée interne devient une **information à
+demander au demandeur** (`internal_data_required`, section dédiée du rapport, aucun appel web) ;
+sans fournisseur, une question externe est `unavailable_external`. (8) **E1 / §10 — la preuve
+prime sur la majorité** : consignes de synthèse et de porte ; garde déterministe
+`consensus_as_evidence` sur `rationale` et `confidence.justification` (convergence + connecteur de
+justification sans séparation explicite → `no_consensus_as_evidence = false`, porte fermée) ;
+`recommended_family_compared` exige une ligne évaluée pour la famille recommandée **et** les
+familles obligatoires retenues (exception : test / attente motivée par une information
+insuffisante, sans prétention de supériorité). Plafonds 60 appels / 8 € inchangés.
+
+**État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
+`GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec
+`detail.state` = `running` ou `failed` (+ `failure`), 404 si inexistante. L'interface annonce
+« MISSION ÉCHOUÉE » (étape, cause, tentatives, statut, « inutile d'attendre ») avant toute lecture
+de rapport et n'interroge une mission que jusqu'à un état terminal (`wait_for_mission`, borné).
+
+**Garde-fou épistémique** : les hypothèses de la demande et des experts sont étiquetées
+(`calcul conditionnel` / `hypothèse comportementale` / `inconnue déclarée` / `prévision` /
+`affirmation`) dans la matière soumise aux instances, et la règle est explicite dans les consignes
+de confrontation et de synthèse : un calcul conditionnel (« X si Y ») est valide sous sa condition
+et n'est jamais requalifié en erreur ; seule une hypothèse comportementale (« parce que Y restera
+vrai ») est contestable comme telle ; une inconnue déclarée reste un scénario conditionnel. **Dimension critique non couverte** ⇒ arrêt
+`critical_dimension_uncovered` + demande de budget, jamais une fausse couverture. Aucune relance
+illimitée ; un refus = un arrêt propre + rapport partiel.
+
+**Arrêt de la délibération** (`deliberation.stop.reason`) : `converged`, `no_new_information`,
+`residual_only`, `ceo_decision_needed` (valeurs), `missing_external_info`, `budget`,
+`framing_failed`, `not_deliberated`.
+
+**Journal** : chaque appel (`call_planned` avec prompt complet et SHA-256, `call_done` avec tokens,
+coût, `stop_reason`), chaque acte, steelman / reconnaissance, recherche, révision, consolidation,
+comparaison, synthèse, porte, sauts d'étape et refus budgétaires.
+
+**Artefacts** : `Mission.deliberation_json`, `Mission.recommendation_json` (colonnes nullable
+ajoutées au démarrage) ; `GET /missions/{id}` expose `deliberation` et `recommendation` ; le
+rapport de situation remplit les 14 champs à partir de la recommandation lorsqu'elle existe
+(sinon marqueurs explicites) et ajoute les sections « Délibération (trace) », « Familles
+stratégiques et comparaison » ; encart de recommandation dans l'onglet Streamlit.
+
+**Ce que l'incrément 2 ne fait pas** : classification automatique complète (T16), protocole de
+profondeur, exécution d'actions, mémoire inter-missions, fournisseur de recherche autre que
+l'outil web du fournisseur (non exercé en CI : aucun réseau).
 
 **Client LLM** : `complete(prompt)` inchangé pour les phases 0–18 ; nouveau chemin
 `complete_structured(system, prompt, call_type, max_tokens)` retournant l'usage. Barème de coût
