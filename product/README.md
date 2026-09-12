@@ -1118,6 +1118,54 @@ journalise `content_blocks` (compte par type), `text_blocks`, `non_text_blocks`,
 un raisonnement privé. **Gabarit** : « dimensions critiques non couvertes » seulement si la liste
 est non vide ; sinon « appels restants / cycle minimal / déficit / étape de détection ».
 
+**Réserve unique, politique de raisonnement, steelman de l'alternative écartée, preuve avant
+majorité (v1.3.6 — B15 / B16 / B17 / E1)** : correctifs du post-mortem de Mission #9 (15 positions,
+59 appels / 60, steelman sauté, aucune révision, consolidation puis comparaison coupées, 44 réponses
+sur 59 portant des blocs de raisonnement dont 5 sans aucun texte). (1) **B15 — une seule réserve**
+(`deliberation_reserve`) : confrontation (une par position) + steelman obligatoire (2 pour
+structurante / critique) + **allocation de révisions** (`revision_allowance = min(8, ⌈n/2⌉)`,
+`MISSION_MAX_REVISION_CALLS`) + consolidation (lots + méta-passes) + comparaison + synthèse + porte ;
+la même formule sert à la composition (`minimal_deliberation_bound` = exposés + auto-qualification
+groupée + réserve), au plan réel après le Tour 0 et à **toutes** les portes de dépense
+(`_reserve_remaining`, composante consommée par l'étape qui l'exécute, relâchée si elle ne l'utilise
+pas). `plan_feasible` est une promesse tenue : à la borne exacte, steelman requis, révisions
+réservées et porte sont exécutés (tests A/B). Les relances propres (lot scindé, comparaison
+compacte) et les relances B13 ne peuvent jamais entamer ce qui reste dû aux étapes obligatoires.
+(2) **§6 — auto-qualification proportionnée** : `g` positions qualifiées par appel
+(`MISSION_SELF_QUALIFICATION_GROUP_MAX = 3`, `g` dérivé du plafond de sortie relevé à 6 000),
+attribution par `from_id`, relation manquante déclarée par position (jamais inventée), `g = 1`
+= comportement historique. (3) **B16 — politique de raisonnement explicite**
+(`app/reasoning_policy.py`) : catégorie **A** (cadrage, exposés, confrontation, steelman et ses
+appels, révision, synthèse : raisonnement adaptatif, effort `high`), **B** (comparaison, porte :
+adaptatif, effort `medium`, marge de sortie 1 500 tokens), **C** (auto-qualification, greffier,
+consolidation : effort `low`, marge 500, raisonnement désactivable par `MISSION_REASONING_THINKING_C`
+seulement) ; transmise à l'API (`thinking`, `output_config.effort`) par l'adapter, journalisée dans
+`call_planned.reasoning_policy` et `call_done.reasoning_policy_applied` ; le contenu des blocs de
+raisonnement n'est jamais lu ni journalisé ; **jamais** la règle « sortie JSON = raisonnement
+coupé », jamais un doublement arbitraire de `max_tokens`. (4) **§8 — résilience consolidation /
+comparaison** : une sortie coupée est relancée **une fois à limite recalculée** (B13) sur le même
+périmètre ; si la relance est coupée aussi, **récupération déterministe des éléments complets**
+(`salvage_truncated_json` : tableau tronqué → éléments intégralement fermés, jamais de complétion)
+validée par le même schéma → statut `partial` avec options non consolidées / familles non évaluées
+**déclarées** ; la scission de lot et la compaction restent réservées aux erreurs de schéma ;
+`llm_calls_spent` compte tous les appels réellement dépensés. (5) **B17 — steelman de l'alternative
+écartée** : pour structurante / critique, si la demande met explicitement une alternative sur la
+table (`explicit_proposals` du cadrage, ou libellé d'option fortement recoupé par la demande) et
+qu'aucune position ne la défend, le steelman porte sur elle (avocat désigné, contradicteur distinct,
+`steelman_challenge` avec reconnaissance et scénarios d'échec ; `mode = discarded_alternative`) au
+lieu de renforcer la position dominante. (6) **§7 — distinctivité** : en réduction budgétaire, un
+angle déjà porté par une autre cellule est retiré avant tout angle unique
+(`duplicate_angles_removed`). (7) **§9 — recherche interne / externe** : `fact_source` déclaré par
+la perspective, repli lexical déterministe ; une donnée interne devient une **information à
+demander au demandeur** (`internal_data_required`, section dédiée du rapport, aucun appel web) ;
+sans fournisseur, une question externe est `unavailable_external`. (8) **E1 / §10 — la preuve
+prime sur la majorité** : consignes de synthèse et de porte ; garde déterministe
+`consensus_as_evidence` sur `rationale` et `confidence.justification` (convergence + connecteur de
+justification sans séparation explicite → `no_consensus_as_evidence = false`, porte fermée) ;
+`recommended_family_compared` exige une ligne évaluée pour la famille recommandée **et** les
+familles obligatoires retenues (exception : test / attente motivée par une information
+insuffisante, sans prétention de supériorité). Plafonds 60 appels / 8 € inchangés.
+
 **État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
 `GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec
 `detail.state` = `running` ou `failed` (+ `failure`), 404 si inexistante. L'interface annonce

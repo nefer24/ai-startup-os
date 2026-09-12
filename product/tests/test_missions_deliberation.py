@@ -40,6 +40,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.test_missions_otv1 import self_qualification_payload
+
 # --- Fixtures abstraites -------------------------------------------------------------------------
 THREE_DIM_FRAMING: dict[str, Any] = {
     "problem_understood": "cas synthétique D : trois dimensions de faible criticité",
@@ -121,6 +123,15 @@ GOOD_STEELMAN: dict[str, Any] = {
     ],
     "critique": "La position sous-estime le délai : le coût du retard n'est pas chiffré.",
 }
+GOOD_CHALLENGE: dict[str, Any] = {
+    "recognized": "yes",
+    "missing_points": [],
+    "critique": (
+        "L'alternative écartée suppose un tiers disponible au bon moment : rien dans l'exposé "
+        "n'établit cette disponibilité, et son coût de sortie n'est pas chiffré."
+    ),
+    "failure_scenarios": ["le tiers n'est pas disponible dans le délai"],
+}
 STRAWMAN_SHORT: dict[str, Any] = {
     "target": "P1",
     "steelman": "P1 veut construire, c'est naïf.",
@@ -193,6 +204,7 @@ class DeliberationLLM:
         confrontation: dict[str, dict[str, Any]] | None = None,
         steelman: dict[str, Any] | None = None,
         recognition: dict[str, Any] | None = None,
+        challenge: dict[str, Any] | None = None,
         revision: dict[str, dict[str, Any]] | None = None,
         consolidation: ScriptValue | None = None,
         comparison: ScriptValue | None = None,
@@ -206,6 +218,7 @@ class DeliberationLLM:
         self.confrontation = confrontation or {}
         self.steelman = steelman or GOOD_STEELMAN
         self.recognition = recognition or {"recognized": "yes", "missing_points": []}
+        self.challenge = challenge or GOOD_CHALLENGE
         self.revision = revision or {}
         self.consolidation = consolidation
         self.comparison = comparison
@@ -264,16 +277,7 @@ class DeliberationLLM:
             )
             payload = expert_output(expert_id, self.options)
         elif call_type == "self_qualification":
-            others = [
-                line.split(" : ")[0].strip("- ").strip()
-                for line in prompt.splitlines()
-                if line.startswith("- P")
-            ]
-            payload = {
-                "relations": [
-                    {"other_id": o, "relation": self.relation, "reason": "abstrait"} for o in others
-                ]
-            }
+            payload = self_qualification_payload(prompt, self.relation)
         elif call_type == "clerk":
             payload = {"groups": [], "disagreements": []}
         elif call_type == "confrontation":
@@ -282,6 +286,8 @@ class DeliberationLLM:
             payload = self.steelman
         elif call_type == "steelman_recognition":
             payload = self.recognition
+        elif call_type == "steelman_challenge":
+            payload = self.challenge
         elif call_type == "revision":
             payload = self.revision.get(
                 label, {"decision": "maintain", "reason": "rien de nouveau", "triggered_by": []}
@@ -422,6 +428,26 @@ def truncate_first(n_calls: int, fallback: Callable[[str, str], dict[str, Any]])
         state["calls"] += 1
         if state["calls"] <= n_calls:
             return {"__raw__": '{"families": [{"family_id": "F1", "la', "__stop__": "max_tokens"}
+        return fallback(label, prompt)
+
+    return script
+
+
+def schema_error_first(n_calls: int, fallback: Callable[[str, str], dict[str, Any]]) -> Any:
+    """Script dont les `n_calls` premiers appels rendent un JSON complet mais hors schéma (arrêt
+    normal du modèle : ce n'est PAS une troncature). v1.3.6 : une sortie coupée est relancée à
+    limite recalculée (B13) ; seule une sortie invalide non coupée déclenche la relance propre de
+    l'étape (lot scindé, comparaison compacte)."""
+    state = {"calls": 0}
+
+    def script(label: str, prompt: str) -> dict[str, Any]:
+        state["calls"] += 1
+        if state["calls"] <= n_calls:
+            # Hors schéma pour la consolidation (`families`) comme pour la comparaison (`rows`).
+            return {
+                "__raw__": '{"families": "pas une liste", "criteria": ["x"], "rows": "non"}',
+                "__stop__": "end_turn",
+            }
         return fallback(label, prompt)
 
     return script
@@ -794,7 +820,10 @@ def test_factual_disagreement_triggers_research_and_unavailable_provider_stays_h
     research = mission["deliberation"]["research"]
     assert len(research) == 1  # question dédoublonnée
     item = research[0]
-    assert item["status"] == "unavailable"
+    # v1.3.6 (§9) : la question n'est ni déclarée ni reconnue interne (« either ») → traitée
+    # comme externe ; sans fournisseur, le statut le dit.
+    assert item["status"] == "unavailable_external"
+    assert item["fact_source"] == "either"
     assert item["provider"] == "none"
     assert item["source"] == ""
     assert item["provenance"] == "unavailable"
@@ -1219,32 +1248,30 @@ def test_minimal_cycle_is_financed_and_optional_steps_yield_to_synthesis(
         )
     )
     # Trois options (un lot de consolidation) : cœur nominal = 4 appels (consolidation,
-    # comparaison, synthèse, porte) ; pire cas = 7 (relance scindée + relance de comparaison).
+    # comparaison, synthèse, porte).
     mission = run(client, llm, "cycle minimal sous 14 appels", max_llm_calls=14)
-    # B14-prime : 3 experts x 2 + 3 confrontations + cœur borné 4 = 13 ≤ 13 restants (égalité
-    # admise) : plan délibérable, largeur préservée.
+    # v1.3.6 (B15) : 3 exposés + 1 auto-qualification groupée + 3 confrontations + 2 révisions
+    # réservées (⌈3/2⌉) + cœur borné 4 = 13 ≤ 13 restants (égalité admise) : plan délibérable,
+    # largeur préservée — et la révision n'est plus une variable d'ajustement.
     bounds = mission["composition"]["bounds"]
     assert bounds["budget_plan"] == "full_deliberation"
     assert bounds["plan_feasible"] is True
     assert bounds["total_required_calls"] == 13 == bounds["remaining_calls_at_composition"]
+    assert bounds["reserve_components"]["revisions"] == 2
     assert len(mission["composition"]["experts"]) == 3  # largeur préservée
     assert mission["stop_reason"] == ""
-    assert mission["llm_calls_used"] == 14
+    assert mission["llm_calls_used"] == 13  # une seule révision demandée sur les 2 réservées
     assert mission["deliberation"]["consolidation"]["calls"] == 1
     assert mission["recommendation"]["status"] == "produced"
     assert mission["recommendation"]["gate"]["passed"] is True
     rev_p2 = next(r for r in mission["deliberation"]["revisions"] if r["label"] == "P2")
-    assert rev_p2["called"] is False
-    assert rev_p2["budget_reserved"] is True
-    assert not [c for c in llm.calls if c["call_type"] == "revision"]
-    reserved = [
-        e
-        for e in journal(client, mission["id"])
-        if e["entry_type"] == "budget_reserved_for_synthesis"
-    ]
-    assert len(reserved) == 1
-    assert reserved[0]["payload"]["skipped"] == "révision de P2"
-    # Le désaccord non révisé reste résiduel : rien n'est lissé faute de budget.
+    assert rev_p2["called"] is True
+    assert rev_p2["within_reserved_allowance"] is True
+    assert [c["call_type"] for c in llm.calls].count("revision") == 1
+    entries = journal(client, mission["id"])
+    assert not [e for e in entries if e["entry_type"] == "budget_reserved_for_synthesis"]
+    assert not [e for e in entries if e["entry_type"] == "skipped_for_deliberation_reserve"]
+    # La révision (maintien) laisse le désaccord résiduel : rien n'est lissé.
     assert mission["deliberation"]["residual_disagreements"][0]["description"] == "objection à P2"
 
 
@@ -1595,7 +1622,7 @@ def test_unavailable_research_provider_has_no_call_chain_and_no_cost(
     mission = run(client, llm, "recherche indisponible : zéro appel")
     entries = [e for e in journal(client, mission["id"]) if e["step"] == "recherche"]
     assert [e["entry_type"] for e in entries] == ["result"]
-    assert entries[0]["payload"]["status"] == "unavailable"
+    assert entries[0]["payload"]["status"] == "unavailable_external"
     assert mission["llm_calls_used"] == len(llm.calls)
 
 
@@ -1884,7 +1911,8 @@ def test_large_tour0_is_consolidated_in_bounded_batches_without_truncation(
             not re.fullmatch(r"\d+(\.\d+)?", a["value"]) for a in row["assessments"].values()
         )
     # Budget : cœur nominal recalculé (3 + 3 appels de consolidation), tout tient sous 30.
-    assert mission["llm_calls_used"] == 1 + 3 + 3 + 3 + 3 + 1 + 1 + 1 == 16
+    # v1.3.6 : auto-qualification groupée (3 positions en un appel).
+    assert mission["llm_calls_used"] == 1 + 3 + 1 + 3 + 3 + 1 + 1 + 1 == 14
     assert mission["recommendation"]["decision_ready"] is True
 
 
@@ -1904,21 +1932,27 @@ def test_consolidation_truncation_retries_once_then_fails_closed(
     mission = run(client, llm, "consolidation tronquée : échec fermé")
     cons = mission["deliberation"]["consolidation"]
     assert cons["status"] == "failed"
-    # B13 : la troncature est classée comme telle ; la consolidation garde sa propre relance
-    # bornée (lot scindé), aucune relance corrective B13 ne s'y ajoute.
+    # B13 / v1.3.6 (§8) : une sortie coupée est relancée UNE fois à limite recalculée (plafond),
+    # jamais scindée « pour voir » ; la relance coupée à son tour épuise la récupération. Aucune
+    # famille complète n'est récupérable dans « {"families": [{"family_id": "F1", "label": "coup »
+    # → rien n'est sauvé, rien n'est inventé.
     assert "structured_output_truncated" in cons["parse_error"]
-    assert cons["parse_error"].startswith("structured_output_not_retried")
-    assert mission["report"]["budget"]["structured_output_retries"] == 0
-    # Une relance par lot au plus (lot scindé en deux) : 2 lots → 2 + 4 appels, jamais plus.
-    assert cons["retries"] == 2
-    assert cons["calls"] == 6
+    assert cons["parse_error"].startswith("structured_output_recovery_exhausted")
+    assert mission["report"]["budget"]["structured_output_retries"] == 2  # une par lot
+    assert cons["retries"] == 0  # aucune scission : la troncature n'est pas une erreur de schéma
+    assert cons["calls"] == 2  # 2 lots
+    assert cons["llm_calls_spent"] == 4  # 2 lots x (appel + relance recalculée)
     entries = journal(client, mission["id"])
-    retry_entries = [
-        e for e in entries if e["step"] == "consolidation" and e["entry_type"] == "retry"
+    assert not [e for e in entries if e["step"] == "consolidation" and e["entry_type"] == "retry"]
+    planned = [
+        e
+        for e in entries
+        if e["step"] == "consolidation" and e["entry_type"] == "structured_output_retry_planned"
     ]
-    assert len(retry_entries) == 2
-    assert all(e["payload"]["attempt"] == 1 for e in retry_entries)
+    assert len(planned) == 2
+    assert all(p["payload"]["max_tokens"] > p["payload"]["max_tokens_initial"] for p in planned)
     assert [e for e in entries if e["entry_type"] == "call_done" and e["payload"]["truncated"]]
+    assert not [e for e in entries if e["entry_type"] == "structured_output_salvaged"]
     # Aucun repli singleton : aucune famille n'est fabriquée à partir d'un lot irrécupérable.
     assert cons["family_count"] == 0
     assert len(cons["unconsolidated_option_ids"]) == 66
@@ -1939,15 +1973,15 @@ def test_consolidation_retry_recovers_when_halves_fit(
 
     def flaky_clerk(label: str, prompt: str) -> dict[str, Any]:
         n = len([ln for ln in prompt.splitlines() if ln.startswith("- ")])
-        if n >= 16:  # un lot de 16 déborde ; ses deux moitiés (8) tiennent
-            return {"__raw__": '{"families": [{"family_id": "F1", "la', "__stop__": "max_tokens"}
+        if n >= 16:  # un lot de 16 rend une sortie hors schéma ; ses deux moitiés (8) tiennent
+            return {"__raw__": '{"families": "pas une liste"}', "__stop__": "end_turn"}
         return competent_clerk(label, prompt)
 
     llm = use_llm(DeliberationLLM(options=large_options(), consolidation=flaky_clerk))
     mission = run(client, llm, "consolidation : relance compacte réussie")
     cons = mission["deliberation"]["consolidation"]
     assert cons["status"] == "ok"
-    assert cons["retries"] == 1  # seul le lot de 16 groupes a débordé
+    assert cons["retries"] == 1  # seul le lot de 16 groupes a échoué (erreur de schéma)
     assert cons["calls"] == 2 + 2 + 1  # 2 lots, 2 moitiés, 1 méta-passe
     assert cons["unconsolidated_option_ids"] == []
     assert cons["family_count"] == 10
@@ -1975,18 +2009,19 @@ def test_comparison_failure_is_explicit_and_blocks_the_gate(
     comp = mission["deliberation"]["comparison"]
     assert comp["status"] == "failed"
     assert "structured_output_truncated" in comp["parse_error"]
-    assert comp["parse_error"].startswith("structured_output_not_retried")  # relance propre
-    # Une relance compacte au plus, STRATIFIÉE : les 5 familles nécessaires à la couverture (une
-    # par nature ; désaccord interne et multi-dimensions déjà représentés) sont conservées ; les
-    # facultatives sont écartées. Aucune famille n'est « hard » (rien n'est cité dans la demande).
-    assert [a["families"] for a in comp["attempts"]] == [10, 5]
+    # v1.3.6 (§8) : une sortie coupée est relancée à limite recalculée (B13) sur le MÊME
+    # périmètre — jamais compactée (la compaction répond à une erreur de schéma, pas à une
+    # coupure) ; la relance coupée à son tour épuise la récupération, sans ligne complète à sauver.
+    assert comp["parse_error"].startswith("structured_output_recovery_exhausted")
+    assert [a["families"] for a in comp["attempts"]] == [10]
     assert comp["hard_mandatory_family_ids"] == []
     assert len(comp["mandatory_family_ids"]) == 5
-    assert comp["coverage_preserved"] is True
     assert len([c for c in llm.calls if c["call_type"] == "comparison"]) == 2
+    assert "aucune compaction" in comp["coverage_note"]
     assert comp["criteria"] == []
     assert comp["rows"] == []
-    assert len(comp["not_compared"]) == 5
+    assert comp["not_compared"] == []
+    assert comp["salvaged"] is False
     rec = mission["recommendation"]
     assert rec["status"] == "produced"
     assert rec["gate"]["passed"] is False
@@ -2014,7 +2049,13 @@ def test_partial_comparison_is_not_presented_as_valid(
     assert comp["missing_family_ids"] == ["F2", "F3"]
     assert [r for r in comp["rows"] if r.get("note")]  # familles non évaluées marquées
     rec = mission["recommendation"]
-    assert rec["gate"]["checks"]["pipeline_integrity"] is False
+    # v1.3.6 (§10) : une comparaison partielle n'est plus une rupture d'intégrité (les familles
+    # non évaluées sont déclarées), mais la porte échoue tant que des familles obligatoires ne
+    # sont pas évaluées : la recommandation n'a pas été comparée à ses alternatives.
+    assert rec["gate"]["checks"]["pipeline_integrity"] is True
+    assert rec["gate"]["checks"]["recommended_family_compared"] is False
+    assert any("F2" in i and "F3" in i for i in rec["gate"]["issues"])
+    assert rec["gate"]["passed"] is False
     assert rec["decision_ready"] is False
 
 
@@ -2303,7 +2344,7 @@ def test_comparison_retry_preserves_strategic_coverage(
         DeliberationLLM(
             options=coverage_options(),
             consolidation=competent_clerk,
-            comparison=truncate_first(1, compare_all),
+            comparison=schema_error_first(1, compare_all),
         )
     )
     mission = run(
@@ -2366,18 +2407,27 @@ def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
 ) -> None:
     # Budget : après la première comparaison il reste exactement synthèse + porte ; la relance
     # (qui aurait préservé la couverture) n'est pas financée → statut != ok, porte exécutée et
-    # bloquante. B14-prime : la composition n'accepte 3 experts (cap 8 options) que si
-    # 3 x 2 + 3 + cœur borné (24 options → 2 lots + 1 méta = 3 → 6) = 15 ≤ restant → plafond 16 ;
-    # 17 groupes réels → consolidation en 2 lots + méta (3 appels). Appels : 1 + 3 + 3 + 3 + 3 + 1
-    # (comparaison) + 1 + 1 = 16.
+    # bloquante. v1.3.6 (B15) : la composition n'accepte 3 experts (cap 8 options) que si
+    # 3 + 1 (auto-qualification groupée) + 3 + 2 révisions réservées + cœur borné (24 options →
+    # 2 lots + 1 méta = 3 → 6) = 15 ≤ restant → plafond 16 ; 17 groupes réels → consolidation en
+    # 2 lots + méta (3 appels). Deux objections → les 2 révisions réservées sont consommées.
+    # Appels : 1 + 3 + 1 + 3 + 2 + 3 + 1 (comparaison) + 1 + 1 = 16.
     options_cap(8)
     wide = coverage_options()
     wide["E3"] = [*wide["E3"], ("Stratégie A9", "build"), ("Stratégie A10", "build")]
     llm = use_llm(
         DeliberationLLM(
             options=wide,
+            confrontation={
+                "P1": {
+                    "acts": [
+                        act("P2", "critique", "solution", "objection à P2"),
+                        act("P3", "critique", "solution", "objection à P3"),
+                    ]
+                }
+            },
             consolidation=competent_clerk,
-            comparison=truncate_first(1, compare_all),
+            comparison=schema_error_first(1, compare_all),
         )
     )
     mission = run(
@@ -2472,19 +2522,31 @@ def reserve_options() -> dict[str, OptionSpec]:
 
 
 def _reserve_llm(*, flaky_consolidation: bool) -> DeliberationLLM:
-    consolidation = truncate_first(1, competent_clerk) if flaky_consolidation else competent_clerk
+    # v1.3.6 : les relances propres (lot scindé, compaction) répondent à une erreur de schéma ;
+    # deux objections pour que les 2 révisions réservées (⌈3/2⌉) soient réellement consommées.
+    consolidation = (
+        schema_error_first(1, competent_clerk) if flaky_consolidation else competent_clerk
+    )
     return DeliberationLLM(
         options=reserve_options(),
-        confrontation={"P1": {"acts": [act("P2", "critique", "solution", "objection à P2")]}},
+        confrontation={
+            "P1": {
+                "acts": [
+                    act("P2", "critique", "solution", "objection à P2"),
+                    act("P3", "critique", "solution", "objection à P3"),
+                ]
+            }
+        },
         consolidation=consolidation,
-        comparison=truncate_first(1, compare_all),
+        comparison=schema_error_first(1, compare_all),
     )
 
 
 def test_budget_exactly_nominal_plus_comparison_retry_plus_gate_completes(
     client: TestClient, use_llm: Callable[..., DeliberationLLM]
 ) -> None:
-    # 1 + 3 + 3 + 3 (confrontation) + 1 (consolidation) + 1 + 1 (comparaison + relance) + 1 + 1 = 15
+    # 1 + 3 + 1 (auto-qualification groupée) + 3 (confrontation) + 2 (révisions réservées)
+    # + 1 (consolidation) + 1 + 1 (comparaison + relance) + 1 + 1 = 15
     llm = use_llm(_reserve_llm(flaky_consolidation=False))
     mission = run(
         client, llm, "B8 test 1 : nominal + relance comparaison + porte", max_llm_calls=15
@@ -2497,15 +2559,13 @@ def test_budget_exactly_nominal_plus_comparison_retry_plus_gate_completes(
     rec = mission["recommendation"]
     assert rec["gate"]["passed"] is True
     assert rec["decision_ready"] is True
-    # La révision (facultative) a cédé devant le pire cas borné du cœur : aucun appel de révision.
-    assert not [c for c in llm.calls if c["call_type"] == "revision"]
-    reserved = [
-        e
-        for e in journal(client, mission["id"])
-        if e["entry_type"] == "budget_reserved_for_synthesis"
-    ]
-    assert reserved
-    assert reserved[0]["payload"]["synthesis_core_worst_case_calls"] == 7
+    # B15 : les révisions demandées tiennent dans l'enveloppe réservée — aucune n'a « cédé ».
+    assert [c["call_type"] for c in llm.calls].count("revision") == 2
+    revised = [r for r in mission["deliberation"]["revisions"] if r["label"] in {"P2", "P3"}]
+    assert len(revised) == 2
+    assert all(r["called"] and r["within_reserved_allowance"] for r in revised)
+    entries = journal(client, mission["id"])
+    assert not [e for e in entries if e["entry_type"] == "budget_reserved_for_synthesis"]
 
 
 def test_budget_insufficient_for_retry_keeps_the_gate(
@@ -2526,6 +2586,9 @@ def test_budget_insufficient_for_retry_keeps_the_gate(
     assert rec["gate"]["passed"] is False
     assert rec["quality_blocked"] is True
     assert "porte_qualite" in mission["deliberation"]["steps_done"]
+    # Les révisions réservées ont bien été exécutées avant : la relance facultative cède, pas
+    # une étape obligatoire.
+    assert [c["call_type"] for c in llm.calls].count("revision") == 2
 
 
 @pytest.mark.parametrize(
@@ -2539,7 +2602,7 @@ def test_consolidation_and_comparison_retries_in_the_same_mission(
     expected_comparison_attempts: list[int],
     expected_status: str,
 ) -> None:
-    # 1 + 3 + 3 + 3 + [1 + 2] (consolidation + relance scindée) + [1 (+1)] + 1 + 1
+    # 1 + 3 + 1 + 3 + 2 + [1 + 2] (consolidation + relance scindée) + [1 (+1)] + 1 + 1
     llm = use_llm(_reserve_llm(flaky_consolidation=True))
     mission = run(
         client, llm, f"B8 test 3 : deux relances sous {max_calls} appels", max_llm_calls=max_calls

@@ -60,7 +60,11 @@ FRAMING_SYSTEM = (
     "laisse suggested_class vide.\n"
     "7. Tout ce que tu affirmes qui ne vient pas de la demande relève de ta connaissance "
     "générale : "
-    "formule-le comme hypothèse, pas comme fait.\n\n"
+    "formule-le comme hypothèse, pas comme fait.\n"
+    "8. Propositions explicites : liste chaque orientation que la demande met elle-même sur la "
+    "table comme proposition formulée (un investissement, une acquisition, une attente, une "
+    "externalisation, un abandon, un projet chiffré…), avec sa nature et qui la porte. Tu ne "
+    "la juges pas : elle sera défendue et testée plus tard si aucune perspective ne la défend.\n\n"
     "Réponds STRICTEMENT en JSON, sans texte autour, en JSON compact (sans indentation ni "
     "retours à la ligne décoratifs), avec exactement cette structure :\n"
     "{\n"
@@ -75,7 +79,9 @@ FRAMING_SYSTEM = (
     "  ],\n"
     '  "contestation": {"status": "none|raised", "target": "…", "argument": "…"},\n'
     '  "escalation_signals": ["…"],\n'
-    '  "suggested_class": "" \n'
+    '  "suggested_class": "",\n'
+    '  "explicit_proposals": [{"label": "…", '
+    '"kind": "build|integrate|buy|wait|test|simplify|do_nothing|other", "proposed_by": "…"}]\n'
     "}"
 )
 

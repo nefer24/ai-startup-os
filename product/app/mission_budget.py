@@ -266,6 +266,93 @@ def consolidation_core_bound(
     }
 
 
+def revision_allowance(n_positions: int, *, cap: int) -> int:
+    """Allocation déterministe de révisions réservées (B15 — v1.3.6).
+
+    Une révision est un acte de PREMIER ordre (une position change ou se maintient devant une
+    objection ou une preuve) : elle est réservée dès la composition, contrairement à
+    l'auto-qualification (second ordre). Règle conservatrice, documentée et identique entre
+    planification et exécution : la moitié des positions, arrondie au supérieur, bornée par
+    `cap` (`mission_max_revision_calls`). Justification : sur les holdouts observés, environ la
+    moitié des positions reçoivent au moins une objection ouverte ; réserver une révision par
+    position surdimensionnerait la réserve et réduirait la largeur sans justification. Les
+    révisions au-delà de l'allocation restent possibles sur le budget restant, jamais garanties.
+    """
+    if n_positions < 2 or cap <= 0:
+        return 0
+    return min(int(cap), -(-n_positions // 2))
+
+
+# Contrat de sortie de l'auto-qualification (B14-prime) : enveloppe, allocation par relation,
+# marge — mêmes constantes que `app.output_budget.RULES["self_qualification"]`, répétées ici pour
+# que le plan d'appels reste calculable sans importer le module de budget de sortie.
+SELF_QUALIFICATION_BASE_TOKENS = 64
+SELF_QUALIFICATION_PER_RELATION_TOKENS = 80
+SELF_QUALIFICATION_SAFETY = 1.5
+
+
+def self_qualification_plan(
+    n_positions: int, *, group_max: int, output_ceiling: int
+) -> dict[str, int]:
+    """Plan d'auto-qualification GROUPÉE (v1.3.6 — §6) : `g` positions qualifiées par appel.
+
+    Chaque appel qualifie `g` positions, chacune contre toutes les autres (relations attribuées
+    par `from_id`) ; `g` est le plus grand groupe dont la sortie textuelle attendue tient dans le
+    plafond de sortie de l'étape : `(base + per_relation x g x (n - 1)) x safety <= ceiling`,
+    borné par `group_max`. `g = 1` reproduit exactement le comportement historique. Le nombre
+    d'appels vaut `ceil(n / g)`. Une seule position : aucun appel.
+    """
+    if n_positions < 2:
+        return {"calls": 0, "group_size": 1, "positions": n_positions}
+    per_position = SELF_QUALIFICATION_PER_RELATION_TOKENS * (n_positions - 1)
+    room = output_ceiling / SELF_QUALIFICATION_SAFETY - SELF_QUALIFICATION_BASE_TOKENS
+    fits = int(room // per_position) if per_position > 0 else 1
+    group = max(1, min(int(group_max), fits))
+    return {
+        "calls": -(-n_positions // group),
+        "group_size": group,
+        "positions": n_positions,
+    }
+
+
+def deliberation_reserve(
+    n_positions: int,
+    *,
+    effective_class: str,
+    consolidation_calls: int,
+    revision_cap: int,
+) -> dict[str, int]:
+    """Réserve UNIQUE du cycle de délibération (B15 — v1.3.6), composante par composante.
+
+    Utilisée par la composition (avec la borne de consolidation dérivée des options maximales),
+    par le plan réel après le Tour 0 (avec le plan de consolidation réel) et par toutes les portes
+    de dépense à l'exécution (`_reserve_remaining`). Une seule définition : ce qui est promis à la
+    composition est exactement ce qui est protégé à l'exécution.
+
+    Composantes : confrontation (une par position), steelman + reconnaissance si la classe
+    l'impose, allocation de révisions, consolidation (lots + méta-passes), comparaison, synthèse,
+    porte qualité. Une seule position : ni confrontation, ni steelman, ni révision.
+    """
+    plural = n_positions >= 2
+    steelman = mandatory_steelman_calls(effective_class) if plural else 0
+    revisions = revision_allowance(n_positions, cap=revision_cap) if plural else 0
+    components = {
+        "confrontation": n_positions if plural else 0,
+        "steelman": steelman,
+        "revisions": revisions,
+        "consolidation": max(0, int(consolidation_calls)),
+        "comparison": 1,
+        "synthesis": 1,
+        "gate": 1,
+    }
+    core = components["consolidation"] + 3
+    return {
+        **components,
+        "core_nominal": core,
+        "total": sum(components.values()),
+    }
+
+
 def minimal_deliberation_bound(
     n_experts: int,
     *,
@@ -273,29 +360,46 @@ def minimal_deliberation_bound(
     options_per_expert: int,
     batch_size: int,
     meta_chunk_size: int,
-) -> dict[str, int]:
+    revision_cap: int = 8,
+    self_qualification_group_max: int = 1,
+    self_qualification_ceiling: int = 4000,
+) -> dict[str, Any]:
     """Appels nécessaires, après le cadrage, pour mener `n_experts` jusqu'à la porte qualité.
 
-    Pré-délibération : exposé + auto-qualification par expert (le greffier est facultatif et
-    protégé séparément par la réserve). Cycle minimal : une confrontation par position + cœur
-    borné ; steelman et reconnaissance si la classe l'impose. Recherche et révision restent
-    adaptatives (non comptées).
+    Pré-délibération : exposé par expert + auto-qualification groupée (le greffier est facultatif
+    et protégé séparément par la réserve). Réserve : `deliberation_reserve` — confrontation,
+    steelman si la classe l'impose, allocation de révisions, cœur borné par la cardinalité
+    maximale des options (B14-prime), comparaison, synthèse, porte. Recherche externe et révisions
+    au-delà de l'allocation restent adaptatives (non comptées).
+
+    v1.3.6 (B15) : la même formule sert à la composition et aux portes de dépense de l'exécution ;
+    `plan_feasible` implique que le steelman requis et l'allocation de révisions restent
+    finançables après le Tour 0 et la confrontation.
     """
     core = consolidation_core_bound(
         n_experts, options_per_expert, batch_size=batch_size, meta_chunk_size=meta_chunk_size
     )
-    # Une seule position : ni auto-qualification, ni confrontation, ni steelman (rien à
-    # confronter) ; la porte tranchera (B4). À partir de deux positions : cycle complet.
     plural = n_experts >= 2
-    steelman = mandatory_steelman_calls(effective_class) if plural else 0
-    pre = (2 if plural else 1) * n_experts
-    minimal = (n_experts if plural else 0) + core["core_nominal_bound"] + steelman
+    reserve = deliberation_reserve(
+        n_experts,
+        effective_class=effective_class,
+        consolidation_calls=core["consolidation_calls_upper_bound"],
+        revision_cap=revision_cap,
+    )
+    selfq = self_qualification_plan(
+        n_experts, group_max=self_qualification_group_max, output_ceiling=self_qualification_ceiling
+    )
+    pre = n_experts + (selfq["calls"] if plural else 0)
     return {
         **core,
         "pre_deliberation_calls": pre,
-        "mandatory_steelman_calls": steelman,
-        "minimal_deliberation_reserve": minimal,
-        "total_required_calls": pre + minimal,
+        "self_qualification_calls": selfq["calls"] if plural else 0,
+        "self_qualification_group_size": selfq["group_size"],
+        "mandatory_steelman_calls": reserve["steelman"],
+        "revision_allowance": reserve["revisions"],
+        "minimal_deliberation_reserve": reserve["total"],
+        "reserve_components": reserve,
+        "total_required_calls": pre + reserve["total"],
     }
 
 
@@ -306,12 +410,14 @@ def feasible_expert_count(
     options_per_expert: int,
     batch_size: int,
     meta_chunk_size: int,
+    revision_cap: int = 8,
+    self_qualification_group_max: int = 1,
+    self_qualification_ceiling: int = 4000,
     upper: int = 64,
 ) -> int:
     """Plus grand nombre d'experts dont le noyau obligatoire tient dans `remaining_calls`.
 
-    Invariant B14-prime : `remaining ≥ pré-délibération + cycle minimal borné`. L'égalité est
-    admise.
+    Invariant B15 : `remaining ≥ pré-délibération + réserve unique`. L'égalité est admise.
     """
     for n in range(upper, 0, -1):
         bound = minimal_deliberation_bound(
@@ -320,6 +426,9 @@ def feasible_expert_count(
             options_per_expert=options_per_expert,
             batch_size=batch_size,
             meta_chunk_size=meta_chunk_size,
+            revision_cap=revision_cap,
+            self_qualification_group_max=self_qualification_group_max,
+            self_qualification_ceiling=self_qualification_ceiling,
         )
         if bound["total_required_calls"] <= remaining_calls:
             return n

@@ -136,6 +136,41 @@ def build_self_qualification_prompt(
     return "\n".join(parts)
 
 
+GROUPED_SELF_QUAL_SYSTEM = (
+    "Le premier tour d'une étude est clos. On te confie, de façon ANONYME, plusieurs positions "
+    "initiales à qualifier, UNE PAR UNE, chacune du point de vue de la perspective qui l'a "
+    "formulée : pour chaque position confiée, qualifie sa relation à chacune des autres positions "
+    "de l'étude.\n"
+    "- identical : même orientation de fond, différences de formulation seulement ;\n"
+    "- variant : même famille d'approche avec une différence réelle (périmètre, condition, "
+    "séquence) ;\n"
+    "- different : approche réellement différente ou incompatible.\n"
+    "Chaque relation est attribuée à la position qui la déclare (from_id). Tu ne révises rien, tu "
+    "ne juges pas, tu ne recommandes rien ; une relation manquante n'est jamais inventée.\n\n"
+    "Réponds STRICTEMENT en JSON compact : "
+    '{"qualifications": [{"from_id": "P1", "relations": [{"other_id": "P2", '
+    '"relation": "identical|variant|different", "reason": "…"}]}]}'
+)
+
+
+def build_grouped_self_qualification_prompt(
+    *, own: list[tuple[str, str]], all_positions: list[tuple[str, str]]
+) -> str:
+    """Prompt d'auto-qualification groupée : positions confiées + toutes les positions."""
+    parts = ["Positions confiées à qualifier (une par une, chacune de son point de vue) :"]
+    for label, position in own:
+        parts += [f"=== {label} ===", position.strip()]
+    parts += ["", "Toutes les positions de l'étude :"]
+    for label, position in all_positions:
+        parts.append(f"- {label} : {position.strip()}")
+    parts += [
+        "",
+        "Pour chaque position confiée, qualifie sa relation à chacune des autres positions, au "
+        "format JSON demandé.",
+    ]
+    return "\n".join(parts)
+
+
 CLERK_SYSTEM = (
     "Tu es le GREFFIER d'une étude. Tu n'es pas un décideur : tu n'exprimes aucune préférence, "
     "tu ne "

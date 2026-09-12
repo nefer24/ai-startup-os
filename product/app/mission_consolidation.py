@@ -146,8 +146,10 @@ def plan_consolidation(
 ) -> dict[str, int]:
     """Plan d'appels (sans relance) : lots + passes de méta-consolidation.
 
-    `nominal` = lots + méta ; `worst_case` = nominal + 2 par lot (une relance scindée par lot, au
-    plus) — la méta-passe ne se relance pas. Sert à réserver le pire cas borné du cœur (B8).
+    `nominal` = lots + méta ; `worst_case` = nominal + une relance par appel (v1.3.6 : relance à
+    limite recalculée après troncature, ou lot scindé après erreur de contrat ; jamais les deux
+    pour un même lot). Le pire cas ne protège plus que des relances facultatives : la réserve des
+    étapes obligatoires est portée par `app.mission_budget.deliberation_reserve` (B15).
     """
     groups = premerge_options(options)
     batches = plan_batches(groups, batch_size)
@@ -161,8 +163,8 @@ def plan_consolidation(
         "batches": len(batches),
         "meta": meta,
         "nominal": nominal,
-        "max_retries": len(batches),
-        "worst_case": nominal + 2 * len(batches),
+        "max_retries": nominal,
+        "worst_case": 2 * nominal,
     }
 
 
@@ -288,12 +290,21 @@ def _split_incompatible(
 
 
 def families_from_batch(
-    output: ConsolidationOutput, items: list[dict[str, Any]], notes: list[str]
+    output: ConsolidationOutput,
+    items: list[dict[str, Any]],
+    notes: list[str],
+    *,
+    partial: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Familles d'un lot à partir de la sortie du greffier, identifiants validés.
 
     Les identifiants inconnus sont ignorés ; un groupe non cité par le greffier devient une famille
     à lui seul (c'est son jugement, pas un repli après erreur). Retourne (familles, non-fusions).
+
+    v1.3.6 (§8.A) — `partial = True` : la sortie a été récupérée d'une réponse coupée (éléments
+    complets seulement) ; les groupes non cités n'ont PAS été jugés par le greffier : ils ne
+    deviennent pas des familles (ce serait inventer un jugement) — l'appelant les déclare non
+    consolidés via `unassigned_groups`.
     """
     by_id = {g["group_id"]: g for g in items}
     assigned: set[str] = set()
@@ -319,7 +330,7 @@ def families_from_batch(
             notes=notes,
         )
     for g in items:
-        if g["group_id"] not in assigned:
+        if g["group_id"] not in assigned and not partial:
             families.append(
                 _family(
                     g["label"],
@@ -336,6 +347,13 @@ def families_from_batch(
         if any(i in by_id for i in n.option_ids)
     ]
     return families, not_merged
+
+
+def unassigned_groups(output: ConsolidationOutput, items: list[dict[str, Any]]) -> list[str]:
+    """Groupes du lot qu'une sortie (récupérée partiellement) n'a pas rattachés à une famille."""
+    by_id = {g["group_id"] for g in items}
+    cited = {i for fam in output.families for i in fam.option_ids if i in by_id}
+    return [g["group_id"] for g in items if g["group_id"] not in cited]
 
 
 def merge_families_from_meta(

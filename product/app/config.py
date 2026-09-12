@@ -74,10 +74,30 @@ class Settings(BaseSettings):
     # dérivée
     # du nombre d'éléments demandés (`app/output_budget.py`), jamais en dessous de la limite
     # historique ci-dessus (plancher), jamais au-dessus de ces plafonds.
-    mission_output_ceiling_self_qualification: int = 4000
+    # v1.3.6 (§6) : l'auto-qualification est groupée (plusieurs positions qualifiées par appel) ;
+    # son plafond de sortie est dimensionné par la formule sur `g x (n - 1)` relations.
+    mission_output_ceiling_self_qualification: int = 6000
     mission_output_ceiling_clerk: int = 8000
     mission_output_ceiling_consolidation: int = 8000
     mission_output_ceiling_comparison: int = 8000
+    # B15 (v1.3.6) — réserve unique : allocation de révisions réservée dès la composition
+    # (`revision_allowance` : ceil(n / 2), bornée par ce plafond) ; nombre maximal de positions
+    # qualifiées par appel d'auto-qualification groupée (1 = un appel par position).
+    mission_max_revision_calls: int = 8
+    mission_self_qualification_group_max: int = 3
+    # B16 (v1.3.6) — politique de raisonnement par catégorie de `call_type`
+    # (`app/reasoning_policy.py`). Catégorie A (cadrage, exposés, confrontation, steelman,
+    # révision, synthèse) : raisonnement adaptatif, effort élevé. Catégorie B (comparaison, porte) :
+    # adaptatif, effort contrôlé. Catégorie C (auto-qualification, greffier, consolidation) :
+    # effort bas ; `disabled` possible si les tests structurels le permettent. Les marges de sortie
+    # (`headroom`) s'ajoutent au budget textuel des étapes à cardinalité variable, sous plafond :
+    # elles ne remplacent pas le pilotage de l'effort et ne doublent rien.
+    mission_reasoning_effort_a: str = "high"
+    mission_reasoning_effort_b: str = "medium"
+    mission_reasoning_effort_c: str = "low"
+    mission_reasoning_thinking_c: str = "adaptive"
+    mission_reasoning_headroom_tokens_b: int = 1500
+    mission_reasoning_headroom_tokens_c: int = 500
     # B14-prime (O2) — cardinalité maximale des options proposées par un expert au Tour 0 :
     # contrat de
     # sortie explicite qui borne le plan de consolidation (lots, méta-passes) à la composition.

@@ -126,13 +126,15 @@ CONFRONTATION_SYSTEM = (
     "Règles : une simple opposition non argumentée n'est pas recevable ; ne fabrique aucun "
     "désaccord ; si tu es d'accord avec une position, dis-le (convergence_note) plutôt que "
     "d'inventer une critique ; si ton désaccord dépend d'un FAIT vérifiable, mets "
-    "depends_on_fact = true et formule la question précise à rechercher (fact_question).\n"
+    "depends_on_fact = true, formule la question précise à rechercher (fact_question) et indique "
+    "où la réponse se trouve (fact_source) : internal (données propres du demandeur : ses "
+    "clients, ses contrats, ses marges), external (sources publiques), either.\n"
     + EPISTEMIC_RULE
     + "\n\n"
     + COMPACT
     + ' : {"acts": [{"act": "critique|defend|complement|refute|third_way|none", "target": "P2", '
     '"nature": "solution|hypothesis|fact|value|other", "text": "…", "depends_on_fact": false, '
-    '"fact_question": ""}], "convergence_note": "…"}'
+    '"fact_question": "", "fact_source": "internal|external|either"}], "convergence_note": "…"}'
 )
 
 
@@ -260,6 +262,217 @@ def strawman_flags(steelman: SteelmanOutput) -> list[str]:
     return flags
 
 
+# --- D bis. Steelman de l'alternative écartée (B17 — v1.3.6) -----------------------------------
+ALTERNATIVE_STEELMAN_SYSTEM = (
+    "Tu es désigné AVOCAT d'une alternative que la demande met explicitement sur la table et "
+    "qu'aucune perspective de l'étude ne défend. Ta tâche : construire la MEILLEURE défense "
+    "possible de cette alternative — ses forces réelles, les conditions sous lesquelles elle "
+    "serait le bon choix, ce que ses adversaires sous-estiment — puis, séparément, ses meilleurs "
+    "scénarios d'échec. Tu ne la critiques pas ici (un contradicteur distinct le fera) ; tu ne "
+    "caricatures ni n'affaiblis rien ; tu n'inventes aucun fait : les conditions de succès sont "
+    "formulées comme conditions, pas comme certitudes.\n\n"
+    + COMPACT
+    + ' : {"target": "ALT", "steelman": "…", "strengths": ["…"], "failure_scenarios": ["…"], '
+    '"critique": ""}'
+)
+ALTERNATIVE_CHALLENGE_SYSTEM = (
+    "Une alternative que la demande mettait sur la table a été défendue sous sa meilleure forme "
+    "par un avocat désigné (steelman). Tu es un CONTRADICTEUR distinct. Deux tâches, séparées : "
+    "(1) reconnaissance — cette défense est-elle la version la plus forte et fidèle de "
+    "l'alternative ? yes (forte et fidèle), partial (forte mais incomplète : indique les points "
+    "manquants), no (faible, déformée ou décorative) ; (2) critique — la meilleure objection "
+    "à cette version FORTE (pas à une version affaiblie), avec les scénarios où elle échoue. Une "
+    "objection non argumentée n'est pas recevable ; tu n'inventes aucun fait.\n\n"
+    + COMPACT
+    + ' : {"recognized": "yes|partial|no", "missing_points": ["…"], "critique": "…", '
+    '"failure_scenarios": ["…"]}'
+)
+
+
+def build_alternative_steelman_prompt(
+    *,
+    advocate_label: str,
+    alternative_label: str,
+    alternative_kind: str,
+    alternative_summaries: list[str],
+    problem: str,
+    positions_against: list[str],
+) -> str:
+    return "\n".join(
+        [
+            f"Tu es {advocate_label}, avocat désigné de l'alternative écartée.",
+            f"Alternative à défendre : {alternative_label} [nature : {alternative_kind}]",
+            "Formulations rencontrées dans l'étude : "
+            + (" ; ".join(alternative_summaries) if alternative_summaries else "(aucune)"),
+            f"Problème compris : {problem}",
+            "Positions qui l'écartent (résumé) : "
+            + (" | ".join(positions_against[:8]) if positions_against else "(aucune)"),
+            "",
+            "Construis d'abord la meilleure défense, puis ses scénarios d'échec.",
+        ]
+    )
+
+
+def build_alternative_challenge_prompt(
+    *,
+    critic_label: str,
+    alternative_label: str,
+    steelman: str,
+    strengths: list[str],
+    failure_scenarios: list[str],
+) -> str:
+    return "\n".join(
+        [
+            f"Tu es {critic_label}, contradicteur distinct de l'avocat.",
+            f"Alternative défendue : {alternative_label}",
+            "Défense proposée (steelman) :",
+            steelman.strip(),
+            "Forces attribuées : " + (" ; ".join(strengths) if strengths else "(aucune)"),
+            "Scénarios d'échec avancés par l'avocat : "
+            + (" ; ".join(failure_scenarios) if failure_scenarios else "(aucun)"),
+            "",
+            "Reconnais (ou non) la force et la fidélité de cette défense, puis formule ta critique "
+            "au format JSON demandé.",
+        ]
+    )
+
+
+_STOPWORDS = frozenset(
+    {
+        "avec",
+        "sans",
+        "pour",
+        "dans",
+        "sur",
+        "une",
+        "des",
+        "les",
+        "aux",
+        "par",
+        "plus",
+        "moins",
+        "tout",
+        "toute",
+        "tous",
+        "toutes",
+        "cette",
+        "cet",
+        "ces",
+        "leur",
+        "leurs",
+        "option",
+        "options",
+        "initiale",
+        "initial",
+        "proposition",
+        "proposee",
+        "proposé",
+        "proposée",
+        "directeur",
+        "produit",
+        "demandeur",
+        "telle",
+        "tel",
+        "comme",
+        "avant",
+        "apres",
+        "après",
+        "entre",
+        "vers",
+        "afin",
+        "dont",
+        "donc",
+        "mais",
+        "elle",
+        "elles",
+    }
+)
+
+
+def _content_tokens(text: str) -> set[str]:
+    """Jetons de contenu (≥ 4 caractères, sans mots vides), tronqués à 6 caractères (racine)."""
+    folded = _fold(text)
+    tokens = re.findall(r"[a-z0-9€]{4,}", folded)
+    return {t[:6] for t in tokens if t not in _STOPWORDS}
+
+
+def token_overlap(label: str, text: str) -> float:
+    """Part des jetons de contenu de `label` présents dans `text` (0 si `label` est vide)."""
+    lab = _content_tokens(label)
+    if not lab:
+        return 0.0
+    txt = _content_tokens(text)
+    return len(lab & txt) / len(lab)
+
+
+def find_discarded_alternative(
+    *,
+    proposals: list[dict[str, Any]],
+    option_groups: list[dict[str, Any]],
+    options: list[dict[str, Any]],
+    positions: list[dict[str, Any]],
+    request_text: str,
+    endorse_threshold: float = 0.5,
+    match_threshold: float = 0.5,
+) -> dict[str, Any] | None:
+    """Alternative explicitement proposée par la demande et défendue par AUCUNE position (B17).
+
+    Source des propositions : `explicit_proposals` du cadrage (générique : investissement,
+    acquisition, attente, externalisation, abandon…) ; repli : options du Tour 0 dont le libellé
+    recoupe fortement le texte de la demande. Une proposition est « écartée » si aucune position
+    du Tour 0 ne l'endosse (recouvrement lexical du libellé dans la position ≥ seuil). Règle
+    déterministe et documentée ; aucun mot-clé métier, aucune nature codée en dur.
+    """
+    candidates: list[dict[str, Any]] = []
+    for p in proposals:
+        label = str(p.get("label", "")).strip()
+        if not label:
+            continue
+        matching = [
+            o
+            for o in options
+            if token_overlap(label, o["label"]) >= match_threshold
+            or (
+                o.get("kind") == p.get("kind")
+                and token_overlap(o["label"], label) >= match_threshold
+            )
+        ]
+        candidates.append(
+            {
+                "label": label,
+                "kind": str(p.get("kind", "other")),
+                "source": "framing",
+                "option_ids": [o["option_id"] for o in matching],
+                "summaries": [o.get("summary", "") or o["label"] for o in matching][:5],
+                "experts": sorted({o["expert_id"] for o in matching}),
+            }
+        )
+    if not candidates:
+        for g in option_groups:
+            if token_overlap(g["label"], request_text) >= 0.75:
+                members = [o for o in options if o["option_id"] in set(g["option_ids"])]
+                candidates.append(
+                    {
+                        "label": g["label"],
+                        "kind": str((g.get("kinds") or ["other"])[0]),
+                        "source": "options",
+                        "option_ids": list(g["option_ids"]),
+                        "summaries": [o.get("summary", "") or o["label"] for o in members][:5],
+                        "experts": sorted({o["expert_id"] for o in members}),
+                    }
+                )
+    for cand in candidates:
+        endorsed_by = [
+            p["label"]
+            for p in positions
+            if token_overlap(cand["label"], p.get("position", "")) >= endorse_threshold
+        ]
+        cand["endorsed_by"] = endorsed_by
+        if not endorsed_by:
+            return cand
+    return None
+
+
 def select_contradictor(
     experts: list[dict[str, Any]], dominant_experts: list[str], labels: dict[str, str]
 ) -> str | None:
@@ -283,6 +496,32 @@ def is_premature_convergence(
 
 
 # --- E. Recherche ciblée : sélection des questions matérielles --------------------------------
+FACT_SOURCE_INTERNAL = "internal"
+FACT_SOURCE_EXTERNAL = "external"
+FACT_SOURCE_EITHER = "either"
+_INTERNAL_MARKERS = re.compile(
+    r"\b(nos|notre|en interne|interne(s)?|de l'entreprise|de la societe|chez nous|"
+    r"nos clients|nos contrats|notre marge|nos donnees|nos equipes|dans l'entreprise|"
+    r"du demandeur|de l'organisation)\b"
+)
+
+
+def classify_fact_source(question: str, *, declared: str = "either") -> str:
+    """Où la réponse à une question factuelle se trouve (v1.3.6 — §9).
+
+    La déclaration de la perspective (`fact_source`) prime ; à défaut (`either`), un repli lexical
+    déterministe reconnaît une question sur les données propres du demandeur (« nos », « notre »,
+    « en interne »…) comme `internal`. Tout le reste reste `either` : jamais de fait inventé, jamais
+    de fournisseur web appelé pour une donnée interne.
+    """
+    declared = (declared or "either").strip().lower()
+    if declared in {FACT_SOURCE_INTERNAL, FACT_SOURCE_EXTERNAL}:
+        return declared
+    if _INTERNAL_MARKERS.search(_fold(question)):
+        return FACT_SOURCE_INTERNAL
+    return FACT_SOURCE_EITHER
+
+
 def material_fact_questions(
     confrontations: dict[str, ConfrontationOutput | None],
     cartography: dict[str, Any],
@@ -303,7 +542,13 @@ def material_fact_questions(
     order: list[str] = []
 
     def _add(
-        question: str, claim: str, raised_by: str, target: str, nature: str, positions: list[str]
+        question: str,
+        claim: str,
+        raised_by: str,
+        target: str,
+        nature: str,
+        positions: list[str],
+        source: str = "either",
     ) -> None:
         key = " ".join(question.lower().split())
         if not key:
@@ -318,6 +563,7 @@ def material_fact_questions(
                 "target": target,
                 "nature": nature,
                 "positions": [],
+                "source": classify_fact_source(question, declared=source),
             }
             by_key[key] = entry
             order.append(key)
@@ -341,6 +587,7 @@ def material_fact_questions(
                 act.target,
                 act.nature,
                 [act.target],
+                getattr(act, "fact_source", "either"),
             )
     # Objections typées « fait » au Tour 0 (cartographie) qui ne sont pas déjà couvertes : la
     # position concernée est celle de leur auteur (sa position repose sur ce fait).
@@ -491,6 +738,15 @@ SYNTHESIS_SYSTEM = (
     "- la recommandation peut être build, buy, integrate, simplify, test, wait, do_nothing, "
     "abandon ou other ; tu n'es jamais obligé de recommander de construire ;\n"
     "- la preuve prime sur la majorité ; une option majoritaire réfutée par un fait meurt ;\n"
+    "- INTERDIT dans « rationale » et « confidence.justification » : invoquer le nombre de "
+    "positions, une majorité, une unanimité, un consensus ou « l'absence de réfutation » comme "
+    "raison de la recommandation ou de la confiance. Les perspectives sont des instances d'un "
+    "même modèle sur le même dossier : leur convergence est une information descriptive, jamais "
+    "une preuve. Si tu la mentionnes, sépare-la explicitement de la preuve (« plusieurs "
+    "perspectives convergent ; indépendamment, la recommandation repose sur X, Y, Z ») ;\n"
+    "- une question factuelle interne (données du demandeur) non résolue et déterminante pour "
+    "le choix rend information_insufficient = true et figure dans la prochaine action comme "
+    "information à obtenir du demandeur ;\n"
     "- tu conserves les désaccords résiduels et les opinions minoritaires sérieuses ; tu ne "
     "fabriques pas de consensus ;\n"
     "- si l'information manque pour décider honnêtement, information_insufficient = true et la "
@@ -529,7 +785,9 @@ GATE_SYSTEM = (
     "provenance et aucune source n'est inventée ; (3) minorities_preserved — les désaccords "
     "résiduels et minorités sérieuses figurent ; (4) steelman_done_if_required — le steelman a eu "
     "lieu quand il était requis ; (5) no_forced_consensus — aucun ralliement forcé ni décompte "
-    "présenté comme décision ; (6) honest_about_gaps — les inconnues critiques sont déclarées et, "
+    "présenté comme décision, et ni « rationale » ni « confidence.justification » n'invoquent "
+    "une convergence, une majorité ou l'absence de réfutation comme preuve (la preuve prime sur "
+    "la majorité) ; (6) honest_about_gaps — les inconnues critiques sont déclarées et, "
     "si l'information manque, la recommandation est de type test/wait.\n\n"
     + COMPACT
     + ' : {"passed": true, "checks": {"conclusion_follows_options": true, '

@@ -275,7 +275,52 @@ def compose(
 
     result.bounds["experts_proposed"] = total()
 
+    # v1.3.6 (§7) — distinctivité : un angle déjà porté par une autre cellule apporte moins qu'un
+    # angle unique. En réduction budgétaire, les doublons inter-cellules sont retirés en premier
+    # (dans la cellule la moins critique, puis la plus profonde), avant toute réduction de
+    # profondeur ordinaire ; l'unique angle d'une dimension n'est jamais retiré tant qu'il reste
+    # un doublon ailleurs. Règle déterministe sur les titres d'angle : aucun rapprochement
+    # sémantique.
+    def duplicate_candidates() -> list[tuple[dict[str, Any], int]]:
+        titles: dict[str, int] = {}
+        for p in plan:
+            for title, _src in p["angles"]:
+                titles[title] = titles.get(title, 0) + 1
+        found: list[tuple[dict[str, Any], int]] = []
+        for p in plan:
+            if len(p["angles"]) <= 1:
+                continue
+            for idx, (title, _src) in enumerate(p["angles"]):
+                if titles.get(title, 0) > 1:
+                    found.append((p, idx))
+        return found
+
+    removed_duplicates: list[dict[str, str]] = []
     while total() > max_experts:
+        dups = duplicate_candidates()
+        if dups:
+            victim, idx = sorted(
+                dups,
+                key=lambda pi: (
+                    -order.get(pi[0]["dimension"].presumed_criticality, 1),
+                    -len(pi[0]["angles"]),
+                    -pi[1],
+                ),
+            )[0]
+            removed = victim["angles"].pop(idx)
+            removed_duplicates.append({"dimension": victim["dimension"].name, "angle": removed[0]})
+            result.journal.append(
+                {
+                    "event": "reduction_budget",
+                    "dimension": victim["dimension"].name,
+                    "removed_angle": removed[0],
+                    "detail": (
+                        "plafond d'appels de la mission : angle redondant (déjà porté par une "
+                        "autre cellule) retiré en premier"
+                    ),
+                }
+            )
+            continue
         candidates = [p for p in plan if len(p["angles"]) > 1]
         if candidates:
             victim = sorted(
@@ -387,6 +432,7 @@ def compose(
 
     # 4) Fiches d'experts et journal dimension → angle → justification.
     result.bounds["experts_retained"] = total()
+    result.bounds["duplicate_angles_removed"] = removed_duplicates
     counter = 0
     for p in plan:
         dimension: DimensionOut = p["dimension"]

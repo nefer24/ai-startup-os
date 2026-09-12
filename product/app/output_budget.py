@@ -75,21 +75,34 @@ class OutputBudget:
     formula: str
     capped_by_ceiling: bool
     raised_to_floor: bool
+    # B16 (v1.3.6) — marge de raisonnement explicite ajoutée au budget textuel (politique par
+    # catégorie), toujours sous le plafond de l'étape ; 0 pour une limite fixe.
+    reasoning_headroom: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def output_budget(call_type: str, n_items: int, *, floor: int, ceiling: int) -> OutputBudget:
-    """Limite de sortie d'un appel à cardinalité variable (formule de l'en-tête du module)."""
+def output_budget(
+    call_type: str, n_items: int, *, floor: int, ceiling: int, reasoning_headroom: int = 0
+) -> OutputBudget:
+    """Limite de sortie d'un appel à cardinalité variable (formule de l'en-tête du module).
+
+    v1.3.6 (B16) : `granted = min(ceiling, max(floor, required) + headroom)` — la marge de
+    raisonnement est explicite, dérivée de la politique de l'étape, jamais un doublement.
+    """
     rule = RULES[call_type]
     n = max(0, int(n_items))
+    headroom = max(0, int(reasoning_headroom))
     required = math.ceil((rule.base_tokens + rule.per_item_tokens * n) * rule.safety)
     ceiling = max(floor, ceiling)
-    granted = min(ceiling, max(floor, required))
+    text_budget = max(floor, required)
+    granted = min(ceiling, text_budget + headroom)
     formula = (
         f"ceil(({rule.base_tokens} + {rule.per_item_tokens} * {n} {rule.item_label}) * "
-        f"{rule.safety}) = {required} ; borné à [{floor}, {ceiling}] → {granted}"
+        f"{rule.safety}) = {required} ; borné à [{floor}, {ceiling}]"
+        + (f" ; + marge de raisonnement {headroom}" if headroom else "")
+        + f" → {granted}"
     )
     return OutputBudget(
         call_type=call_type,
@@ -99,8 +112,9 @@ def output_budget(call_type: str, n_items: int, *, floor: int, ceiling: int) -> 
         ceiling=ceiling,
         granted=granted,
         formula=formula,
-        capped_by_ceiling=required > ceiling,
+        capped_by_ceiling=text_budget + headroom > ceiling,
         raised_to_floor=required < floor,
+        reasoning_headroom=headroom,
     )
 
 

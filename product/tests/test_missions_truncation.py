@@ -28,6 +28,8 @@ from app.mission_framing import FRAMING_SYSTEM
 from app.mission_schemas import FramingOutput, parse_structured
 from fastapi.testclient import TestClient
 
+from tests.test_missions_otv1 import self_qualification_payload
+
 FRAMING_OK: dict[str, Any] = {
     "problem_understood": "cas synthétique T : texte long pour éprouver la troncature " * 8,
     "assumed_objective": "objectif synthétique T",
@@ -119,7 +121,7 @@ class FailureModeLLM:
         if call_type == "expert_tour0":
             return self._respond(self.expert_mode, EXPERT_OK, max_tokens)
         if call_type == "self_qualification":
-            return self._respond("ok", {"relations": []}, max_tokens)
+            return self._respond("ok", self_qualification_payload(prompt, "different"), max_tokens)
         if call_type == "clerk":
             return self._respond("ok", {"groups": [], "disagreements": []}, max_tokens)
         # Incrément 2 : réponses neutres et valides pour les étapes de délibération.
@@ -130,6 +132,7 @@ NEUTRAL_DELIBERATION: dict[str, dict[str, Any]] = {
     "confrontation": {"acts": [], "convergence_note": "rien à opposer"},
     "steelman": {"steelman": "x" * 100, "strengths": ["f"], "critique": "c"},
     "steelman_recognition": {"recognized": "yes"},
+    "steelman_challenge": {"recognized": "yes", "critique": "c"},
     "revision": {"decision": "maintain"},
     "consolidation": {"families": []},
     "comparison": {"criteria": [], "rows": []},

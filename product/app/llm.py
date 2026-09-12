@@ -13,10 +13,14 @@ Deux chemins coexistent :
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from app.config import Settings
+
+if TYPE_CHECKING:
+    from app.reasoning_policy import ReasoningPolicy
 
 
 class LLMClient(Protocol):
@@ -53,6 +57,9 @@ class LLMResponse:
     # autres). Aucun contenu de bloc non textuel n'est conservé ; None si le client ne les expose
     # pas (faux clients, chemin historique).
     content_blocks: dict[str, int] | None = None
+    # B16 (v1.3.6) — politique de raisonnement réellement transmise au fournisseur pour cet appel
+    # (catégorie, mode, effort, marge) ; None si le client n'en applique pas (faux clients).
+    reasoning_policy: dict[str, Any] | None = None
 
     @property
     def truncated(self) -> bool:
@@ -107,12 +114,25 @@ def estimate_prompt_tokens(*texts: str) -> int:
 
 
 class AnthropicLLMClient:
-    """Client Claude réel. Effectue un appel réseau à l'API Anthropic."""
+    """Client Claude réel. Effectue un appel réseau à l'API Anthropic.
 
-    def __init__(self, api_key: str, model: str, max_tokens: int) -> None:
+    B16 (v1.3.6) : le chemin structuré applique une politique de raisonnement explicite par
+    `call_type` (`thinking`, `output_config.effort`), fournie par `reasoning_policy`
+    (`app.reasoning_policy.reasoning_policy_for`). Sans politique injectée, aucun paramètre de
+    raisonnement n'est envoyé (comportement historique, réservé aux tests et au chemin `complete`).
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        max_tokens: int,
+        reasoning_policy: Callable[[str], ReasoningPolicy] | None = None,
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._max_tokens = max_tokens
+        self._reasoning_policy = reasoning_policy
 
     def complete(self, prompt: str) -> str:
         """Appelle Claude et retourne le texte concaténé de la réponse (chemin historique)."""
@@ -133,11 +153,14 @@ class AnthropicLLMClient:
         import anthropic
 
         client = anthropic.Anthropic(api_key=self._api_key)
+        policy = self._reasoning_policy(call_type) if self._reasoning_policy else None
+        extra: dict[str, Any] = policy.request_options() if policy else {}
         message = client.messages.create(
             model=self._model,
             max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": prompt}],
+            **extra,
         )
         usage = getattr(message, "usage", None)
         return LLMResponse(
@@ -148,6 +171,7 @@ class AnthropicLLMClient:
             ),
             stop_reason=str(getattr(message, "stop_reason", "") or ""),
             content_blocks=count_content_blocks(message.content),
+            reasoning_policy=policy.to_dict() if policy else None,
         )
 
 
@@ -178,9 +202,12 @@ def count_content_blocks(content: object) -> dict[str, int]:
 
 
 def build_llm_client(settings: Settings) -> LLMClient:
-    """Construit le client LLM réel à partir de la configuration."""
+    """Construit le client LLM réel à partir de la configuration (politique B16 injectée)."""
+    from app.reasoning_policy import reasoning_policy_for
+
     return AnthropicLLMClient(
         api_key=settings.anthropic_api_key,
         model=settings.anthropic_model,
         max_tokens=settings.max_tokens,
+        reasoning_policy=lambda call_type: reasoning_policy_for(call_type, settings),
     )

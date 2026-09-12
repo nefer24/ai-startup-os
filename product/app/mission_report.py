@@ -113,10 +113,14 @@ def build_situation_report(
     produced = bool(recommendation) and (recommendation or {}).get("status") == "produced"
     research_items = delib.get("research", [])
     external_found = [r for r in research_items if r.get("status") == "found"]
-    external_missing = [r for r in research_items if r.get("status") != "found"]
+    internal_needed = [r for r in research_items if r.get("status") == "internal_data_required"]
+    external_missing = [
+        r for r in research_items if r.get("status") not in {"found", "internal_data_required"}
+    ]
     evidence_note = (
         f"{len(external_found)} preuve(s) externe(s) sourcée(s) ; "
-        f"{len(external_missing)} question(s) factuelle(s) non résolue(s)"
+        f"{len(external_missing)} question(s) factuelle(s) externe(s) non résolue(s) ; "
+        f"{len(internal_needed)} information(s) interne(s) à demander au demandeur"
         if research_items
         else NOT_VERIFIED
     )
@@ -304,8 +308,12 @@ def _deliberation_summary(delib: dict[str, Any]) -> dict[str, Any]:
                 "required",
                 "reason",
                 "status",
+                "mode",
                 "target",
                 "contradictor",
+                "advocate",
+                "critic",
+                "alternative",
                 "recognition",
                 "strawman_flags",
                 "missing_points",
@@ -318,6 +326,7 @@ def _deliberation_summary(delib: dict[str, Any]) -> dict[str, Any]:
                 "question": r["question"],
                 "status": r["status"],
                 "provider": r["provider"],
+                "fact_source": r.get("fact_source", "either"),
                 "source": r.get("source", ""),
                 "date": r.get("date", ""),
                 "reliability": r.get("reliability", "unknown"),
@@ -325,6 +334,11 @@ def _deliberation_summary(delib: dict[str, Any]) -> dict[str, Any]:
                 "note": r.get("note", ""),
             }
             for r in delib.get("research", [])
+        ],
+        "internal_information_requests": [
+            {"id": r["id"], "question": r["question"], "positions": r.get("positions", [])}
+            for r in delib.get("research", [])
+            if r.get("status") == "internal_data_required"
         ],
         "revisions": [
             {
@@ -413,11 +427,20 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
     st = d.get("steelman", {})
     lines += ["", "### Steelman"]
     if st.get("required"):
-        lines.append(
-            f"- Requis ({st.get('reason')}) — statut **{st.get('status')}** — cible "
-            f"{st.get('target', '')} par {st.get('contradictor', '')} — reconnaissance : "
-            f"{st.get('recognition', 'n/a')}"
-        )
+        if st.get("mode") == "discarded_alternative":
+            alt = st.get("alternative") or {}
+            lines.append(
+                f"- Requis ({st.get('reason')}) — mode **alternative écartée** : "
+                f"« {alt.get('label', '')} » [{alt.get('kind', '')}] défendue par "
+                f"{st.get('advocate', '')}, testée par {st.get('critic', '')} — statut "
+                f"**{st.get('status')}** — reconnaissance : {st.get('recognition', 'n/a')}"
+            )
+        else:
+            lines.append(
+                f"- Requis ({st.get('reason')}) — statut **{st.get('status')}** — cible "
+                f"{st.get('target', '')} par {st.get('contradictor', '')} — reconnaissance : "
+                f"{st.get('recognition', 'n/a')}"
+            )
         if st.get("strawman_flags"):
             lines.append("- Signaux de strawman : " + " ; ".join(st["strawman_flags"]))
         if st.get("missing_points"):
@@ -429,14 +452,27 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
     lines += _bullets(
         [
             {
-                "text": f"{r['id']} « {r['question']} » — {r['provider']} — source : "
-                f"{r['source'] or 'aucune'} — fiabilité {r['reliability']}",
+                "text": f"{r['id']} « {r['question']} » — {r.get('fact_source', 'either')} — "
+                f"{r['provider']} — source : {r['source'] or 'aucune'} — fiabilité "
+                f"{r['reliability']}",
                 "status": r["status"],
             }
             for r in research
         ],
         "aucun désaccord pertinent ne dépendait d'un fait vérifiable",
     )
+    internal = d.get("internal_information_requests", [])
+    if internal:
+        lines += ["", f"### Informations à demander au demandeur ({len(internal)})"]
+        lines += _bullets(
+            [
+                {
+                    "text": f"{r['id']} « {r['question']} » — positions concernées : "
+                    f"{', '.join(r.get('positions', [])) or '—'}"
+                }
+                for r in internal
+            ]
+        )
     revisions = d.get("revisions", [])
     lines += ["", "### Révisions (positions → décision → cause)"]
     lines += _bullets(

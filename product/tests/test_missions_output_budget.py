@@ -306,13 +306,18 @@ def test_composition_bound_is_derived_from_the_options_contract_not_an_average()
         "consolidation_calls_upper_bound": 8,
         "core_nominal_bound": 11,
     }
+    # v1.3.6 (B15) : la borne inclut l'auto-qualification (ici une par position, g = 1 par
+    # défaut de la fonction), le steelman obligatoire ET l'enveloppe de révision (⌈16/2⌉ = 8).
     b16 = minimal_deliberation_bound(
         16, effective_class="structurante", options_per_expert=5, batch_size=16, meta_chunk_size=32
     )
     assert b16["pre_deliberation_calls"] == 32
+    assert b16["self_qualification_calls"] == 16
     assert b16["mandatory_steelman_calls"] == 2
-    assert b16["minimal_deliberation_reserve"] == 16 + 11 + 2
-    assert b16["total_required_calls"] == 61  # > 59 : 16 experts infinançables à 60 appels
+    assert b16["revision_allowance"] == 8
+    assert b16["minimal_deliberation_reserve"] == 16 + 2 + 8 + 11
+    assert b16["reserve_components"]["core_nominal"] == 11
+    assert b16["total_required_calls"] == 69  # > 59 : 16 experts infinançables à 60 appels
     assert (
         feasible_expert_count(
             59,
@@ -321,7 +326,20 @@ def test_composition_bound_is_derived_from_the_options_contract_not_an_average()
             batch_size=16,
             meta_chunk_size=32,
         )
-        == 15
+        == 13
+    )
+    # Auto-qualification groupée par 3 (réglage produit) : 16 experts redeviennent finançables.
+    assert (
+        feasible_expert_count(
+            59,
+            effective_class="structurante",
+            options_per_expert=5,
+            batch_size=16,
+            meta_chunk_size=32,
+            self_qualification_group_max=3,
+            self_qualification_ceiling=6000,
+        )
+        == 16
     )
     # Une seule position : ni auto-qualification, ni confrontation, ni steelman.
     b1 = minimal_deliberation_bound(
@@ -413,16 +431,23 @@ def test_sixteen_positions_get_a_derived_self_qualification_budget_without_retry
         for e in _journal(client, mission["id"])
         if e["entry_type"] == "call_planned" and e["payload"]["call_type"] == "self_qualification"
     ]
-    assert len(planned) == 16
+    # v1.3.6 (§6) : auto-qualification groupée par 3 (6 appels : 5 x 3 + 1) ; la limite est
+    # dérivée du nombre de relations à produire (3 x 15 = 45, puis 15) avec la marge de
+    # raisonnement de catégorie C (500), sous le plafond relevé à 6 000.
+    assert len(planned) == 6
+    for p in planned[:5]:
+        assert p["payload"]["number_of_required_items"] == 45
+        assert "64 + 80 * 45 relations" in p["payload"]["output_budget"]["formula"]
+        assert p["payload"]["max_tokens"] == 5996
+    assert planned[5]["payload"]["number_of_required_items"] == 15
+    assert planned[5]["payload"]["max_tokens"] == 2396
     for p in planned:
-        assert p["payload"]["max_tokens"] == 1896
-        assert p["payload"]["number_of_required_items"] == 15
-        assert "64 + 80 * 15 relations" in p["payload"]["output_budget"]["formula"]
         assert p["payload"]["output_budget"]["floor"] == 1500
-        assert p["payload"]["output_budget"]["ceiling"] == 4000
+        assert p["payload"]["output_budget"]["ceiling"] == 6000
+        assert p["payload"]["output_budget"]["reasoning_headroom"] == 500
     assert [c["max_tokens"] for c in llm.calls if c["call_type"] == "self_qualification"] == [
-        1896
-    ] * 16
+        5996
+    ] * 5 + [2396]
     budget = mission["report"]["budget"]
     assert budget["structured_output_failures"] == 0
     assert budget["structured_output_retries"] == 0
@@ -441,9 +466,12 @@ def test_small_team_keeps_the_historical_limit_without_inflation(
         if e["entry_type"] == "call_planned" and e["payload"]["call_type"] == "self_qualification"
     )
     ob = planned["payload"]["output_budget"]
-    assert (ob["n_items"], ob["required_tokens"], ob["granted"]) == (2, 336, 1500)
+    # v1.3.6 : un seul appel groupé (3 positions x 2 relations = 6) ; le plancher historique
+    # (1 500) reste la base, augmentée de la seule marge de raisonnement de catégorie C (500).
+    assert (ob["n_items"], ob["required_tokens"], ob["granted"]) == (6, 816, 2000)
     assert ob["raised_to_floor"] is True
-    assert {c["max_tokens"] for c in llm.calls if c["call_type"] == "self_qualification"} == {1500}
+    assert ob["reasoning_headroom"] == 500
+    assert {c["max_tokens"] for c in llm.calls if c["call_type"] == "self_qualification"} == {2000}
     assert mission["recommendation"]["status"] == "produced"
 
 
@@ -475,24 +503,33 @@ def test_real_consolidation_plan_is_computed_right_after_tour0(
         3,
     )
     assert core["core_nominal_calls"] == 11
-    assert core["core_worst_calls"] == 22
+    assert core["core_worst_calls"] == 20  # nominal + relances recalculées (8) + comparaison (1)
     assert core["minimal_cycle_calls"] == 16 + 11
     assert core["mandatory_steelman_calls"] == 2
-    assert core["reserved_deliberation_calls"] == 29
-    assert mission["report"]["budget"]["reserved_deliberation_calls"] == 29
+    # v1.3.6 (B15) : réserve = confrontations 16 + steelman 2 + révisions ⌈16/2⌉ = 8 + cœur 11.
+    assert core["revision_allowance"] == 8
+    assert core["reserve_components"]["revisions"] == 8
+    assert core["self_qualification_calls"] == 6
+    assert core["self_qualification_group_size"] == 3
+    assert core["reserved_deliberation_calls"] == 37
+    assert mission["report"]["budget"]["reserved_deliberation_calls"] == 37
     # Toute auto-qualification est planifiée avec cette réserve connue.
-    assert entries[first_self_qual]["payload"]["deliberation_reserve"] == 29
+    assert entries[first_self_qual]["payload"]["deliberation_reserve"] == 37
 
 
 # --- TEST F — une relance B13 ne peut pas voler la confrontation ---------------------------------
 def test_structured_retry_cannot_consume_the_deliberation_reserve(
-    client: TestClient, use_llm: Callable[..., Any]
+    client: TestClient, use_llm: Callable[..., Any], settings_env: Callable[[str, str], None]
 ) -> None:
-    # 14 appels : borne 13 = restant. Après le Tour 0 : réserve = 3 confrontations + cœur 4 = 7.
-    # E1 invalide → relance admise (9 - 1 ≥ 7) ; E2 invalide → relance refusée (7 - 1 < 7) ;
-    # E3 : appel nominal sauté (7 - 1 < 7). La confrontation et la porte restent finançables.
+    # Auto-qualification une par position (g = 1) pour observer trois appels distincts.
+    # 17 appels : borne 3 + 3 + 3 + 2 (révisions réservées) + cœur 4 = 15 ≤ 16. Après le Tour 0
+    # (restant 13), la réserve vaut 3 auto-qualifications + 3 confrontations + 2 + 4 = 12.
+    # E1 invalide (réserve hors E1 : 11) → relance admise (12 - 1 ≥ 11) ; E2 invalide (réserve
+    # hors E2 : 10) → relance refusée (10 - 1 < 10) ; E3 : appel nominal financé par la réserve
+    # elle-même (10 - 1 ≥ 9). Confrontation et porte restent finançables.
+    settings_env("MISSION_SELF_QUALIFICATION_GROUP_MAX", "1")
     llm = use_llm(Breaking(DeliberationLLM(), "self_qualification", {1, 3}))
-    mission = _post(client, max_llm_calls=14)
+    mission = _post(client, max_llm_calls=17)
     assert mission["status"] == "candidate"
     assert mission["stop_reason"] == ""
     assert mission["recommendation"]["status"] == "produced"
@@ -505,17 +542,16 @@ def test_structured_retry_cannot_consume_the_deliberation_reserve(
         == "structured_output_retry_refused_deliberation_reserve"
     )
     assert invalid[1]["payload"]["reserve_kind"] == "deliberation_reserve"
-    assert invalid[1]["payload"]["reserved_calls_for_step"] == 7
-    skipped = _entries(client, mission["id"], "skipped_for_deliberation_reserve")
-    assert [s["payload"]["skipped"] for s in skipped] == ["auto-qualification de E3"]
+    assert invalid[1]["payload"]["reserved_calls_for_step"] == 10
+    assert _entries(client, mission["id"], "skipped_for_deliberation_reserve") == []
     carto = mission["cartography"]
-    assert carto["relations_missing_labels"] == ["P2", "P3"]
+    assert carto["relations_missing_labels"] == ["P2"]
     assert carto["divergence_index_partial"] is True
-    assert carto["self_qualification_coverage"] == "1/3"
+    assert carto["self_qualification_coverage"] == "2/3"
     # Positions du Tour 0 conservées ; aucune relation inventée ; confrontation des trois.
     assert carto["experts_answered"] == 3
     assert len([c for c in llm.calls if c["call_type"] == "confrontation"]) == 3
-    assert mission["llm_calls_used"] == 14
+    assert mission["llm_calls_used"] == 15
 
 
 # --- TEST G / H — relance après troncature : limite recalculée ou refus ------------------------
@@ -526,20 +562,21 @@ def test_truncated_self_qualification_is_retried_with_a_recalculated_limit(
     mission = _post(client)
     assert mission["status"] == "candidate"
     invalid = _entries(client, mission["id"], "structured_output_invalid")
-    assert len(invalid) == 3  # trois experts, trois premières tentatives coupées à 1 500
+    assert len(invalid) == 1  # un appel groupé (3 positions), première tentative coupée à 2 000
     plan = invalid[0]["payload"]["truncation_retry_plan"]
     assert plan["allowed"] is True
     assert plan["items_completed"] == 1
-    # 1 500 tokens pour 1 élément complet → 2 éléments x 1 500 x 1,25 = 3 750 ≤ plafond 4 000.
-    assert plan["max_tokens"] == 3750
-    assert invalid[0]["payload"]["retry_max_tokens"] == 3750
+    # 2 000 tokens pour 1 élément complet → 6 éléments x 2 000 x 1,25 = 15 000, ramené au
+    # plafond 6 000 (admissible car > limite initiale).
+    assert plan["max_tokens"] == 6000
+    assert invalid[0]["payload"]["retry_max_tokens"] == 6000
     retries = _entries(client, mission["id"], "structured_output_retry_planned")
-    assert [r["payload"]["max_tokens"] for r in retries] == [3750, 3750, 3750]
-    assert [r["payload"]["max_tokens_initial"] for r in retries] == [1500, 1500, 1500]
+    assert [r["payload"]["max_tokens"] for r in retries] == [6000]
+    assert [r["payload"]["max_tokens_initial"] for r in retries] == [2000]
     results = _entries(client, mission["id"], "structured_output_retry_result")
     assert all(r["payload"]["valid"] for r in results)
-    assert llm.granted == [1500, 3750] * 3
-    assert mission["report"]["budget"]["structured_output_retries"] == 3
+    assert llm.granted == [2000, 6000]
+    assert mission["report"]["budget"]["structured_output_retries"] == 1
     assert mission["cartography"]["relations_missing_labels"] == []
 
 
@@ -551,14 +588,16 @@ def test_truncated_retry_is_refused_when_no_larger_limit_is_admissible(
     mission = _post(client)
     assert mission["status"] == "candidate"  # information de second ordre : la mission continue
     invalid = _entries(client, mission["id"], "structured_output_invalid")
-    assert len(invalid) == 3
+    assert len(invalid) == 1  # un appel groupé
     for p in invalid:
         assert p["payload"]["will_retry"] is False
         assert (
             p["payload"]["retry_refusal_reason"] == "structured_output_retry_refused_output_budget"
         )
         assert p["payload"]["truncation_retry_plan"]["allowed"] is False
-    assert llm.granted == [1500] * 3  # aucune augmentation automatique, aucune relance
+    # Plafond 1 500 : la marge de raisonnement ne le franchit pas ; aucune augmentation
+    # automatique, aucune relance.
+    assert llm.granted == [1500]
     assert mission["report"]["budget"]["structured_output_retries"] == 0
     assert mission["cartography"]["relations_missing_labels"] == ["P1", "P2", "P3"]
     assert mission["cartography"]["divergence_index_partial"] is True
@@ -575,7 +614,8 @@ def test_empty_clerk_is_exhausted_without_invented_output_and_mission_continues(
     assert mission["status"] == "candidate"
     assert mission["cartography"]["clerk_used"] is False
     clerk_calls = [c for c in llm.calls if c["call_type"] == "clerk"]
-    assert [c["max_tokens"] for c in clerk_calls] == [3000, 8000]  # relance au plafond, une fois
+    # Relance au plafond, une fois (3 000 + marge de raisonnement C 500, puis plafond 8 000).
+    assert [c["max_tokens"] for c in clerk_calls] == [3500, 8000]
     result = _entries(client, mission["id"], "structured_output_retry_result")
     assert result[-1]["step"] == "greffier"
     assert result[-1]["payload"]["final"] == "structured_output_recovery_exhausted"
@@ -669,19 +709,20 @@ def test_many_dimensions_never_engage_an_unfundable_width(
 ) -> None:
     llm = use_llm(DeliberationLLM(framing=wide_framing(n_dims, ["high"])))
     mission = _post(client, declared_class="structurante")
-    # Toutes critiques : 15 délibérables au plus → des dimensions high disparaîtraient → arrêt
-    # explicite après le seul cadrage, jamais un Tour 0 large sans délibération.
+    # Toutes critiques : 16 délibérables au plus (v1.3.6 : réserve B15 complète, auto-
+    # qualification groupée) → des dimensions high disparaîtraient → arrêt explicite après le
+    # seul cadrage, jamais un Tour 0 large sans délibération.
     assert mission["stop_reason"] == "critical_dimension_uncovered"
     assert [c["call_type"] for c in llm.calls] == ["framing"]
-    assert mission["composition"]["bounds"]["max_experts_feasible_deliberation"] == 15
+    assert mission["composition"]["bounds"]["max_experts_feasible_deliberation"] == 16
     assert mission["composition"]["bounds"]["budget_plan"] == "coverage_first"
 
 
 def test_structurante_mission_with_reducible_width_traverses_to_the_gate_within_60_calls(
     client: TestClient, use_llm: Callable[..., Any]
 ) -> None:
-    # 20 dimensions dont 5 critiques : profondeur réduite puis 5 dimensions low retirées
-    # (journalisées) → 15 experts délibérables ; la mission traverse cadrage → Tour 0 →
+    # 20 dimensions dont 5 critiques : profondeur réduite puis 4 dimensions low retirées
+    # (journalisées) → 16 experts délibérables (v1.3.6) ; la mission traverse cadrage → Tour 0 →
     # confrontation → steelman → consolidation → comparaison → synthèse → porte sous 60 appels.
     llm = use_llm(DeliberationLLM(framing=wide_framing(20, ["high", "low", "low", "low"])))
     mission = _post(client, declared_class="structurante")
@@ -689,8 +730,8 @@ def test_structurante_mission_with_reducible_width_traverses_to_the_gate_within_
     assert mission["stop_reason"] == ""
     bounds = mission["composition"]["bounds"]
     assert bounds["plan_feasible"] is True
-    assert len(mission["composition"]["experts"]) == 15
-    assert len(mission["composition"]["uncovered_dimensions"]) == 5
+    assert len(mission["composition"]["experts"]) == 16
+    assert len(mission["composition"]["uncovered_dimensions"]) == 4
     critical = {
         d["name"]
         for d in json.loads(json.dumps(wide_framing(20, ["high", "low", "low", "low"])))[
@@ -713,7 +754,7 @@ def test_structurante_mission_with_reducible_width_traverses_to_the_gate_within_
     assert mission["recommendation"]["gate"]["passed"] is True
     assert mission["llm_calls_used"] <= 60
     assert mission["cost_eur"] <= 8.0
-    assert len([c for c in llm.calls if c["call_type"] == "expert_tour0"]) == 15
+    assert len([c for c in llm.calls if c["call_type"] == "expert_tour0"]) == 16
 
 
 # --- TEST P — B10 / B12 pendant une étape protégée par la réserve ----------------------------
@@ -725,11 +766,12 @@ def test_provider_retry_and_uncertain_cost_do_not_bypass_the_reserve(
     use_llm(FlakyLLM(DeliberationLLM(), {"self_qualification": [overloaded()]}))
     mission = _post(client, max_llm_calls=14)
     assert mission["status"] == "candidate"
-    assert mission["llm_calls_used"] == 14
+    # v1.3.6 : 1 + 3 + 1 (groupée) + 3 + 0 révision demandée + 1 + 1 + 1 + 1 = 12 appels logiques.
+    assert mission["llm_calls_used"] == 12
     budget = mission["report"]["budget"]
     assert budget["provider_retries"] == 1
     assert budget["structured_output_retries"] == 0
-    assert budget["reserved_deliberation_calls"] == 7
+    assert budget["reserved_deliberation_calls"] == 9  # 3 confrontations + 2 révisions + cœur 4
     assert len(sleeps) == 1
     # Délai ambigu sous plafond financier serré pendant l'auto-qualification : B12 refuse la
     # relance fournisseur (connu + incertain + estimation > plafond), échec explicite, aucun
@@ -771,5 +813,5 @@ def test_provider_retry_and_uncertain_cost_do_not_bypass_the_reserve(
     assert budget["uncertain_attempts"] == 1
     assert budget["potential_total_cost_upper_bound_eur"] <= cap
     assert budget["potential_total_cost_upper_bound_eur"] + estimate > cap
-    assert budget["reserved_deliberation_calls"] == 7
+    assert budget["reserved_deliberation_calls"] == 9
     assert budget["known_cost_eur"] == round(known, 6)

@@ -51,6 +51,19 @@ class ContestationOut(_Lenient):
     argument: str = ""
 
 
+class ExplicitProposalOut(_Lenient):
+    """Proposition explicitement formulée dans la demande (v1.3.6 — B17).
+
+    Générique : un investissement structurant, une acquisition, une attente, une externalisation,
+    un abandon… Sert à identifier, après le Tour 0, une alternative que la demande met sur la table
+    et qu'aucune position ne défend (steelman de l'alternative écartée). Jamais un choix.
+    """
+
+    label: str
+    kind: OptionKind = "other"
+    proposed_by: str = ""
+
+
 class FramingOutput(_Lenient):
     """Sortie structurée du cadrage."""
 
@@ -62,6 +75,7 @@ class FramingOutput(_Lenient):
     dimensions: list[DimensionOut] = Field(default_factory=list)
     contestation: ContestationOut = Field(default_factory=ContestationOut)
     escalation_signals: list[str] = Field(default_factory=list)
+    explicit_proposals: list[ExplicitProposalOut] = Field(default_factory=list)
     suggested_class: DecisionClass | Literal[""] = ""
     # Contrat d'escalade : des signaux substantiels exigent une classe suggérée exploitable. Si le
     # cadrage n'en donne pas, le manquement est marqué ici et l'orchestrateur escalade d'un rang
@@ -141,6 +155,19 @@ class SelfQualificationOutput(_Lenient):
     relations: list[PositionRelation] = Field(default_factory=list)
 
 
+class GroupedSelfQualificationEntry(_Lenient):
+    """Relations déclarées AU NOM d'une position (`from_id`) — attribution conservée."""
+
+    from_id: str
+    relations: list[PositionRelation] = Field(default_factory=list)
+
+
+class GroupedSelfQualificationOutput(_Lenient):
+    """Auto-qualification groupée (v1.3.6 — §6) : plusieurs positions qualifiées par appel."""
+
+    qualifications: list[GroupedSelfQualificationEntry] = Field(default_factory=list)
+
+
 # --- Greffier (schéma fermé : aucun champ de préférence) ----------------------------------
 class ClerkGroup(_Lenient):
     """Regroupement d'options jugées équivalentes, attribué et motivé."""
@@ -214,6 +241,9 @@ Basis = Literal["evidence", "inference", "hypothesis", "unknown", "ceo_input", "
 Confidence = Literal["low", "medium", "high"]
 
 
+FactSource = Literal["internal", "external", "either"]
+
+
 class ConfrontationActOut(_Lenient):
     """Un acte de confrontation adressé à une position identifiable (ou `none`)."""
 
@@ -223,6 +253,9 @@ class ConfrontationActOut(_Lenient):
     text: str = ""
     depends_on_fact: bool = False
     fact_question: str = ""
+    # v1.3.6 (§9) — où la réponse au fait se trouve : données internes du demandeur (`internal`),
+    # sources publiques (`external`), ou l'un ou l'autre (`either`, défaut).
+    fact_source: FactSource = "either"
 
 
 class ConfrontationOutput(_Lenient):
@@ -253,6 +286,20 @@ class RecognitionOutput(_Lenient):
     recognized: Recognition = "no"
     missing_points: list[str] = Field(default_factory=list)
     comment: str = ""
+
+
+class AlternativeChallengeOutput(_Lenient):
+    """Test d'un steelman d'alternative écartée par un contradicteur distinct (v1.3.6 — B17).
+
+    `recognized` : la défense est-elle la version la plus forte et fidèle de l'alternative (yes),
+    forte mais incomplète (partial), faible ou déformée (no) ; `critique` : la meilleure objection
+    à cette version forte ; `failure_scenarios` : où elle échoue.
+    """
+
+    recognized: Recognition = "no"
+    missing_points: list[str] = Field(default_factory=list)
+    critique: str = ""
+    failure_scenarios: list[str] = Field(default_factory=list)
 
 
 class RevisionOutput(_Lenient):

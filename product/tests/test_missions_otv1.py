@@ -145,6 +145,40 @@ def expert_output(expert_id: str, kind: str = "build", with_bad_evidence: bool =
     }
 
 
+def self_qualification_payload(prompt: str, relation: str) -> dict[str, Any]:
+    """Réponse d'auto-qualification d'un faux client, par position ou GROUPÉE (v1.3.6).
+
+    Prompt par position : « Autres positions : - P2 : … » → `{"relations": […]}`. Prompt groupé :
+    « === P1 === » pour chaque position confiée + toutes les positions « - Px : … » →
+    `{"qualifications": [{"from_id": "P1", "relations": […]}]}` (attribution conservée).
+    """
+    own = [line.strip("= ").strip() for line in prompt.splitlines() if line.startswith("=== ")]
+    others = [
+        line.split(" : ")[0].strip("- ").strip()
+        for line in prompt.splitlines()
+        if line.startswith("- P")
+    ]
+    if not own:
+        return {
+            "relations": [
+                {"other_id": o, "relation": relation, "reason": "abstrait"} for o in others
+            ]
+        }
+    return {
+        "qualifications": [
+            {
+                "from_id": p,
+                "relations": [
+                    {"other_id": o, "relation": relation, "reason": "abstrait"}
+                    for o in others
+                    if o != p
+                ],
+            }
+            for p in own
+        ]
+    }
+
+
 class ScriptedStructuredLLM:
     """Faux client structuré : réponses par type d'appel, enregistrement de chaque appel."""
 
@@ -183,16 +217,7 @@ class ScriptedStructuredLLM:
                 with_bad_evidence=expert_id in self.bad_evidence_for,
             )
         elif call_type == "self_qualification":
-            others = [
-                line.split(" : ")[0].strip("- ").strip()
-                for line in prompt.splitlines()
-                if line.startswith("- P")
-            ]
-            payload = {
-                "relations": [
-                    {"other_id": o, "relation": self.relation, "reason": "abstrait"} for o in others
-                ]
-            }
+            payload = self_qualification_payload(prompt, self.relation)
         elif call_type == "clerk":
             payload = {
                 "groups": [
@@ -223,6 +248,12 @@ NEUTRAL_DELIBERATION_ANSWERS: dict[str, dict[str, Any]] = {
         "critique": "critique synthétique distincte du steelman",
     },
     "steelman_recognition": {"recognized": "yes", "missing_points": [], "comment": ""},
+    "steelman_challenge": {
+        "recognized": "yes",
+        "missing_points": [],
+        "critique": "critique synthétique de l'alternative écartée",
+        "failure_scenarios": ["scénario d'échec synthétique de l'alternative"],
+    },
     "revision": {"decision": "maintain", "revised_position": "", "reason": "rien de nouveau"},
     "consolidation": {"families": [], "not_merged_because": []},
     "comparison": {"criteria": [], "rows": [], "notes": ""},
@@ -344,14 +375,14 @@ def test_no_fixed_number_of_experts_is_doctrine(
     assert "expérimentale" in bounds["max_angles_per_cell_nature"]
     assert "non doctrinale" in bounds["max_angles_per_cell_nature"]
     # Le plafond de la classe borne économiquement la composition : le cas M est escaladé en
-    # `structurante` (60 appels). B14-prime : le plus grand n dont le noyau obligatoire tient dans
-    # les 59 appels restants — 3n (exposé, auto-qualification, confrontation) + cœur borné par
-    # 5 options par expert + steelman 2 — vaut 15 (n = 16 : 48 + 11 + 2 = 61 > 59). Le nombre
-    # effectif (6) émerge des dimensions et de leur criticité (3 + 2 + 1), pas de la classe ni du
-    # budget.
+    # `structurante` (60 appels). B14-prime / v1.3.6 : le plus grand n dont le noyau obligatoire
+    # tient dans les 59 appels restants — n exposés + auto-qualification groupée (⌈n/3⌉) +
+    # n confrontations + steelman 2 + révisions réservées (⌈n/2⌉ ≤ 8) + cœur borné par 5 options
+    # par expert — vaut 16 (n = 17 : 17 + 6 + 17 + 2 + 8 + 11 = 61 > 59). Le nombre effectif (6)
+    # émerge des dimensions et de leur criticité (3 + 2 + 1), pas de la classe ni du budget.
     assert mission["effective_class"] == "structurante"
     assert bounds["budget_plan"] == "full_deliberation"
-    assert bounds["max_experts_by_budget"] == 15
+    assert bounds["max_experts_by_budget"] == 16
     assert bounds["options_per_expert_bound"] == 5
     assert bounds["plan_feasible"] is True
     assert len(mission["composition"]["experts"]) == 6

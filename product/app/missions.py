@@ -22,17 +22,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
+from app.consensus_guard import claims_superiority, consensus_as_evidence
 from app.db import LLMCallLog, Mission, MissionJournalEntry
 from app.llm import LLMClient, LLMResponse, LLMUsage
 from app.mission_budget import (
     CALLS_PER_EXPERT,
-    SYNTHESIS_CORE_CALLS,
     BudgetExceededError,
     BudgetLedger,
+    deliberation_reserve,
     feasible_expert_count,
-    mandatory_steelman_calls,
     minimal_deliberation_bound,
     plan_budget,
+    self_qualification_plan,
 )
 from app.mission_cartography import (
     anonymize_labels,
@@ -58,8 +59,11 @@ from app.mission_consolidation import (
     plan_consolidation,
     premerge_options,
     select_families_for_attempt,
+    unassigned_groups,
 )
 from app.mission_deliberation import (
+    ALTERNATIVE_CHALLENGE_SYSTEM,
+    ALTERNATIVE_STEELMAN_SYSTEM,
     COMPARISON_CALL_TYPE,
     COMPARISON_SYSTEM,
     CONFRONTATION_CALL_TYPE,
@@ -78,6 +82,8 @@ from app.mission_deliberation import (
     STEELMAN_SYSTEM,
     SYNTHESIS_CALL_TYPE,
     SYNTHESIS_SYSTEM,
+    build_alternative_challenge_prompt,
+    build_alternative_steelman_prompt,
     build_confrontation_prompt,
     build_gate_prompt,
     build_map_view,
@@ -86,6 +92,7 @@ from app.mission_deliberation import (
     build_steelman_prompt,
     build_synthesis_prompt,
     epistemic_tag,
+    find_discarded_alternative,
     is_premature_convergence,
     material_fact_questions,
     select_contradictor,
@@ -96,10 +103,12 @@ from app.mission_exploration import (
     CLERK_SYSTEM,
     EXPERT_CALL_TYPE,
     EXPERT_SYSTEM,
+    GROUPED_SELF_QUAL_SYSTEM,
     SELF_QUAL_CALL_TYPE,
     SELF_QUAL_SYSTEM,
     build_clerk_prompt,
     build_expert_prompt,
+    build_grouped_self_qualification_prompt,
     build_self_qualification_prompt,
     prompt_fingerprint,
 )
@@ -116,6 +125,7 @@ from app.mission_research import (
     classify_research_outcome,
 )
 from app.mission_schemas import (
+    AlternativeChallengeOutput,
     ClerkOutput,
     ComparisonOutput,
     ConfrontationOutput,
@@ -123,6 +133,8 @@ from app.mission_schemas import (
     ExpertOutput,
     FramingOutput,
     GateOutput,
+    GroupedSelfQualificationOutput,
+    PositionRelation,
     RecognitionOutput,
     RecommendationOutput,
     RevisionOutput,
@@ -150,13 +162,18 @@ from app.provider_errors import (
     classify_provider_error,
     retry_delay_seconds,
 )
+from app.reasoning_policy import reasoning_policy_for
 from app.schemas import MissionCreateRequest
 from app.structured_output import (
     MAX_STRUCTURED_RETRIES_PER_CALL,
+    STRUCTURED_OUTPUT_EMPTY,
     STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED,
     STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET,
+    STRUCTURED_OUTPUT_SALVAGED,
+    STRUCTURED_OUTPUT_TRUNCATED,
     analyze_structured_output,
     build_correction_block,
+    salvage_structured_output,
 )
 
 # Attente entre deux tentatives fournisseur : remplaçable en test (aucun vrai sommeil).
@@ -235,12 +252,17 @@ class _Run:
     steps_done: list[str] = field(default_factory=list)
     steps_skipped: list[dict[str, str]] = field(default_factory=list)
     budget_request: dict[str, Any] = field(default_factory=dict)
-    # Cœur de synthèse effectif : consolidation (lots planifiés) + comparaison + synthèse + porte.
-    core_calls: int = SYNTHESIS_CORE_CALLS
-    # Pire cas borné du cœur : nominal + relances autorisées (une par lot, une pour la
-    # comparaison). Les étapes optionnelles ne sont financées qu'au-delà de ce pire cas.
-    core_worst_calls: int = SYNTHESIS_CORE_CALLS + 1
+    # B15 (v1.3.6) — réserve UNIQUE du cycle de délibération, composante par composante
+    # (`app.mission_budget.deliberation_reserve`) : posée à la composition (borne), recalculée sur
+    # les options réelles à la clôture du Tour 0, décrémentée à chaque appel obligatoire. Toute
+    # dépense facultative (auto-qualification, greffier, relance, recherche, révision au-delà de
+    # l'allocation) exige `restant - appels ≥ réserve restante`.
+    reserve_state: dict[str, int] = field(default_factory=dict)
+    revision_allowance: int = 0
     core_plan: dict[str, int] = field(default_factory=dict)
+    # §8.A (v1.3.6) — récupération partielle du dernier appel structuré (éléments complets d'une
+    # sortie coupée), lue par l'étape appelante immédiatement après l'appel.
+    last_salvage: dict[str, Any] | None = None
     # B10 — comptabilité des tentatives fournisseur, distincte des appels logiques du registre :
     # `llm_calls_used` compte les appels logiques réussis ; les tentatives physiques, relances et
     # échecs sont comptés ici et journalisés par tentative.
@@ -255,9 +277,7 @@ class _Run:
     structured_output_recoveries: int = 0
     structured_output_retries: int = 0
     structured_output_exhausted: int = 0
-    # B14-prime (O3) — réserve du cycle minimal de délibération, calculée dès la clôture du Tour 0
-    # (confrontations + cœur réel + steelman obligatoire de la classe) et opposable aux dépenses
-    # pré-délibération restantes (auto-qualification, greffier, relances correctives).
+    # Réserve totale posée à la clôture du Tour 0 (journal, rapport) et plan associé.
     deliberation_reserve: int | None = None
     deliberation_plan: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, Any] = field(default_factory=dict)
@@ -323,6 +343,7 @@ def _call(
             {"reason": exc.reason, **exc.detail, "budget": run.ledger.snapshot()},
         )
         return None
+    policy = reasoning_policy_for(call_type, settings)
     _journal(
         session,
         run,
@@ -336,6 +357,9 @@ def _call(
             "prompt_sha256": prompt_fingerprint(system, prompt),
             "prompt_text": prompt,
             "system_text": system,
+            # B16 — politique de raisonnement de l'appel (catégorie, mode, effort, marge) ; jamais
+            # le contenu d'un bloc de raisonnement.
+            "reasoning_policy": policy.to_dict(),
             **(planned_extra or {}),
         },
     )
@@ -385,6 +409,9 @@ def _call(
             "truncated": response.truncated,
             "raw_length_chars": len(response.text),
             **_content_block_view(response),
+            "reasoning_policy": policy.to_dict(),
+            # Politique effectivement transmise par l'adapter (None pour un faux client).
+            "reasoning_policy_applied": response.reasoning_policy,
             "cost_eur": cost,
             "budget": run.ledger.snapshot(),
         },
@@ -611,39 +638,74 @@ def _content_block_view(response: LLMResponse) -> dict[str, Any]:
 
 
 # --- B13 — appel structuré : analyse, récupération locale, relance corrective bornée ------------
-# Réserve d'appels exigée avant une relance corrective, par étape (B8, B14-prime) : après la
-# clôture du
-# Tour 0, la réserve du cycle minimal de délibération (confrontations + cœur réel + steelman
-# obligatoire) est opposable ; avant, les étapes préalables exigent que le pire cas du cœur reste
-# finançable ; le cadrage n'exige rien (sans cadrage, rien n'existe) ; la synthèse réserve la
-# porte ; la porte ne réserve rien. La consolidation et la comparaison possèdent déjà une relance
-# bornée propre (lot scindé, compaction) : la relance B13 y est désactivée (récupération locale
-# seulement) pour ne pas dépasser le pire cas réservé.
-_STRUCTURED_RETRY_DISABLED_STEPS = frozenset({"consolidation", "comparaison"})
+# B15 (v1.3.6) — une relance corrective est une dépense FACULTATIVE : elle n'est admise que si la
+# réserve restante des étapes obligatoires (`_reserve_remaining`) reste finançable après elle. Une
+# seule définition de la réserve, la même que la composition et que les portes de dépense. La
+# consolidation et la comparaison gardent une relance propre pour les erreurs de CONTRAT (lot
+# scindé, compaction) ; après une TRONCATURE, c'est la relance à limite recalculée (F) qui
+# s'applique à elles aussi — scinder l'entrée ne corrige pas une sortie trop courte (Holdout #9).
+_OWN_RETRY_STEPS = frozenset({"consolidation", "comparaison"})
 _PRE_DELIBERATION_STEPS = frozenset({"tour0", "auto_qualification", "greffier"})
 RETRY_REFUSED_DELIBERATION_RESERVE = "structured_output_retry_refused_deliberation_reserve"
+# Composante de la réserve unique consommée par un appel obligatoire de l'étape.
+RESERVE_COMPONENT_BY_STEP = {
+    "tour0": "tour0",
+    "confrontation": "confrontation",
+    "consolidation": "consolidation",
+    "comparaison": "comparison",
+    "synthese": "synthesis",
+    "porte_qualite": "gate",
+}
+_LENGTH_CATEGORIES = frozenset({STRUCTURED_OUTPUT_TRUNCATED, STRUCTURED_OUTPUT_EMPTY})
+
+
+def _reserve_remaining(run: _Run, *, excluding: str = "") -> int:
+    """Appels encore réservés aux étapes obligatoires (composantes non consommées)."""
+    return sum(v for k, v in run.reserve_state.items() if k != excluding and v > 0)
+
+
+def _consume_reserve(run: _Run, component: str, n: int = 1) -> int:
+    """Consomme `n` appels de la composante (jamais négatif) ; retourne ce qui a été consommé."""
+    if component not in run.reserve_state:
+        return 0
+    taken = min(n, max(0, run.reserve_state[component]))
+    run.reserve_state[component] = max(0, run.reserve_state[component] - n)
+    return taken
+
+
+def _release_reserve(run: _Run, component: str) -> None:
+    """Libère une composante (étape terminée ou non requise) : ses appels ne sont plus réservés."""
+    if component in run.reserve_state:
+        run.reserve_state[component] = 0
 
 
 def _structured_retry_reserve(run: _Run, step: str) -> tuple[int, str]:
     """(réserve exigée, nom de la réserve) pour une relance corrective à cette étape."""
     if step == "cadrage":
         return 0, "none"
-    if step == "synthese":
-        return 1, "quality_gate"
-    if step == "porte_qualite":
+    reserve = _reserve_remaining(run)
+    if reserve == 0:
         return 0, "none"
-    if step in _PRE_DELIBERATION_STEPS and run.deliberation_reserve is not None:
-        return run.deliberation_reserve, "deliberation_reserve"
-    return run.core_worst_calls, "core_worst_case"
+    return (
+        reserve,
+        "deliberation_reserve" if step in _PRE_DELIBERATION_STEPS else "mandatory_stages",
+    )
 
 
 def _output_budget_for(settings: Settings, call_type: str, n_items: int | None) -> OutputBudget:
-    """Limite de sortie d'un appel : formule proportionnée (O1) ou limite fixe de l'étape."""
+    """Limite de sortie d'un appel : formule proportionnée (O1) ou limite fixe de l'étape.
+
+    B16 : la marge de raisonnement de la politique de l'étape s'ajoute au budget textuel des
+    étapes à cardinalité variable (sous plafond) ; elle ne remplace pas le pilotage de l'effort.
+    """
     floor = int(getattr(settings, f"mission_max_tokens_{_SETTING_SUFFIX[call_type]}"))
     if n_items is None or call_type not in OUTPUT_BUDGET_RULES:
         return fixed_output_budget(call_type, floor)
     ceiling = int(getattr(settings, f"mission_output_ceiling_{_SETTING_SUFFIX[call_type]}"))
-    return output_budget(call_type, n_items, floor=floor, ceiling=ceiling)
+    headroom = reasoning_policy_for(call_type, settings).headroom_tokens
+    return output_budget(
+        call_type, n_items, floor=floor, ceiling=ceiling, reasoning_headroom=headroom
+    )
 
 
 _SETTING_SUFFIX = {
@@ -654,6 +716,7 @@ _SETTING_SUFFIX = {
     "confrontation": "confrontation",
     "steelman": "steelman",
     "steelman_recognition": "recognition",
+    "steelman_challenge": "steelman",
     "revision": "revision",
     "consolidation": "consolidation",
     "comparison": "comparison",
@@ -675,8 +738,13 @@ def _call_structured[T: BaseModel](
     call_type: str,
     model: type[T],
     n_items: int | None = None,
+    salvage: bool = False,
 ) -> tuple[LLMResponse | None, T | None, str]:
-    """Appel LLM dont la réponse doit satisfaire un contrat de sortie (B13, B14-prime).
+    """Appel LLM dont la réponse doit satisfaire un contrat de sortie (B13, B14-prime, v1.3.6).
+
+    `salvage` (§8.A) : après une troncature non corrigée par la relance, les éléments COMPLETS de
+    la sortie coupée sont récupérés déterministement et validés par le même schéma ; l'étape lit
+    `run.last_salvage` pour déclarer le résultat partiel et les éléments manquants.
 
     Retourne (dernière réponse, sortie validée ou None, erreur classée). Chemin : limite de sortie
     proportionnée à la tâche (O1, `n_items`) ou fixe → appel sous budget (B10 / B12 à l'intérieur)
@@ -696,6 +764,8 @@ def _call_structured[T: BaseModel](
     """
     budget = _output_budget_for(settings, call_type, n_items)
     max_tokens = budget.granted
+    run.last_salvage = None
+    component = RESERVE_COMPONENT_BY_STEP.get(step, "")
     response = _call(
         session,
         run,
@@ -711,10 +781,14 @@ def _call_structured[T: BaseModel](
             "output_budget": budget.to_dict(),
             "number_of_required_items": budget.n_items,
             "deliberation_reserve": run.deliberation_reserve,
+            "reserve_remaining_before": _reserve_remaining(run),
         },
     )
     if response is None:
         return None, None, ""
+    # L'appel obligatoire de l'étape consomme sa composante de réserve (une relance, jamais).
+    if component:
+        _consume_reserve(run, component)
     outcome = analyze_structured_output(response, model)
     logical_call_id = f"LC-{run.logical_calls}"
     if outcome.recovery.applied:
@@ -754,8 +828,11 @@ def _call_structured[T: BaseModel](
     )
     estimate = run.ledger.estimate_call_cost_eur(system, retry_prompt, retry_max_tokens)
     reserve, reserve_name = _structured_retry_reserve(run, step)
+    length_failure = outcome.category in _LENGTH_CATEGORIES
     refusal = ""
-    if step in _STRUCTURED_RETRY_DISABLED_STEPS:
+    if step in _OWN_RETRY_STEPS and not length_failure:
+        # Erreur de contrat (syntaxe, schéma) : l'étape possède sa relance propre (lot scindé,
+        # compaction). Une TRONCATURE, elle, relève de la relance à limite recalculée ci-dessous.
         refusal = "step_has_own_bounded_retry"
     elif run.stop_reason:
         refusal = f"mission_stopping:{run.stop_reason}"
@@ -821,6 +898,11 @@ def _call_structured[T: BaseModel](
             prefix = refusal
         else:
             prefix = "structured_output_not_retried"
+        salvaged = _try_salvage(
+            session, run, step, actor, call_type, response, model, salvage, outcome.category
+        )
+        if salvaged is not None:
+            return response, salvaged, f"{STRUCTURED_OUTPUT_SALVAGED}: {prefix}: {error}"
         return response, None, f"{prefix}: {error}"
     run.structured_output_retries += 1
     _journal(
@@ -890,11 +972,67 @@ def _call_structured[T: BaseModel](
     )
     if retry_outcome.valid:
         return retry_response, retry_outcome.output, ""
-    return (
-        retry_response,
-        None,
-        f"{STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED}: {retry_outcome.category}: {retry_outcome.error}",
+    exhausted = (
+        f"{STRUCTURED_OUTPUT_RECOVERY_EXHAUSTED}: {retry_outcome.category}: {retry_outcome.error}"
     )
+    # Récupération partielle : de préférence sur la relance (limite plus large), sinon sur la
+    # première réponse ; éléments complets seulement.
+    for candidate, category in (
+        (retry_response, retry_outcome.category),
+        (response, outcome.category),
+    ):
+        salvaged = _try_salvage(
+            session, run, step, actor, call_type, candidate, model, salvage, category
+        )
+        if salvaged is not None:
+            return candidate, salvaged, f"{STRUCTURED_OUTPUT_SALVAGED}: {exhausted}"
+    return retry_response, None, exhausted
+
+
+def _try_salvage[T: BaseModel](
+    session: Session,
+    run: _Run,
+    step: str,
+    actor: str,
+    call_type: str,
+    response: LLMResponse,
+    model: type[T],
+    enabled: bool,
+    category: str,
+) -> T | None:
+    """Récupération déterministe des éléments complets d'une sortie coupée (§8.A), journalisée.
+
+    Conditions : l'étape l'autorise, la réponse a été coupée par le fournisseur, au moins un
+    élément complet est présent et l'objet reconstruit satisfait exactement le schéma. Aucune
+    complétion, aucune valeur inventée ; `run.last_salvage` porte la clé tronquée et le nombre
+    d'éléments conservés pour que l'étape déclare les manquants.
+    """
+    if not enabled or not response.truncated or category not in _LENGTH_CATEGORIES:
+        return None
+    output, result = salvage_structured_output(response, model)
+    if output is None or result.items_kept == 0:
+        return None
+    run.last_salvage = {**result.to_dict(), "logical_call_id": f"LC-{run.logical_calls}"}
+    _journal(
+        session,
+        run,
+        step,
+        "structured_output_salvaged",
+        actor,
+        {
+            "logical_call_id": f"LC-{run.logical_calls}",
+            "call_type": call_type,
+            "category": STRUCTURED_OUTPUT_SALVAGED,
+            **result.to_dict(),
+            "output_tokens": response.usage.output_tokens,
+            "text_chars": len(response.text),
+            "note": (
+                "éléments intégralement fermés conservés ; éléments manquants déclarés par "
+                "l'étape ; aucune complétion"
+            ),
+        },
+    )
+    return output  # type: ignore[return-value]
 
 
 def _structured_failure(
@@ -1264,23 +1402,20 @@ def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
     # positions sont délibérables, arrêt explicite après le cadrage avec demande de budget.
     remaining = run.ledger.remaining_calls
     options_cap = settings.mission_max_options_per_expert
+    bound_kwargs: dict[str, Any] = {
+        "effective_class": m.effective_class,
+        "options_per_expert": options_cap,
+        "batch_size": CONSOLIDATION_BATCH_SIZE,
+        "meta_chunk_size": META_CHUNK_SIZE,
+        "revision_cap": settings.mission_max_revision_calls,
+        "self_qualification_group_max": settings.mission_self_qualification_group_max,
+        "self_qualification_ceiling": settings.mission_output_ceiling_self_qualification,
+    }
 
-    def bound_for(n: int) -> dict[str, int]:
-        return minimal_deliberation_bound(
-            n,
-            effective_class=m.effective_class,
-            options_per_expert=options_cap,
-            batch_size=CONSOLIDATION_BATCH_SIZE,
-            meta_chunk_size=META_CHUNK_SIZE,
-        )
+    def bound_for(n: int) -> dict[str, Any]:
+        return minimal_deliberation_bound(n, **bound_kwargs)
 
-    n_feasible = feasible_expert_count(
-        remaining,
-        effective_class=m.effective_class,
-        options_per_expert=options_cap,
-        batch_size=CONSOLIDATION_BATCH_SIZE,
-        meta_chunk_size=META_CHUNK_SIZE,
-    )
+    n_feasible = feasible_expert_count(remaining, **bound_kwargs)
     needed = max(2, len(framing.dimensions))
     # Une seule dimension émergente : une seule position est légitime (aucune confrontation
     # possible, porte fail-closed B4) ; à partir de deux dimensions, au moins deux positions.
@@ -1314,6 +1449,15 @@ def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
     )
     run.experts = result.experts
     run.composition = result.to_dict()
+    # B15 — la réserve promise à la composition est posée telle quelle (borne sur les options
+    # maximales) ; elle sera recalculée sur les options réelles à la clôture du Tour 0.
+    components = dict(bound["reserve_components"])
+    run.reserve_state = {
+        "tour0": retained,
+        "self_qualification": int(bound["self_qualification_calls"]),
+        **{k: int(components[k]) for k in RESERVE_COMPONENT_KEYS if k in components},
+    }
+    run.revision_allowance = int(bound["revision_allowance"])
     if budget_plan == "coverage_first" and result.experts:
         _journal(
             session,
@@ -1384,6 +1528,7 @@ def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
         run.experts = []
         result.experts = []
         run.composition = result.to_dict()
+        run.reserve_state = {}
         _journal(
             session,
             run,
@@ -1511,41 +1656,75 @@ def _step_tour0(session: Session, run: _Run, llm: LLMClient, settings: Settings)
             "planned": len(run.experts),
         },
     )
-    _plan_deliberation_core(session, run)
+    _plan_deliberation_core(session, run, settings)
 
 
-def _plan_deliberation_core(session: Session, run: _Run) -> None:
-    """B14-prime (O3) — dès la clôture du Tour 0, le cœur réel et la réserve du cycle minimal.
+RESERVE_COMPONENT_KEYS = (
+    "confrontation",
+    "steelman",
+    "revisions",
+    "consolidation",
+    "comparison",
+    "synthesis",
+    "gate",
+)
 
-    Les options réelles sont connues : prétraitement déterministe, plan de consolidation réel
-    (lots, méta-passes), cœur nominal et pire cas (B8), cycle minimal (une confrontation par
-    position + cœur) et steelman obligatoire de la classe. Cette réserve est opposable aux
-    dépenses pré-délibération restantes : auto-qualification nominale, greffier, relances B13.
+
+def _plan_deliberation_core(session: Session, run: _Run, settings: Settings) -> None:
+    """B15 (v1.3.6) — dès la clôture du Tour 0, la réserve unique sur les options RÉELLES.
+
+    Même formule qu'à la composition (`deliberation_reserve`) : confrontation par position,
+    steelman obligatoire de la classe, allocation de révisions, consolidation planifiée (lots,
+    méta-passes), comparaison, synthèse, porte. Cette réserve est opposable à toute dépense
+    facultative restante : auto-qualification, greffier, relances correctives, recherche.
     """
     answered = _answered(run)
+    _release_reserve(run, "tour0")
     if len(answered) < 2:
+        run.reserve_state = {}
+        run.deliberation_reserve = None
         return
     options = collect_options(run.expert_results)
     plan = plan_consolidation(options, CONSOLIDATION_BATCH_SIZE)
     run.core_plan = plan
-    run.core_calls = (SYNTHESIS_CORE_CALLS - 1) + plan["nominal"]
-    run.core_worst_calls = run.core_calls + 2 * plan["batches"] + 1
-    steelman = mandatory_steelman_calls(run.mission.effective_class)
-    minimal = len(answered) + run.core_calls
-    run.deliberation_reserve = minimal + steelman
+    reserve = deliberation_reserve(
+        len(answered),
+        effective_class=run.mission.effective_class,
+        consolidation_calls=plan["nominal"],
+        revision_cap=settings.mission_max_revision_calls,
+    )
+    selfq = self_qualification_plan(
+        len(answered),
+        group_max=settings.mission_self_qualification_group_max,
+        output_ceiling=settings.mission_output_ceiling_self_qualification,
+    )
+    run.reserve_state = {
+        "tour0": 0,
+        "self_qualification": selfq["calls"],
+        **{k: int(reserve[k]) for k in RESERVE_COMPONENT_KEYS},
+    }
+    run.revision_allowance = int(reserve["revisions"])
+    run.deliberation_reserve = int(reserve["total"])
+    core_worst = reserve["core_nominal"] + (plan["worst_case"] - plan["nominal"]) + 1
     run.deliberation_plan = {
         "answered_positions": len(answered),
         "options": len(options),
         "groups": plan["groups"],
         "batches": plan["batches"],
         "meta_passes": plan["meta"],
-        "core_nominal_calls": run.core_calls,
-        "core_worst_calls": run.core_worst_calls,
-        "minimal_cycle_calls": minimal,
-        "mandatory_steelman_calls": steelman,
+        "core_nominal_calls": reserve["core_nominal"],
+        "core_worst_calls": core_worst,
+        "minimal_cycle_calls": reserve["confrontation"] + reserve["core_nominal"],
+        "mandatory_steelman_calls": reserve["steelman"],
+        "revision_allowance": reserve["revisions"],
+        "reserve_components": {k: int(reserve[k]) for k in RESERVE_COMPONENT_KEYS},
         "reserved_deliberation_calls": run.deliberation_reserve,
+        "self_qualification_calls": selfq["calls"],
+        "self_qualification_group_size": selfq["group_size"],
         "remaining_calls": run.ledger.remaining_calls,
-        "pre_deliberation_margin": run.ledger.remaining_calls - run.deliberation_reserve,
+        "pre_deliberation_margin": (
+            run.ledger.remaining_calls - run.deliberation_reserve - selfq["calls"]
+        ),
     }
     _journal(
         session,
@@ -1557,23 +1736,50 @@ def _plan_deliberation_core(session: Session, run: _Run) -> None:
     )
 
 
-def _reserve_allows(session: Session, run: _Run, step: str, what: str) -> bool:
-    """Une dépense pré-délibération (un appel) n'est admise que si la réserve du cycle minimal
-    reste intacte après elle ; sinon elle est sautée et journalisée (jamais inventée)."""
-    if run.deliberation_reserve is None:
-        return True
-    if run.ledger.remaining_calls - 1 >= run.deliberation_reserve:
+def _reserve_allows(
+    session: Session,
+    run: _Run,
+    step: str,
+    what: str,
+    *,
+    calls: int = 1,
+    component: str = "",
+    entry_type: str = "skipped_for_deliberation_reserve",
+) -> bool:
+    """Porte de dépense UNIQUE (B15) : `restant - appels ≥ réserve restante`.
+
+    `component` : composante de la réserve que la dépense consomme (étape obligatoire : sa propre
+    part n'est pas comptée contre elle) ; vide pour une dépense facultative (auto-qualification,
+    greffier, relance, recherche, révision au-delà de l'allocation). Un refus est journalisé ;
+    rien n'est inventé à la place.
+    """
+    own = min(calls, max(0, run.reserve_state.get(component, 0))) if component else 0
+    required = _reserve_remaining(run) - own
+    if run.ledger.remaining_calls - calls >= required:
+        if component:
+            _consume_reserve(run, component, calls)
         return True
     _journal(
         session,
         run,
         step,
-        "skipped_for_deliberation_reserve",
+        entry_type,
         "facilitateur",
         {
             "skipped": what,
+            "calls_needed": calls,
             "remaining_calls": run.ledger.remaining_calls,
+            "reserve_remaining": _reserve_remaining(run),
+            "reserve_required_after": required,
+            "reserve_state": dict(run.reserve_state),
             "reserved_deliberation_calls": run.deliberation_reserve,
+            # Compatibilité de lecture : cœur restant (consolidation + comparaison + synthèse +
+            # porte) et ce même cœur avec ses relances facultatives (pire cas B8).
+            "synthesis_core_calls": sum(
+                run.reserve_state.get(k, 0)
+                for k in ("consolidation", "comparison", "synthesis", "gate")
+            ),
+            "synthesis_core_worst_case_calls": run.deliberation_plan.get("core_worst_calls"),
         },
     )
     return False
@@ -1582,63 +1788,139 @@ def _reserve_allows(session: Session, run: _Run, step: str, what: str) -> bool:
 def _step_self_qualification(
     session: Session, run: _Run, llm: LLMClient, settings: Settings
 ) -> None:
+    """Auto-qualification GROUPÉE (v1.3.6 — §6) : information de second ordre, jamais prioritaire.
+
+    `g` positions sont qualifiées par appel (chacune contre toutes les autres, relations
+    attribuées par `from_id`) ; `g` est dérivé du plafond de sortie de l'étape (`g = 1` reproduit
+    l'appel par expert). Chaque appel exige que la réserve des étapes obligatoires reste intacte
+    (B15) ; sinon les positions du groupe gardent une cartographie partielle (`None`), jamais des
+    relations inventées.
+    """
+    step = "auto_qualification"
     answered = [r for r in run.expert_results if r["output"] is not None]
     if len(answered) < 2 or run.stop_reason:
         _journal(
             session,
             run,
-            "auto_qualification",
+            step,
             "skipped",
             "facilitateur",
             {"reason": run.stop_reason or "moins de deux positions : rien à qualifier"},
         )
+        _release_reserve(run, "self_qualification")
         return
     labels = anonymize_labels([r["expert_id"] for r in answered])
-    for r in answered:
+    plan = self_qualification_plan(
+        len(answered),
+        group_max=settings.mission_self_qualification_group_max,
+        output_ceiling=settings.mission_output_ceiling_self_qualification,
+    )
+    group = max(1, plan["group_size"])
+    all_positions = [(labels[r["expert_id"]], r["output"].position) for r in answered]
+    _journal(
+        session,
+        run,
+        step,
+        "plan",
+        "facilitateur",
+        {**plan, "mode": "grouped" if group > 1 else "per_position"},
+    )
+    for start in range(0, len(answered), group):
+        chunk = answered[start : start + group]
+        ids = [r["expert_id"] for r in chunk]
         if run.stop_reason:
             break
         if not _reserve_allows(
-            session, run, "auto_qualification", f"auto-qualification de {r['expert_id']}"
+            session,
+            run,
+            step,
+            f"auto-qualification de {', '.join(ids)}",
+            component="self_qualification",
         ):
-            # Information de second ordre : la position du Tour 0 est conservée, ses relations
-            # restent absentes (cartographie partielle), la confrontation reste finançable.
-            run.self_qual[r["expert_id"]] = None
+            for r in chunk:
+                run.self_qual[r["expert_id"]] = None
             continue
-        others = [
-            (labels[o["expert_id"]], o["output"].position)
-            for o in answered
-            if o["expert_id"] != r["expert_id"]
-        ]
-        prompt = build_self_qualification_prompt(
-            own_label=labels[r["expert_id"]], own_position=r["output"].position, others=others
-        )
-        response, output, error = _call_structured(
+        if group == 1:
+            r = chunk[0]
+            others = [p for p in all_positions if p[0] != labels[r["expert_id"]]]
+            prompt = build_self_qualification_prompt(
+                own_label=labels[r["expert_id"]], own_position=r["output"].position, others=others
+            )
+            response, output, error = _call_structured(
+                session,
+                run,
+                llm,
+                settings,
+                step=step,
+                actor=r["expert_id"],
+                system=SELF_QUAL_SYSTEM,
+                prompt=prompt,
+                call_type=SELF_QUAL_CALL_TYPE,
+                model=SelfQualificationOutput,
+                n_items=len(others),
+            )
+            if response is None:
+                break
+            run.self_qual[r["expert_id"]] = output
+            _journal(
+                session,
+                run,
+                step,
+                "result",
+                r["expert_id"],
+                {
+                    "parse_error": error,
+                    "relations": [rel.model_dump() for rel in output.relations] if output else [],
+                },
+            )
+            continue
+        own = [(labels[r["expert_id"]], r["output"].position) for r in chunk]
+        prompt = build_grouped_self_qualification_prompt(own=own, all_positions=all_positions)
+        g_response, g_output, g_error = _call_structured(
             session,
             run,
             llm,
             settings,
-            step="auto_qualification",
-            actor=r["expert_id"],
-            system=SELF_QUAL_SYSTEM,
+            step=step,
+            actor="+".join(ids),
+            system=GROUPED_SELF_QUAL_SYSTEM,
             prompt=prompt,
             call_type=SELF_QUAL_CALL_TYPE,
-            model=SelfQualificationOutput,
-            n_items=len(others),
+            model=GroupedSelfQualificationOutput,
+            n_items=len(chunk) * (len(answered) - 1),
         )
-        if response is None:
+        if g_response is None:
             break
-        run.self_qual[r["expert_id"]] = output
-        _journal(
-            session,
-            run,
-            "auto_qualification",
-            "result",
-            r["expert_id"],
-            {
-                "parse_error": error,
-                "relations": [rel.model_dump() for rel in output.relations] if output else [],
-            },
-        )
+        by_label: dict[str, list[PositionRelation]] = {}
+        if g_output is not None:
+            for entry in g_output.qualifications:
+                by_label.setdefault(entry.from_id, list(entry.relations))
+        for r in chunk:
+            own_label = labels[r["expert_id"]]
+            relations = by_label.get(own_label)
+            if relations is None:
+                # Relations absentes pour cette position : cartographie partielle, jamais complétée.
+                run.self_qual[r["expert_id"]] = None
+            else:
+                run.self_qual[r["expert_id"]] = SelfQualificationOutput(
+                    relations=[rel for rel in relations if rel.other_id != own_label]
+                )
+            _journal(
+                session,
+                run,
+                step,
+                "result",
+                r["expert_id"],
+                {
+                    "parse_error": g_error,
+                    "grouped_call_of": ids,
+                    "relations": (
+                        [rel.model_dump() for rel in relations] if relations is not None else []
+                    ),
+                    "relations_missing": relations is None,
+                },
+            )
+    _release_reserve(run, "self_qualification")
 
 
 def _step_clerk(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
@@ -1712,6 +1994,8 @@ def _budget_snapshot(run: _Run) -> dict[str, Any]:
         "structured_output_exhausted": run.structured_output_exhausted,
         "reserved_deliberation_calls": run.deliberation_reserve,
         "deliberation_plan": dict(run.deliberation_plan),
+        "revision_allowance": run.revision_allowance,
+        "reserve_state_at_end": dict(run.reserve_state),
     }
 
 
@@ -1888,17 +2172,17 @@ def _check_deliberation_affordable(session: Session, run: _Run) -> None:
     answered = len(_answered(run))
     if answered < 2:
         return
-    # Le cœur de synthèse dépend de la matière : la consolidation est planifiée en lots bornés
-    # (jamais un appel monolithique), donc son nombre d'appels est estimé ici, avant de délibérer.
-    options = run.cartography.get("options", [])
-    plan = plan_consolidation(options, CONSOLIDATION_BATCH_SIZE)
-    run.core_plan = plan
-    run.core_calls = (SYNTHESIS_CORE_CALLS - 1) + plan["nominal"]
-    # Pire cas borné (B8) : + une relance scindée par lot de consolidation, + une relance de
-    # comparaison. Les relances ne sont dépensées que si les étapes plus prioritaires restent
-    # finançables (porte > synthèse > comparaison valide > consolidation valide > relances).
-    run.core_worst_calls = run.core_calls + 2 * plan["batches"] + 1
-    minimal = answered + run.core_calls
+    # B15 : le cycle minimal est la réserve unique restante (confrontation, steelman requis,
+    # allocation de révisions, consolidation planifiée, comparaison, synthèse, porte) — la même
+    # que celle promise à la composition et protégée pendant la pré-délibération.
+    _release_reserve(run, "tour0")
+    _release_reserve(run, "self_qualification")
+    plan = run.core_plan or plan_consolidation(
+        run.cartography.get("options", []), CONSOLIDATION_BATCH_SIZE
+    )
+    minimal = _reserve_remaining(run)
+    core_nominal = plan["nominal"] + 3
+    core_worst = core_nominal + (plan["worst_case"] - plan["nominal"]) + 1
     _journal(
         session,
         run,
@@ -1907,12 +2191,14 @@ def _check_deliberation_affordable(session: Session, run: _Run) -> None:
         "facilitateur",
         {
             "answered_positions": answered,
-            "core_nominal_calls": run.core_calls,
-            "core_worst_case_calls": run.core_worst_calls,
+            "core_nominal_calls": core_nominal,
+            "core_worst_case_calls": core_worst,
             "consolidation_plan": plan,
+            "reserve_components": dict(run.reserve_state),
             "remaining_calls": run.ledger.remaining_calls,
             "minimal_cycle_calls": minimal,
-            "retries_guaranteed": run.ledger.remaining_calls >= answered + run.core_worst_calls,
+            "retries_guaranteed": run.ledger.remaining_calls
+            >= minimal + (core_worst - core_nominal),
         },
     )
     if run.ledger.remaining_calls >= minimal:
@@ -1951,30 +2237,26 @@ def _check_deliberation_affordable(session: Session, run: _Run) -> None:
     )
 
 
-def _can_spend(session: Session, run: _Run, step: str, calls_needed: int, what: str) -> bool:
-    """Une étape optionnelle n'est financée que si le cœur de synthèse reste finançable après.
+def _can_spend(
+    session: Session, run: _Run, step: str, calls_needed: int, what: str, *, component: str = ""
+) -> bool:
+    """Porte de dépense d'une étape de délibération (B15) — même invariant que la composition.
 
-    Priorité explicite : largeur du Tour 0 → confrontation → (steelman, recherche, révision si
-    le budget le permet) → consolidation, comparaison, synthèse, porte qualité. Un refus est
-    journalisé ; il n'y a ni relance ni file d'attente.
+    Une étape OBLIGATOIRE (steelman requis, révision dans l'allocation) dépense sa propre
+    composante de la réserve ; une étape facultative (recherche, révision au-delà de
+    l'allocation) n'est financée que si la réserve restante des étapes obligatoires tient après
+    elle. Un refus est journalisé (`budget_reserved_for_synthesis`) ; ni relance ni file
+    d'attente.
     """
-    if run.ledger.remaining_calls - calls_needed >= run.core_worst_calls:
-        return True
-    _journal(
+    return _reserve_allows(
         session,
         run,
         step,
-        "budget_reserved_for_synthesis",
-        "facilitateur",
-        {
-            "skipped": what,
-            "calls_needed": calls_needed,
-            "remaining_calls": run.ledger.remaining_calls,
-            "synthesis_core_calls": run.core_calls,
-            "synthesis_core_worst_case_calls": run.core_worst_calls,
-        },
+        what,
+        calls=calls_needed,
+        component=component,
+        entry_type="budget_reserved_for_synthesis",
     )
-    return False
 
 
 # --- C. Confrontation -----------------------------------------------------------------------
@@ -2073,6 +2355,7 @@ def _step_confrontation(session: Session, run: _Run, llm: LLMClient, settings: S
                 "convergence_note": output.convergence_note if output else "",
             },
         )
+    _release_reserve(run, "confrontation")
     run.steps_done.append(step)
 
 
@@ -2102,17 +2385,46 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
     }
     if not run.steelman["required"]:
         _journal(session, run, step, "not_required", "facilitateur", dict(run.steelman))
+        _release_reserve(run, "steelman")
         return
     if len(answered) < 2:
         run.steelman["status"] = "impossible_single_position"
         _skip(session, run, step, "une seule position : aucun contradicteur possible")
+        _release_reserve(run, "steelman")
         return
-    if not _can_spend(session, run, step, 2, "steelman + reconnaissance"):
+    if not _can_spend(session, run, step, 2, "steelman + reconnaissance", component="steelman"):
         run.steelman["status"] = "budget_reserved_for_synthesis"
         _skip(session, run, step, "budget réservé au cœur de synthèse : steelman non financé")
+        _release_reserve(run, "steelman")
         return
     clusters = run.cartography.get("position_clusters") or [[r["expert_id"] for r in answered]]
     dominant = list(clusters[0])
+    # B17 (v1.3.6) — classe structurante / critique : si la demande met explicitement une
+    # alternative sur la table et qu'AUCUNE position ne la défend, le steelman porte sur cette
+    # alternative écartée (avocat désigné, contradicteur distinct, reconnaissance par le
+    # contradicteur) plutôt que sur la position dominante, qu'il ne ferait que renforcer.
+    alternative = (
+        find_discarded_alternative(
+            proposals=[p.model_dump() for p in run.framing.explicit_proposals]
+            if run.framing
+            else [],
+            option_groups=run.cartography.get("option_groups", []),
+            options=run.cartography.get("options", []),
+            positions=[
+                {"label": run.labels[r["expert_id"]], "position": r["output"].position}
+                for r in answered
+            ],
+            request_text=" ".join(_request_texts(run)),
+        )
+        if required_by_class
+        else None
+    )
+    if alternative is not None:
+        _steelman_discarded_alternative(
+            session, run, llm, settings, answered, dominant, alternative
+        )
+        _release_reserve(run, "steelman")
+        return
     target_expert = dominant[0]
     experts_view = [{"expert_id": r["expert_id"], "angle": r["angle"]} for r in answered]
     contradictor = select_contradictor(experts_view, dominant, run.labels)
@@ -2239,6 +2551,187 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
         target_expert,
         {"recognized": recognition, "missing_points": missing, "steelman_status": status},
     )
+    _release_reserve(run, "steelman")
+    run.steps_done.append(step)
+
+
+def _steelman_discarded_alternative(
+    session: Session,
+    run: _Run,
+    llm: LLMClient,
+    settings: Settings,
+    answered: list[dict[str, Any]],
+    dominant: list[str],
+    alternative: dict[str, Any],
+) -> None:
+    """Steelman d'une alternative écartée (B17) : défense, contradiction distincte, reconnaissance.
+
+    Avocat : une perspective ayant elle-même listé l'alternative comme option (à défaut, un angle
+    critique hors du cluster dominant) ; contradicteur : première position du cluster dominant
+    distincte de l'avocat. La reconnaissance (fidélité et force de la défense) est rendue par le
+    contradicteur, faute de tenant de l'alternative. Statut, objection et rapport suivent le
+    contrat du steelman ordinaire.
+    """
+    step = "steelman"
+    ids = [r["expert_id"] for r in answered]
+    experts_view = [{"expert_id": r["expert_id"], "angle": r["angle"]} for r in answered]
+    advocate = next((e for e in alternative.get("experts", []) if e in ids), None)
+    if advocate is None:
+        advocate = select_contradictor(experts_view, dominant, run.labels) or ids[0]
+    critic = next((e for e in dominant if e != advocate), None)
+    if critic is None:
+        critic = next(e for e in ids if e != advocate) if len(ids) > 1 else advocate
+    alt_target = f"alternative écartée : {alternative['label'][:80]}"
+    run.steelman.update(
+        {
+            "mode": "discarded_alternative",
+            "alternative": {
+                k: alternative.get(k) for k in ("label", "kind", "source", "option_ids", "experts")
+            },
+            "advocate_expert": advocate,
+            "advocate": run.labels[advocate],
+            "critic_expert": critic,
+            "critic": run.labels[critic],
+            "target": alt_target,
+            "contradictor": run.labels[critic],
+            "dominant_cluster": [run.labels[e] for e in dominant],
+        }
+    )
+    _journal(
+        session,
+        run,
+        step,
+        "steelman_alternative_selected",
+        "facilitateur",
+        {
+            "alternative": run.steelman["alternative"],
+            "endorsed_by": alternative.get("endorsed_by", []),
+            "advocate": run.labels[advocate],
+            "critic": run.labels[critic],
+            "reason": "proposition explicite de la demande défendue par aucune position",
+        },
+    )
+    problem = run.framing.problem_understood if run.framing else ""
+    against = [r["output"].position[:200] for r in answered if r["expert_id"] != advocate]
+    response, output, error = _call_structured(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor=advocate,
+        system=ALTERNATIVE_STEELMAN_SYSTEM,
+        prompt=build_alternative_steelman_prompt(
+            advocate_label=run.labels[advocate],
+            alternative_label=alternative["label"],
+            alternative_kind=str(alternative.get("kind", "other")),
+            alternative_summaries=list(alternative.get("summaries", [])),
+            problem=problem,
+            positions_against=against,
+        ),
+        call_type=STEELMAN_CALL_TYPE,
+        model=SteelmanOutput,
+    )
+    if response is None:
+        run.steelman["status"] = "budget_stop"
+        return
+    if output is None:
+        run.steelman.update({"status": "failed", "parse_error": error})
+        _journal(session, run, step, "failed", advocate, {"parse_error": error})
+        return
+    flags = strawman_flags(output)
+    run.steelman.update(
+        {
+            "steelman": output.steelman,
+            "strengths": output.strengths,
+            "failure_scenarios": output.failure_scenarios,
+            "strawman_flags": flags,
+        }
+    )
+    _journal(
+        session,
+        run,
+        step,
+        "steelman_result",
+        advocate,
+        {"target": alt_target, "strawman_flags": flags, "mode": "discarded_alternative"},
+    )
+    ch_response, ch_out, ch_err = _call_structured(
+        session,
+        run,
+        llm,
+        settings,
+        step=step,
+        actor=critic,
+        system=ALTERNATIVE_CHALLENGE_SYSTEM,
+        prompt=build_alternative_challenge_prompt(
+            critic_label=run.labels[critic],
+            alternative_label=alternative["label"],
+            steelman=output.steelman,
+            strengths=output.strengths,
+            failure_scenarios=output.failure_scenarios,
+        ),
+        call_type="steelman_challenge",
+        model=AlternativeChallengeOutput,
+    )
+    recognition = "no"
+    missing: list[str] = []
+    critique = ""
+    critic_scenarios: list[str] = []
+    if ch_response is not None:
+        if ch_out is not None:
+            recognition = ch_out.recognized
+            missing = ch_out.missing_points
+            critique = ch_out.critique
+            critic_scenarios = ch_out.failure_scenarios
+        run.steelman["recognition_parse_error"] = ch_err
+    else:
+        run.steelman["recognition_parse_error"] = "contradiction non exécutée (budget)"
+    if flags or recognition == "no":
+        status = "rejected_strawman"
+    elif recognition == "partial":
+        status = "accepted_partial"
+    else:
+        status = "accepted"
+    run.steelman.update(
+        {
+            "recognition": recognition,
+            "missing_points": missing,
+            "critique": critique,
+            "critic_failure_scenarios": critic_scenarios,
+            "status": status,
+        }
+    )
+    if critique.strip():
+        run.objections.append(
+            {
+                "id": f"OBJ-{len(run.objections) + 1}",
+                "from": run.labels[critic],
+                "from_expert": critic,
+                "target": alt_target,
+                "target_expert": "",
+                "act": "steelman_critique",
+                "nature": "solution",
+                "text": critique,
+                "depends_on_fact": False,
+                "fact_question": "",
+                "status": "open" if status != "rejected_strawman" else "inadmissible_strawman",
+                "failure_scenarios": critic_scenarios,
+            }
+        )
+    _journal(
+        session,
+        run,
+        step,
+        "alternative_challenge_result",
+        critic,
+        {
+            "recognized": recognition,
+            "missing_points": missing,
+            "critique_present": bool(critique.strip()),
+            "steelman_status": status,
+        },
+    )
     run.steps_done.append(step)
 
 
@@ -2258,6 +2751,49 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
     for q in questions:
         if run.stop_reason:
             break
+        fact_source = str(q.get("source", "either"))
+        if fact_source == "internal":
+            # §9 (v1.3.6) — donnée propre du demandeur : aucun fournisseur web ne peut y répondre ;
+            # la question est inscrite comme information à demander, sans appel, sans invention.
+            run.evidence.append(
+                item := {
+                    "id": f"EV-{len(run.evidence) + 1}",
+                    "question": q["question"],
+                    "claim": q["claim"],
+                    "raised_by": q["raised_by"],
+                    "raised_by_all": q.get("raised_by_all", [q["raised_by"]]),
+                    "target": q["target"],
+                    "positions": list(q.get("positions", [])),
+                    "objection_ids": _objection_ids_for_question(run, q["question"]),
+                    "status": "internal_data_required",
+                    "reason": (
+                        "donnée interne du demandeur : hors de portée d'une recherche externe"
+                    ),
+                    "fact_source": fact_source,
+                    "documents_returned": 0,
+                    "answer_found": None,
+                    "requires_internal_data": True,
+                    "provider": "none",
+                    "findings": [],
+                    "source": "",
+                    "date": "",
+                    "excerpt": "",
+                    "reliability": "unknown",
+                    "provenance": "internal_request",
+                    "note": "information à demander au demandeur (données internes)",
+                    "answer_summary": "",
+                }
+            )
+            run.research.append(item)
+            _journal(
+                session,
+                run,
+                step,
+                "result",
+                "Recherche",
+                {k: v for k, v in item.items() if k != "answer_summary"},
+            )
+            continue
         if provider.name == "none":
             result = provider.search(q["question"], max_tokens=0)  # aucun appel, aucun coût
         else:
@@ -2269,17 +2805,13 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
         # Intégrité sémantique (B1) : le statut est reclassé déterministement — `found` exige des
         # sources ET une réponse matérielle déclarée ; des documents génériques restent tracés
         # comme résultats de recherche, jamais comme preuve.
-        status, reason = classify_research_outcome(result)
+        raw_status, reason = classify_research_outcome(result)
+        # §9 — indisponibilité EXTERNE (fournisseur non configuré), distincte d'une donnée
+        # interne et d'une recherche non déclenchée.
+        status: str = "unavailable_external" if raw_status == "unavailable" else raw_status
         first = result.findings[0] if (result.findings and status == "found") else None
         # Provenance de débat : objections dont cette question est issue (pour la trace et pour
         # cibler la révision), positions concernées (jamais « tout le monde »).
-        q_key = " ".join(q["question"].lower().split())
-        objection_ids = [
-            o["id"]
-            for o in run.objections
-            if o.get("depends_on_fact")
-            and " ".join(str(o.get("fact_question", "")).lower().split()) == q_key
-        ]
         item = {
             "id": f"EV-{len(run.evidence) + 1}",
             "question": q["question"],
@@ -2288,9 +2820,10 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
             "raised_by_all": q.get("raised_by_all", [q["raised_by"]]),
             "target": q["target"],
             "positions": list(q.get("positions", [])),
-            "objection_ids": objection_ids,
+            "objection_ids": _objection_ids_for_question(run, q["question"]),
             "status": status,
             "reason": reason,
+            "fact_source": fact_source,
             "documents_returned": len(result.findings),
             "answer_found": result.answer_found,
             "requires_internal_data": result.requires_internal_data,
@@ -2319,6 +2852,16 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
             {k: v for k, v in item.items() if k != "answer_summary"},
         )
     run.steps_done.append(step)
+
+
+def _objection_ids_for_question(run: _Run, question: str) -> list[str]:
+    q_key = " ".join(question.lower().split())
+    return [
+        o["id"]
+        for o in run.objections
+        if o.get("depends_on_fact")
+        and " ".join(str(o.get("fact_question", "")).lower().split()) == q_key
+    ]
 
 
 RESEARCH_SYSTEM_LABEL = "recherche ciblée"
@@ -2430,8 +2973,18 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
     answered = _answered(run)
     if not answered:
         _skip(session, run, step, "aucune position à réviser")
+        _release_reserve(run, "revisions")
         return
-    for r in answered:
+
+    def _open_count(eid: str) -> int:
+        return sum(1 for o in run.objections if o["target_expert"] == eid and o["status"] == "open")
+
+    # B15 — l'allocation de révisions réservée va d'abord aux positions les plus contestées
+    # (ordre déterministe : objections ouvertes décroissantes, puis ordre d'exposé) ; au-delà de
+    # l'allocation, une révision reste possible sur le budget restant, jamais garantie.
+    ordered = sorted(enumerate(answered), key=lambda ir: (-_open_count(ir[1]["expert_id"]), ir[0]))
+    reserved_left = run.reserve_state.get("revisions", 0)
+    for _, r in ordered:
         if run.stop_reason:
             break
         eid = r["expert_id"]
@@ -2471,7 +3024,15 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
             )
             _journal(session, run, step, "no_new_information", eid, {"label": label})
             continue
-        if not _can_spend(session, run, step, 1, f"révision de {label}"):
+        within_allowance = reserved_left > 0
+        if not _can_spend(
+            session,
+            run,
+            step,
+            1,
+            f"révision de {label}",
+            component="revisions" if within_allowance else "",
+        ):
             run.revisions.append(
                 {
                     "expert_id": eid,
@@ -2487,6 +3048,8 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
                 }
             )
             continue
+        if within_allowance:
+            reserved_left -= 1
         prompt = build_revision_prompt(
             own_label=label,
             own_position=previous,
@@ -2536,6 +3099,7 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
             "triggered_by": triggered,
             "new_information_ids": new_ids,
             "called": True,
+            "within_reserved_allowance": within_allowance,
             "parse_error": error,
             "unexplained_change": decision != "maintain" and not triggered,
         }
@@ -2547,6 +3111,10 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
                 if o["id"] in triggered or by_steelman:
                     o["status"] = "addressed"
         _journal(session, run, step, "result", eid, entry)
+    # L'ordre d'exposé est rétabli pour le rapport et la synthèse.
+    order_index = {r["expert_id"]: i for i, r in enumerate(answered)}
+    run.revisions.sort(key=lambda rev: order_index.get(rev["expert_id"], len(order_index)))
+    _release_reserve(run, "revisions")
     run.steps_done.append(step)
 
 
@@ -2578,8 +3146,12 @@ def _consolidation_output(
     prompt: str,
     what: str,
     n_items: int,
-) -> tuple[ConsolidationOutput | None, str, bool]:
-    """Un appel de consolidation sous budget : (sortie, erreur classée, budget_stop)."""
+) -> tuple[ConsolidationOutput | None, str, bool, bool]:
+    """Un appel de consolidation sous budget : (sortie, erreur classée, budget_stop, partielle).
+
+    `partielle` (§8.A) : la sortie provient d'une récupération des éléments complets d'une
+    réponse coupée ; les groupes non cités n'ont pas été jugés et restent non consolidés.
+    """
     response, output, error = _call_structured(
         session,
         run,
@@ -2592,9 +3164,11 @@ def _consolidation_output(
         call_type=CONSOLIDATION_CALL_TYPE,
         model=ConsolidationOutput,
         n_items=n_items,
+        salvage=True,
     )
     if response is None:
-        return None, "budget", True
+        return None, "budget", True, False
+    partial = output is not None and run.last_salvage is not None
     if output is None:
         _journal(
             session,
@@ -2604,18 +3178,18 @@ def _consolidation_output(
             "Greffier",
             {"what": what, "parse_error": error},
         )
-    return output, error, False
+    return output, error, False, partial
 
 
-def _retry_allowed(
-    session: Session, run: _Run, step: str, *, extra_calls: int, higher_priority_calls: int
-) -> bool:
-    """Une relance n'est financée que si les étapes plus prioritaires restent finançables.
+def _is_length_failure(error: str) -> bool:
+    return STRUCTURED_OUTPUT_TRUNCATED in error or STRUCTURED_OUTPUT_EMPTY in error
 
-    Hiérarchie (B8) : porte qualité > synthèse > comparaison valide > consolidation valide >
-    relance de comparaison > relance de consolidation > révisions > recherche > profondeur.
-    """
-    if run.ledger.remaining_calls - extra_calls >= higher_priority_calls:
+
+def _retry_allowed(session: Session, run: _Run, step: str, *, extra_calls: int) -> bool:
+    """Une relance propre (lot scindé, compaction) est facultative : elle n'est financée que si la
+    réserve restante des étapes obligatoires (B15) tient après elle."""
+    reserve = _reserve_remaining(run)
+    if run.ledger.remaining_calls - extra_calls >= reserve:
         return True
     _journal(
         session,
@@ -2626,7 +3200,8 @@ def _retry_allowed(
         {
             "extra_calls": extra_calls,
             "remaining_calls": run.ledger.remaining_calls,
-            "reserved_for_higher_priority": higher_priority_calls,
+            "reserved_for_higher_priority": reserve,
+            "reserve_state": dict(run.reserve_state),
         },
     )
     return False
@@ -2656,6 +3231,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
     unconsolidated: list[str] = []
     calls = 0
     retries = 0
+    spent_before = run.ledger.max_calls - run.ledger.remaining_calls
     last_error = ""
     status = "ok"
     premerged = sum(1 for g in groups if len(g["member_ids"]) > 1)
@@ -2684,9 +3260,8 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
     if not batches:
         families_raw = [direct_family(g) for g in groups]
     budget_stop = False
-    remaining_batches = len(batches)
+    salvaged_batches = 0
     for items in batches:
-        remaining_batches -= 1
         if budget_stop or run.stop_reason:
             unconsolidated += [m for g in items for m in g["member_ids"]]
             continue
@@ -2695,7 +3270,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         while pending:
             chunk = pending.pop(0)
             calls += 1
-            output, error, budget_stop = _consolidation_output(
+            output, error, budget_stop, partial = _consolidation_output(
                 session,
                 run,
                 llm,
@@ -2710,15 +3285,14 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 break
             if output is None:
                 last_error = error
-                # Relance compacte bornée : le lot est scindé en deux, une seule fois, et
-                # seulement si les étapes plus prioritaires restent finançables.
-                higher = remaining_batches + meta_passes + 3  # lots restants, méta, comp/syn/porte
+                # Relance propre bornée (erreur de CONTRAT seulement) : le lot est scindé en deux,
+                # une seule fois, si la réserve des étapes obligatoires tient. Une troncature a
+                # déjà eu sa relance à limite recalculée (B13/F) : scinder n'y changerait rien.
                 if (
                     attempt == 0
                     and len(chunk) >= 2
-                    and _retry_allowed(
-                        session, run, step, extra_calls=2, higher_priority_calls=higher
-                    )
+                    and not _is_length_failure(error)
+                    and _retry_allowed(session, run, step, extra_calls=2)
                 ):
                     attempt = 1
                     retries += 1
@@ -2740,7 +3314,20 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 status = "failed"
                 unconsolidated += [m for g in chunk for m in g["member_ids"]]
                 continue
-            fams, nm = families_from_batch(output, chunk, notes)
+            if partial:
+                # §8.A — éléments complets seulement : les groupes non jugés restent non
+                # consolidés et sont déclarés ; le statut devient `partial` (jamais `ok`).
+                salvaged_batches += 1
+                missing_groups = unassigned_groups(output, chunk)
+                by_id = {g["group_id"]: g for g in chunk}
+                unconsolidated += [m for gid in missing_groups for m in by_id[gid]["member_ids"]]
+                notes.append(
+                    f"lot de {len(chunk)} groupe(s) récupéré partiellement : "
+                    f"{len(missing_groups)} groupe(s) non jugé(s), déclarés non consolidés"
+                )
+                if status == "ok":
+                    status = "partial"
+            fams, nm = families_from_batch(output, chunk, notes, partial=partial)
             families_raw.extend(fams)
             not_merged += nm
     # Méta-consolidation (bornée) : familles issues de lots différents, natures compatibles.
@@ -2755,7 +3342,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
             for i, f in enumerate(chunk_f, start=1):
                 f["temp_id"] = f"T{start + i}"
             calls += 1
-            output, error, budget_stop = _consolidation_output(
+            output, error, budget_stop, partial = _consolidation_output(
                 session,
                 run,
                 llm,
@@ -2766,7 +3353,12 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
             )
             if output is not None:
                 merged = merge_families_from_meta(output, chunk_f, notes)
-                notes.append(f"méta-consolidation : {len(chunk_f)} → {len(merged)} famille(s)")
+                notes.append(
+                    f"méta-consolidation : {len(chunk_f)} → {len(merged)} famille(s)"
+                    + (" (fusions récupérées partiellement)" if partial else "")
+                )
+                if partial and status == "ok":
+                    status = "partial"
                 merged_all += merged
             else:
                 last_error = error or last_error
@@ -2794,7 +3386,10 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         "unconsolidated_option_ids": unconsolidated,
         "batches": len(batches),
         "calls": calls,
+        # Appels réellement dépensés (lots, scissions ET relances recalculées B13).
+        "llm_calls_spent": run.ledger.max_calls - run.ledger.remaining_calls - spent_before,
         "retries": retries,
+        "salvaged_batches": salvaged_batches,
         "notes": notes,
         "parse_error": last_error,
     }
@@ -2806,6 +3401,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         "Greffier",
         {k: v for k, v in run.consolidation.items() if k not in {"families", "trace"}},
     )
+    _release_reserve(run, "consolidation")
     if not budget_stop:
         run.steps_done.append(step)
 
@@ -2997,6 +3593,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
     error = ""
     compared = retained
     coverage_note = ""
+    salvaged = False
     for attempt in (1, 2):
         response, output, error = _call_structured(
             session,
@@ -3016,7 +3613,9 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             call_type=COMPARISON_CALL_TYPE,
             model=ComparisonOutput,
             n_items=len(compared),
+            salvage=True,
         )
+        salvaged = output is not None and run.last_salvage is not None
         if response is None:
             run.comparison = {
                 **base_payload,
@@ -3032,8 +3631,20 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
                 "parse_error": "budget",
             }
             return
-        attempts.append({"attempt": attempt, "families": len(compared), "parse_error": error})
+        attempts.append(
+            {
+                "attempt": attempt,
+                "families": len(compared),
+                "parse_error": error,
+                "salvaged": salvaged,
+            }
+        )
         if output is not None or attempt == 2:
+            break
+        if _is_length_failure(error):
+            # Une troncature a déjà eu sa relance à limite recalculée (B13/F) et sa récupération
+            # partielle : compacter l'entrée ne corrigerait pas une sortie trop courte.
+            coverage_note = "sortie coupée : relance à limite recalculée épuisée, aucune compaction"
             break
         # Relance compacte bornée et STRATIFIÉE : hard et couverture sont tous conservés ; seules
         # les facultatives les moins soutenues sont écartées. Sans marge, pas de relance.
@@ -3058,7 +3669,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
                 {"mandatory": len(must), "compared": len(compared)},
             )
             break
-        if not _retry_allowed(session, run, step, extra_calls=1, higher_priority_calls=2):
+        if not _retry_allowed(session, run, step, extra_calls=1):
             coverage_note = "relance non financée : synthèse et porte qualité prioritaires"
             break
         kept_ids = {f["family_id"] for f in must + keep_optional}
@@ -3122,6 +3733,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         "coverage_preserved": coverage_preserved,
         "not_compared": deferred,
         "missing_family_ids": missing,
+        "salvaged": salvaged,
         "attempts": attempts,
         "notes": output.notes if output else coverage_note,
         "coverage_note": coverage_note,
@@ -3143,11 +3755,13 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             "coverage_preserved": coverage_preserved,
             "not_compared": len(deferred),
             "missing": missing,
+            "salvaged": salvaged,
             "attempts": attempts,
             "coverage_note": coverage_note,
             "parse_error": error,
         },
     )
+    _release_reserve(run, "comparison")
     run.steps_done.append(step)
 
 
@@ -3220,18 +3834,42 @@ def _synthesis_matter(run: _Run, residual: list[dict[str, Any]]) -> str:
             f"- {e['id']} [{e['provenance']}] {e['claim']} — source : "
             f"{e.get('source') or 'aucune'} — fiabilité {e.get('reliability', 'unknown')}"
         )
-    unavailable = [e for e in run.research if e["status"] in {"unavailable", "not_found", "error"}]
+    unavailable = [e for e in run.research if e["status"] in UNRESOLVED_EXTERNAL_STATUSES]
     if unavailable:
         parts.append(
-            "Questions factuelles NON résolues (recherche indisponible ou sans résultat) : "
-            + " ; ".join(e["question"] for e in unavailable)
+            "Questions factuelles EXTERNES NON résolues (recherche indisponible ou sans "
+            "résultat) : " + " ; ".join(e["question"] for e in unavailable)
+        )
+    internal = [e for e in run.research if e["status"] == "internal_data_required"]
+    if internal:
+        parts.append(
+            "Informations INTERNES à demander au demandeur (non résolues ; si l'une d'elles est "
+            "déterminante pour le choix, information_insufficient = true) : "
+            + " ; ".join(e["question"] for e in internal)
         )
     st = run.steelman
     if st.get("required"):
-        parts.append(
-            f"Steelman : requis ({st.get('reason')}) — statut {st.get('status')} ; cible "
-            f"{st.get('target', '')} ; critique : {st.get('critique', '') or '(aucune)'}"
-        )
+        if st.get("mode") == "discarded_alternative":
+            alt = st.get("alternative") or {}
+            parts.append(
+                f"Steelman de l'ALTERNATIVE ÉCARTÉE « {alt.get('label', '')} » "
+                f"[{alt.get('kind', '')}] : statut {st.get('status')} ; défense (avocat "
+                f"{st.get('advocate', '')}) : {st.get('steelman', '') or '(aucune)'} ; forces : "
+                + ("; ".join(st.get("strengths", [])) or "(aucune)")
+                + f" ; critique ({st.get('critic', '')}) : {st.get('critique', '') or '(aucune)'}"
+                + " ; scénarios d'échec : "
+                + (
+                    "; ".join(
+                        [*st.get("failure_scenarios", []), *st.get("critic_failure_scenarios", [])]
+                    )
+                    or "(aucun)"
+                )
+            )
+        else:
+            parts.append(
+                f"Steelman : requis ({st.get('reason')}) — statut {st.get('status')} ; cible "
+                f"{st.get('target', '')} ; critique : {st.get('critique', '') or '(aucune)'}"
+            )
     parts.append("Désaccords résiduels (à conserver) :")
     if residual:
         for d in residual:
@@ -3241,10 +3879,16 @@ def _synthesis_matter(run: _Run, residual: list[dict[str, Any]]) -> str:
     else:
         parts.append("- aucun")
     parts.append(
-        "Rappels : la preuve prime sur la majorité ; aucune obligation de recommander de "
+        "Rappels : la preuve prime sur la majorité — le nombre de positions convergentes n'est "
+        "JAMAIS un motif de recommandation ni de confiance ; aucune obligation de recommander de "
         "construire ; si l'information manque, information_insufficient = true."
     )
     return "\n".join(parts)
+
+
+UNRESOLVED_EXTERNAL_STATUSES = frozenset(
+    {"unavailable", "unavailable_external", "not_found", "error"}
+)
 
 
 def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Settings) -> None:
@@ -3335,7 +3979,11 @@ def _pipeline_integrity_failures(run: _Run) -> list[tuple[str, str]]:
     if st.get("required") and st.get("status") not in {"accepted", "accepted_partial"}:
         failures.append(("steelman", f"requis ({st.get('reason')}) : {st.get('status')}"))
     cons = run.consolidation
-    if cons.get("status") != "ok":
+    # v1.3.6 (§8, §10) : `partial` (éléments complets récupérés, manquants déclarés) n'est pas une
+    # rupture d'intégrité ; `failed` (un lot sans aucune sortie exploitable) l'est. Les manquants
+    # sont exposés comme problèmes de porte et le contrôle « famille recommandée comparée »
+    # protège la décision.
+    if cons.get("status") not in {"ok", "partial"}:
         failures.append(
             (
                 "consolidation",
@@ -3349,7 +3997,10 @@ def _pipeline_integrity_failures(run: _Run) -> list[tuple[str, str]]:
             )
         )
     comp = run.comparison
-    if comp.get("status") != "ok":
+    hard_missing = sorted(
+        set(comp.get("hard_mandatory_family_ids", [])) & set(comp.get("missing_family_ids", []))
+    )
+    if comp.get("status") not in {"ok", "partial"} or hard_missing:
         failures.append(
             (
                 "comparaison",
@@ -3357,6 +4008,11 @@ def _pipeline_integrity_failures(run: _Run) -> list[tuple[str, str]]:
                 + (
                     f" ; familles sans évaluation : {', '.join(comp.get('missing_family_ids', []))}"
                     if comp.get("missing_family_ids")
+                    else ""
+                )
+                + (
+                    f" ; familles indispensables non évaluées : {', '.join(hard_missing)}"
+                    if hard_missing
                     else ""
                 ),
             )
@@ -3415,6 +4071,58 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
     checks["no_forced_consensus"] = checks.get("no_forced_consensus", True) and len(
         rec_residual
     ) >= len(residual)
+    # E1 (v1.3.6) — la preuve prime sur la majorité : contrôle déterministe des champs
+    # décisionnels (motif et justification de confiance) ; l'avis LLM ne peut pas l'écraser.
+    rec_core = run.recommendation.get("recommendation", {}) or {}
+    conf = run.recommendation.get("confidence", {}) or {}
+    flagged = consensus_as_evidence(str(rec_core.get("rationale", ""))) + consensus_as_evidence(
+        str(conf.get("justification", ""))
+    )
+    checks["no_consensus_as_evidence"] = not flagged
+    issues += [f"consensus_as_evidence — « {s} »" for s in flagged[:4]]
+    # §10 (v1.3.6) — la famille recommandée doit avoir été réellement comparée ; exception
+    # explicite : recommandation test / wait motivée par une information insuffisante et sans
+    # prétention de supériorité.
+    comp = run.comparison
+    evaluated = {r["family_id"] for r in comp.get("rows", []) if r.get("assessments")}
+    rec_family = str(rec_core.get("family_id", "") or "")
+    # Une recommandation n'est « comparée » que si sa famille ET les familles obligatoires
+    # retenues (citées, couverture, minorités) ont une ligne évaluée : sinon elle n'a pas été
+    # confrontée à ses alternatives, même si la comparaison est déclarée partielle.
+    mandatory_missing = sorted(
+        set(comp.get("mandatory_family_ids", []))
+        & set(comp.get("retained_family_ids", [])) - evaluated
+    )
+    compared_ok = bool(rec_family) and rec_family in evaluated and not mandatory_missing
+    wait_exception = (
+        rec_core.get("kind") in {"test", "wait"}
+        and bool(run.recommendation.get("information_insufficient"))
+        and not claims_superiority(
+            f"{rec_core.get('statement', '')} {rec_core.get('rationale', '')}"
+        )
+    )
+    checks["recommended_family_compared"] = compared_ok or wait_exception
+    if not checks["recommended_family_compared"]:
+        detail = (
+            f" ; familles obligatoires non évaluées : {', '.join(mandatory_missing)}"
+            if mandatory_missing
+            else ""
+        )
+        issues.append(
+            f"recommended_family_not_compared — famille {rec_family or '—'} recommandée sans "
+            f"évaluation comparative valide (ni test/wait pour information insuffisante){detail}"
+        )
+    if comp.get("status") == "partial" and comp.get("missing_family_ids"):
+        issues.append(
+            "comparaison partielle — familles non évaluées : "
+            + ", ".join(comp.get("missing_family_ids", []))
+        )
+    cons = run.consolidation
+    if cons.get("status") == "partial" and cons.get("unconsolidated_option_ids"):
+        issues.append(
+            f"consolidation partielle — {len(cons['unconsolidated_option_ids'])} option(s) non "
+            "consolidée(s) : " + ", ".join(cons["unconsolidated_option_ids"][:12])
+        )
     # Veto déterministe d'intégrité du pipeline (fail-closed) : les étapes obligatoires doivent
     # être valides ; l'instance LLM de porte ne peut jamais écraser ce veto.
     integrity_failures = _pipeline_integrity_failures(run)
@@ -3426,10 +4134,13 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
         "passed": passed,
         "checks": checks,
         "issues": issues,
+        "consensus_as_evidence": bool(flagged),
+        "consensus_sentences": flagged[:4],
         "integrity_failures": [f"upstream_stage_failed:{s}" for s, _ in integrity_failures],
         "llm_verdict": bool(output.passed) if output else None,
         "parse_error": error,
     }
+    _release_reserve(run, "gate")
     rec = run.recommendation
     rec["gate"] = run.gate
     # La porte conditionne réellement `decision_ready` : la proposition est conservée pour audit
@@ -3463,8 +4174,10 @@ def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, A
         run.stop_reason in BUDGET_STOP_REASONS or run.stop_reason == "critical_dimension_uncovered"
     ):
         reason = "budget"
-    elif any(e["status"] in {"unavailable", "not_found", "error"} for e in run.research):
+    elif any(e["status"] in UNRESOLVED_EXTERNAL_STATUSES for e in run.research):
         reason = "missing_external_info"
+    elif any(e["status"] == "internal_data_required" for e in run.research):
+        reason = "missing_internal_info"
     elif any(d["nature"] == "value" for d in residual):
         reason = "ceo_decision_needed"
     elif residual:
@@ -3499,6 +4212,11 @@ def _deliberation_payload(run: _Run) -> dict[str, Any]:
         "residual_disagreements": residual,
         "stop": _deliberation_stop(run, residual),
         "budget_request": run.budget_request,
+        "reserve": {
+            "plan": dict(run.deliberation_plan),
+            "state_at_end": dict(run.reserve_state),
+            "revision_allowance": run.revision_allowance,
+        },
     }
 
 

@@ -259,6 +259,137 @@ def analyze_structured_output(response: LLMResponse, model: type[BaseModel]) -> 
     return outcome
 
 
+STRUCTURED_OUTPUT_SALVAGED = "structured_output_salvaged_partial"
+
+
+@dataclass(frozen=True)
+class SalvageResult:
+    """Récupération déterministe des éléments COMPLETS d'une sortie JSON coupée (v1.3.6 §8.A).
+
+    `data` : objet reconstruit avec les clés dont la valeur était complète et, pour le tableau
+    coupé, ses éléments intégralement fermés ; `truncated_key` : la clé du tableau coupé ;
+    `items_kept` : éléments complets conservés ; `dropped_keys` : clés dont la valeur coupée
+    n'était pas un tableau (abandonnées, jamais complétées).
+    """
+
+    data: dict[str, Any] | None
+    truncated_key: str = ""
+    items_kept: int = 0
+    dropped_keys: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "salvaged": self.data is not None,
+            "truncated_key": self.truncated_key,
+            "items_kept": self.items_kept,
+            "dropped_keys": list(self.dropped_keys),
+        }
+
+
+_DECODER = json.JSONDecoder()
+
+
+def _skip_ws(text: str, i: int) -> int:
+    while i < len(text) and text[i] in " \t\r\n":
+        i += 1
+    return i
+
+
+def _decode_at(text: str, i: int) -> tuple[Any, int] | None:
+    try:
+        return _DECODER.raw_decode(text, i)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def _complete_array_items(text: str, i: int) -> list[Any]:
+    """Éléments complets d'un tableau ouvert en `text[i] == '['` et jamais refermé."""
+    items: list[Any] = []
+    i = _skip_ws(text, i + 1)
+    while i < len(text):
+        decoded = _decode_at(text, i)
+        if decoded is None:
+            break
+        value, i = decoded
+        items.append(value)
+        i = _skip_ws(text, i)
+        if i < len(text) and text[i] == ",":
+            i = _skip_ws(text, i + 1)
+            continue
+        break
+    return items
+
+
+def salvage_truncated_json(raw: str) -> SalvageResult:
+    """Reconstruit l'objet JSON de niveau 0 d'une réponse coupée à partir de ses parties complètes.
+
+    Parcours séquentiel des paires clé / valeur de l'objet racine : une valeur complète est
+    conservée ; la première valeur coupée arrête le parcours — si c'est un tableau, ses éléments
+    intégralement fermés sont conservés et la clé est marquée tronquée ; sinon la clé est
+    abandonnée. Aucune chaîne n'est complétée, aucun champ deviné, aucune valeur inventée. Le
+    résultat doit ensuite être validé par le schéma de l'étape ; c'est l'appelant qui déclare
+    explicitement les éléments manquants.
+    """
+    text = strip_leading_code_fence(raw or "")
+    i = _skip_ws(text, 0)
+    if i >= len(text) or text[i] != "{":
+        return SalvageResult(None)
+    data: dict[str, Any] = {}
+    truncated_key = ""
+    items_kept = 0
+    dropped: list[str] = []
+    i = _skip_ws(text, i + 1)
+    while i < len(text):
+        key_decoded = _decode_at(text, i)
+        if key_decoded is None or not isinstance(key_decoded[0], str):
+            break
+        key, i = key_decoded
+        i = _skip_ws(text, i)
+        if i >= len(text) or text[i] != ":":
+            break
+        i = _skip_ws(text, i + 1)
+        if i >= len(text):
+            break
+        value_decoded = _decode_at(text, i)
+        if value_decoded is None:
+            if text[i] == "[":
+                items = _complete_array_items(text, i)
+                data[key] = items
+                truncated_key = key
+                items_kept = len(items)
+            else:
+                dropped.append(key)
+            break
+        data[key], i = value_decoded
+        i = _skip_ws(text, i)
+        if i < len(text) and text[i] == ",":
+            i = _skip_ws(text, i + 1)
+            continue
+        break
+    if not data:
+        return SalvageResult(None, dropped_keys=tuple(dropped))
+    return SalvageResult(
+        data, truncated_key=truncated_key, items_kept=items_kept, dropped_keys=tuple(dropped)
+    )
+
+
+def salvage_structured_output(
+    response: LLMResponse, model: type[BaseModel]
+) -> tuple[BaseModel | None, SalvageResult]:
+    """Récupération partielle d'une sortie coupée, validée par exactement le même schéma.
+
+    Retourne (objet validé ou None, résultat de récupération). N'est appelée que si la sortie
+    complète est invalide ET que le fournisseur a signalé une coupure : rien n'est complété.
+    """
+    salvage = salvage_truncated_json(response.text or "")
+    if salvage.data is None:
+        return None, salvage
+    try:
+        return model.model_validate(salvage.data), salvage
+    except ValueError:
+        return None, salvage
+
+
 def contract_hint(model: type[BaseModel]) -> str:
     """Rappel générique du contrat : noms des champs et champs obligatoires (aucun secret)."""
     names = list(model.model_fields)
