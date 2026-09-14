@@ -17,6 +17,7 @@ Les compteurs d'appels (`max_calls`, appels logiques) restent indépendants de c
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -291,27 +292,64 @@ SELF_QUALIFICATION_PER_RELATION_TOKENS = 80
 SELF_QUALIFICATION_SAFETY = 1.5
 
 
+def self_qualification_required_tokens(n_positions: int, group_size: int) -> int:
+    """Budget textuel d'un appel groupé — même formule que `app.output_budget.output_budget`
+    (`ceil((base + per_relation x relations) x safety)`, relations = g x (n - 1))."""
+    relations = max(0, int(group_size)) * max(0, int(n_positions) - 1)
+    return math.ceil(
+        (SELF_QUALIFICATION_BASE_TOKENS + SELF_QUALIFICATION_PER_RELATION_TOKENS * relations)
+        * SELF_QUALIFICATION_SAFETY
+    )
+
+
 def self_qualification_plan(
-    n_positions: int, *, group_max: int, output_ceiling: int
+    n_positions: int, *, group_max: int, output_ceiling: int, reasoning_headroom: int = 0
 ) -> dict[str, int]:
     """Plan d'auto-qualification GROUPÉE (v1.3.6 — §6) : `g` positions qualifiées par appel.
 
     Chaque appel qualifie `g` positions, chacune contre toutes les autres (relations attribuées
-    par `from_id`) ; `g` est le plus grand groupe dont la sortie textuelle attendue tient dans le
-    plafond de sortie de l'étape : `(base + per_relation x g x (n - 1)) x safety <= ceiling`,
-    borné par `group_max`. `g = 1` reproduit exactement le comportement historique. Le nombre
-    d'appels vaut `ceil(n / g)`. Une seule position : aucun appel.
+    par `from_id`) ; `g` est le plus grand groupe, borné par `group_max`, dont la sortie
+    attendue tient RÉELLEMENT dans le plafond de l'étape, marge de raisonnement comprise
+    (D19 — v1.3.6.1) :
+
+        ceil((base + per_relation x g x (n - 1)) x safety) + reasoning_headroom <= ceiling
+
+    `reasoning_headroom` est la marge EFFECTIVE de la politique de raisonnement de l'étape
+    (`reasoning_policy_for("self_qualification", …).headroom_tokens` : 0 si le raisonnement de la
+    catégorie C est désactivé) — la même marge que celle ajoutée ensuite par `output_budget`.
+    `g = 1` reproduit exactement le comportement historique. Le nombre d'appels vaut
+    `ceil(n / g)`. Une seule position : aucun appel. Si même `g = 1` ne tient pas, le plan le dit
+    (`fits = False`, `g = 1`) : la marge promise n'est jamais réduite en silence, et une telle
+    largeur n'est pas engagée par la composition (`feasible_expert_count`).
     """
     if n_positions < 2:
-        return {"calls": 0, "group_size": 1, "positions": n_positions}
-    per_position = SELF_QUALIFICATION_PER_RELATION_TOKENS * (n_positions - 1)
-    room = output_ceiling / SELF_QUALIFICATION_SAFETY - SELF_QUALIFICATION_BASE_TOKENS
-    fits = int(room // per_position) if per_position > 0 else 1
-    group = max(1, min(int(group_max), fits))
+        return {
+            "calls": 0,
+            "group_size": 1,
+            "positions": n_positions,
+            "required_tokens": 0,
+            "reasoning_headroom": max(0, int(reasoning_headroom)),
+            "fits": True,
+        }
+    headroom = max(0, int(reasoning_headroom))
+    for group in range(max(1, int(group_max)), 0, -1):
+        required = self_qualification_required_tokens(n_positions, group)
+        if required + headroom <= output_ceiling:
+            return {
+                "calls": -(-n_positions // group),
+                "group_size": group,
+                "positions": n_positions,
+                "required_tokens": required,
+                "reasoning_headroom": headroom,
+                "fits": True,
+            }
     return {
-        "calls": -(-n_positions // group),
-        "group_size": group,
+        "calls": n_positions,
+        "group_size": 1,
         "positions": n_positions,
+        "required_tokens": self_qualification_required_tokens(n_positions, 1),
+        "reasoning_headroom": headroom,
+        "fits": False,
     }
 
 
@@ -363,6 +401,7 @@ def minimal_deliberation_bound(
     revision_cap: int = 8,
     self_qualification_group_max: int = 1,
     self_qualification_ceiling: int = 4000,
+    self_qualification_headroom: int = 0,
 ) -> dict[str, Any]:
     """Appels nécessaires, après le cadrage, pour mener `n_experts` jusqu'à la porte qualité.
 
@@ -387,7 +426,10 @@ def minimal_deliberation_bound(
         revision_cap=revision_cap,
     )
     selfq = self_qualification_plan(
-        n_experts, group_max=self_qualification_group_max, output_ceiling=self_qualification_ceiling
+        n_experts,
+        group_max=self_qualification_group_max,
+        output_ceiling=self_qualification_ceiling,
+        reasoning_headroom=self_qualification_headroom,
     )
     pre = n_experts + (selfq["calls"] if plural else 0)
     return {
@@ -395,6 +437,7 @@ def minimal_deliberation_bound(
         "pre_deliberation_calls": pre,
         "self_qualification_calls": selfq["calls"] if plural else 0,
         "self_qualification_group_size": selfq["group_size"],
+        "self_qualification_fits": bool(selfq["fits"]),
         "mandatory_steelman_calls": reserve["steelman"],
         "revision_allowance": reserve["revisions"],
         "minimal_deliberation_reserve": reserve["total"],
@@ -413,11 +456,14 @@ def feasible_expert_count(
     revision_cap: int = 8,
     self_qualification_group_max: int = 1,
     self_qualification_ceiling: int = 4000,
+    self_qualification_headroom: int = 0,
     upper: int = 64,
 ) -> int:
     """Plus grand nombre d'experts dont le noyau obligatoire tient dans `remaining_calls`.
 
     Invariant B15 : `remaining ≥ pré-délibération + réserve unique`. L'égalité est admise.
+    D19 : une largeur dont l'auto-qualification ne tient pas dans son plafond de sortie même une
+    position par appel (`self_qualification_fits = False`) n'est pas engagée.
     """
     for n in range(upper, 0, -1):
         bound = minimal_deliberation_bound(
@@ -429,7 +475,8 @@ def feasible_expert_count(
             revision_cap=revision_cap,
             self_qualification_group_max=self_qualification_group_max,
             self_qualification_ceiling=self_qualification_ceiling,
+            self_qualification_headroom=self_qualification_headroom,
         )
-        if bound["total_required_calls"] <= remaining_calls:
+        if bound["total_required_calls"] <= remaining_calls and bound["self_qualification_fits"]:
             return n
     return 0

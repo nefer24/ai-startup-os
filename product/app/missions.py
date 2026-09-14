@@ -692,6 +692,13 @@ def _structured_retry_reserve(run: _Run, step: str) -> tuple[int, str]:
     )
 
 
+def _self_qualification_headroom(settings: Settings) -> int:
+    """Marge de raisonnement EFFECTIVE de l'auto-qualification (D19) : la politique de l'étape,
+    source unique partagée par la planification (`self_qualification_plan`) et le budget de
+    sortie (`_output_budget_for`) — 0 si le raisonnement de la catégorie C est désactivé."""
+    return reasoning_policy_for("self_qualification", settings).headroom_tokens
+
+
 def _output_budget_for(settings: Settings, call_type: str, n_items: int | None) -> OutputBudget:
     """Limite de sortie d'un appel : formule proportionnée (O1) ou limite fixe de l'étape.
 
@@ -1410,6 +1417,8 @@ def _step_composition(session: Session, run: _Run, settings: Settings) -> None:
         "revision_cap": settings.mission_max_revision_calls,
         "self_qualification_group_max": settings.mission_self_qualification_group_max,
         "self_qualification_ceiling": settings.mission_output_ceiling_self_qualification,
+        # D19 : la même marge de raisonnement que celle appliquée ensuite par `output_budget`.
+        "self_qualification_headroom": _self_qualification_headroom(settings),
     }
 
     def bound_for(n: int) -> dict[str, Any]:
@@ -1697,6 +1706,7 @@ def _plan_deliberation_core(session: Session, run: _Run, settings: Settings) -> 
         len(answered),
         group_max=settings.mission_self_qualification_group_max,
         output_ceiling=settings.mission_output_ceiling_self_qualification,
+        reasoning_headroom=_self_qualification_headroom(settings),
     )
     run.reserve_state = {
         "tour0": 0,
@@ -1814,6 +1824,7 @@ def _step_self_qualification(
         len(answered),
         group_max=settings.mission_self_qualification_group_max,
         output_ceiling=settings.mission_output_ceiling_self_qualification,
+        reasoning_headroom=_self_qualification_headroom(settings),
     )
     group = max(1, plan["group_size"])
     all_positions = [(labels[r["expert_id"]], r["output"].position) for r in answered]
