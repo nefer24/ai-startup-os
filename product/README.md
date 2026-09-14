@@ -1166,6 +1166,55 @@ justification sans séparation explicite → `no_consensus_as_evidence = false`,
 familles obligatoires retenues (exception : test / attente motivée par une information
 insuffisante, sans prétention de supériorité). Plafonds 60 appels / 8 € inchangés.
 
+**Identité du build et robustesse du pipeline décisionnel (v1.3.6.2 — D20 à D25, §7)** :
+correctifs du post-mortem de Holdout #10 (mission exécutée par un processus d'une génération
+antérieure sans qu'aucune trace ne permette de l'établir ; catégorie A coupée sans marge ; actes de
+confrontation perdus pour un seul élément hors contrat ; donnée interne envoyée au web ; familles
+non compressées ; raison d'arrêt confondant cause et contexte). (1) **D20 — `BuildIdentity`**
+(`app/build_identity.py`) : commit complet / court, arbre `CLEAN` / `DIRTY`, branche, version
+produit, Python, adapter et version du SDK fournisseur, empreinte SHA-256 de la politique de
+raisonnement et des réglages structurants (sérialisation canonique ; **jamais** de secret, clé,
+jeton ni contenu utilisateur — `is_secret_setting`), horodatage ; capturée à la création de chaque
+mission, persistée immuablement (`missions.build_identity_json`), journalisée (`created`), exposée
+(`build_identity`, `report.build`, `GET /product/status`, en-tête du rapport Markdown, bandeau
+Streamlit `BUILD <sha> CLEAN|DIRTY|UNAVAILABLE` + `MATCH|MISMATCH`). Sans dépôt Git lisible :
+`git_commit_full = null`, `git_identity_status = unavailable` — aucun SHA inventé. **Mode
+benchmark fail closed** : `expected_freeze` (requête ou `MISSION_EXPECTED_FREEZE`) ou
+`MISSION_BENCHMARK_STRICT` → commit différent (`benchmark_build_mismatch`), identité indisponible
+(`benchmark_build_unavailable`) ou arbre modifié (`benchmark_build_dirty`) ⇒ **409** avant toute
+création et tout appel LLM (0 appel, 0 €). Pré-vol : `GET /benchmark/preflight?expected_freeze=`
+(identité du serveur qui tourne) et `python -m app.preflight --expected <sha> [--json]` (code de
+retour 1 sur MISMATCH). (2) **D21 — catégorie A** : raisonnement fort conservé (adaptatif / high)
+**et** marge explicite, configurable, journalisée (`MISSION_REASONING_HEADROOM_TOKENS_A = 2000`,
+`…_SYNTHESIS = 4000`) sous un plafond par étape (`MISSION_OUTPUT_CEILING_{FRAMING 12000, EXPERT
+10000, CONFRONTATION 8000, STEELMAN 8000, REVISION 6000, SYNTHESIS 16000}`) ; invariant
+`granted = min(plafond, texte + marge)` ; une sortie coupée a droit à **une** relance à limite
+recalculée (jamais à l'identique, jamais en boucle). La synthèse dispose d'une composante de
+réserve dédiée `synthesis_recovery` (+ 1 appel, même formule à la composition et à l'exécution —
+option C de B15) et d'une récupération locale exigeant le bloc `recommendation`
+(`SALVAGE_REQUIRED_KEYS`) ; contrat 14 champs conservé et compressé par consigne (listes bornées,
+justifications 3–5 phrases). (3) **D25 — tolérance par élément** (`TOLERANT_ITEM_LISTS` :
+`acts`, `families`, `rows`) : un élément hors contrat est rejeté seul, journalisé
+(`item_rejected` : perspective, index, champ, erreur, littéral reçu), jamais reclassé ; la sortie
+et la perspective sont conservées. (4) **D23 / D24 — interne vs externe** : `fact_source`
+obligatoire avec définitions conceptuelles (la personne grammaticale n'est pas la nature
+épistémique ; « dans le doute : either, jamais external »), garde conservatrice générique
+(catégories : possessif d'organisation, métrique privée par unité, enregistrement détenu,
+existence d'une procédure / trace, comportement des acteurs internes — aucun mot propre à un cas),
+état `internal_data_required` → raison `missing_internal_info` et section « Informations internes
+à obtenir » (question, pourquoi elle discrimine, propriétaire probable, décision concernée) ;
+plafond de recherche traçable (`research_candidate` / `research_selected` / `research_deferred`,
+sélection par couverture sans LLM, internes hors plafond). (5) **D22 — familles stratégiques**
+comme orientations décisionnelles (`objective`, `target`, `kind`, `reversibility`,
+`prerequisites`, `trigger`, `trade_off`), repli déterministe **conservateur** après échec de la
+méta-consolidation (`conservative_merge_families` : identité stricte nature + libellé normalisé ou
+nature + objectif + cible + déclencheur ; jamais de radical lexical ; journal `meta_fallback`),
+critères de comparaison bornés à 5–7 (`criteria_dropped`, journal `criteria_truncated`, aucun
+score numérique). (6) **§7 — arrêt** : `terminal_failure_reason` (cause) séparée de
+`missing_information`, `degraded_steps` et `warnings` ; `revision_evaluated` /
+`revision_executed` / `revision_changed_position`. Plafonds 60 appels / 8 € inchangés ; doctrine
+inchangée.
+
 **État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
 `GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec
 `detail.state` = `running` ou `failed` (+ `failure`), 404 si inexistante. L'interface annonce

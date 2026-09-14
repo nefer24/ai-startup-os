@@ -378,11 +378,12 @@ def test_no_fixed_number_of_experts_is_doctrine(
     # `structurante` (60 appels). B14-prime / v1.3.6 : le plus grand n dont le noyau obligatoire
     # tient dans les 59 appels restants — n exposés + auto-qualification groupée (⌈n/3⌉) +
     # n confrontations + steelman 2 + révisions réservées (⌈n/2⌉ ≤ 8) + cœur borné par 5 options
-    # par expert — vaut 16 (n = 17 : 17 + 6 + 17 + 2 + 8 + 11 = 61 > 59). Le nombre effectif (6)
+    # par expert — vaut 15 (n = 16 : 16 + 6 + 16 + 2 + 8 + 12 = 60 > 59). Le nombre effectif (6)
     # émerge des dimensions et de leur criticité (3 + 2 + 1), pas de la classe ni du budget.
     assert mission["effective_class"] == "structurante"
     assert bounds["budget_plan"] == "full_deliberation"
-    assert bounds["max_experts_by_budget"] == 16
+    # v1.3.6.2 (D21) : la relance de synthèse réservée retire un appel → 15.
+    assert bounds["max_experts_by_budget"] == 15
     assert bounds["options_per_expert_bound"] == 5
     assert bounds["plan_feasible"] is True
     assert len(mission["composition"]["experts"]) == 6
@@ -660,7 +661,7 @@ def test_hard_stop_before_exceeding_max_calls(
 
 @pytest.fixture
 def expensive_output_price(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Barème de sortie très élevé : le plafond de 2 € est atteint en quelques appels."""
+    """Barème de sortie très élevé : le plafond de 2,5 € est atteint en quelques appels."""
     monkeypatch.setenv("LLM_PRICE_OUTPUT_EUR_PER_MTOK", "200")
 
 
@@ -670,11 +671,13 @@ def test_hard_stop_before_exceeding_cost_cap(
     use_llm: Callable[..., ScriptedStructuredLLM],
 ) -> None:
     llm = use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
-    mission = _post_mission(client, max_cost_eur=2.0)
+    # v1.3.6.2 (D21) : le cadrage (catégorie A) est majoré d'une marge de raisonnement
+    # (8 000 + 2 000 tokens) ; à 200 €/Mtok son estimation vaut 2,4 € — plafond à 2,5 €.
+    mission = _post_mission(client, max_cost_eur=2.5)
     # La surcharge CEO est absolue : l'escalade en `structurante` ne relève pas le plafond.
     assert mission["effective_class"] == "structurante"
-    assert mission["max_cost_eur"] == 2.0
-    assert mission["cost_eur"] <= 2.0
+    assert mission["max_cost_eur"] == 2.5
+    assert mission["cost_eur"] <= 2.5
     assert mission["stop_reason"] == "cost_cap_would_be_exceeded"
     # Chaque appel effectué avait, avant lancement, un coût majoré compatible avec le plafond.
     assert len(llm.calls) < mission["max_llm_calls"]
@@ -703,7 +706,7 @@ def test_partial_report_is_coherent_after_budget_stop(
     # appelle trois → la délibération n'est pas entamée « pour voir » ; arrêt explicite dès la
     # composition avec demande de budget chiffrée, un seul appel dépensé.
     use_llm(ScriptedStructuredLLM(MULTI_FRAMING))
-    mission = _post_mission(client, max_llm_calls=6)
+    mission = _post_mission(client, max_llm_calls=7)
     assert mission["composition"]["bounds"]["budget_plan"] == "coverage_first"
     assert mission["composition"]["bounds"]["max_experts_feasible_deliberation"] == 1
     assert mission["composition"]["experts"] == []

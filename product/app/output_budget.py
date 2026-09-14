@@ -118,18 +118,38 @@ def output_budget(
     )
 
 
-def fixed_output_budget(call_type: str, max_tokens: int) -> OutputBudget:
-    """Étape à cardinalité fixe : la limite configurée est à la fois plancher et plafond."""
+def fixed_output_budget(
+    call_type: str,
+    max_tokens: int,
+    *,
+    ceiling: int | None = None,
+    reasoning_headroom: int = 0,
+) -> OutputBudget:
+    """Étape à cardinalité fixe : la limite configurée est le budget TEXTE (plancher).
+
+    D21 (v1.3.6.2) : `granted = min(ceiling, texte + marge de raisonnement)` ; le plafond, s'il
+    dépasse la limite accordée, borne l'unique relance à limite recalculée d'une sortie coupée.
+    Sans plafond configuré, plancher + marge est aussi le plafond (aucune relance possible) —
+    comportement historique lorsque la marge vaut 0.
+    """
+    headroom = max(0, int(reasoning_headroom))
+    text_budget = max(1, int(max_tokens))
+    cap = max(text_budget, int(ceiling)) if ceiling is not None else text_budget + headroom
+    granted = min(cap, text_budget + headroom)
     return OutputBudget(
         call_type=call_type,
         n_items=0,
-        required_tokens=max_tokens,
-        floor=max_tokens,
-        ceiling=max_tokens,
-        granted=max_tokens,
-        formula=f"limite fixe de l'étape = {max_tokens}",
-        capped_by_ceiling=False,
+        required_tokens=text_budget,
+        floor=text_budget,
+        ceiling=cap,
+        granted=granted,
+        formula=f"limite fixe de l'étape = {text_budget}"
+        + (f" ; + marge de raisonnement {headroom}" if headroom else "")
+        + (f" ; plafond {cap}" if cap != granted else "")
+        + f" → {granted}",
+        capped_by_ceiling=text_budget + headroom > cap,
         raised_to_floor=False,
+        reasoning_headroom=headroom,
     )
 
 

@@ -184,27 +184,28 @@ def test_framing_truncated_at_max_tokens_fails_mission_honestly(
     llm = use_llm(FailureModeLLM(framing_mode="truncated"))
     mission = _post(client)
     assert mission["status"] == "failed"
-    # B13 : la troncature est une catégorie distincte. B14-prime (F) : le cadrage a une limite fixe
-    # (plancher = plafond) ; une sortie coupée à cette limite n'est pas relancée à l'identique —
-    # refus explicite et motivé, un seul appel, jamais « JSON invalide » tout court, jamais de
-    # complétion locale du contenu manquant.
-    assert mission["stop_reason"] == "structured_output_retry_refused_output_budget"
+    # B13 : la troncature est une catégorie distincte. v1.3.6.2 (D21) : le cadrage (catégorie A)
+    # reçoit texte + marge de raisonnement (10 000) sous un plafond de 12 000 ; une sortie coupée
+    # est relancée UNE fois avec la limite recalculée (jamais à l'identique), puis l'échec est
+    # terminal et nommé — jamais « JSON invalide » tout court, jamais de complétion locale.
+    assert mission["stop_reason"] == "structured_output_recovery_exhausted"
     assert mission["failure"]["category"] == "structured_output_truncated"
-    assert mission["failure"]["attempts"] == 1
+    assert mission["failure"]["attempts"] == 2
     assert mission["report"]["partial"] is True
     assert mission["report"]["status"] == "failed"
     assert mission["report"]["framing_error"].startswith(
-        "structured_output_retry_refused_output_budget: structured_output_truncated"
+        "structured_output_recovery_exhausted: structured_output_truncated"
     )
     assert "Unterminated string" in mission["report"]["framing_error"]
-    # Aucun expert n'est consulté sur un cadrage fictif : un appel de cadrage, rien d'autre.
-    assert [c["call_type"] for c in llm.calls] == ["framing"]
-    assert mission["llm_calls_used"] == 1
-    assert mission["report"]["budget"]["structured_output_retries"] == 0
+    # Aucun expert n'est consulté sur un cadrage fictif : deux appels de cadrage, rien d'autre.
+    assert [c["call_type"] for c in llm.calls] == ["framing", "framing"]
+    assert [c["max_tokens"] for c in llm.calls] == [10000, 12000]
+    assert mission["llm_calls_used"] == 2
+    assert mission["report"]["budget"]["structured_output_retries"] == 1
     # La réponse brute, la raison d'arrêt et les tokens sont conservés pour prouver la cause.
     framing = mission["framing"]
     assert framing["stop_reason"] == "max_tokens"
-    assert framing["output_tokens"] == framing["max_tokens"] == 8000
+    assert framing["output_tokens"] == framing["max_tokens"] == 12000
     assert framing["raw"]
     assert framing["parsed"] is None
     journal = client.get(f"/missions/{mission['id']}/journal").json()
@@ -213,17 +214,22 @@ def test_framing_truncated_at_max_tokens_fails_mission_honestly(
     invalid = next(e for e in journal if e["entry_type"] == "structured_output_invalid")
     assert invalid["payload"]["truncated"] is True
     assert invalid["payload"]["local_recovery_applied"] is False
-    assert invalid["payload"]["will_retry"] is False
-    assert (
-        invalid["payload"]["retry_refusal_reason"]
-        == "structured_output_retry_refused_output_budget"
-    )
-    assert invalid["payload"]["truncation_retry_plan"]["allowed"] is False
+    # Une relance, à limite recalculée (jamais à l'identique), sous le plafond explicite.
+    assert invalid["payload"]["will_retry"] is True
+    assert invalid["payload"]["truncation_retry_plan"]["allowed"] is True
+    assert invalid["payload"]["retry_max_tokens"] == 12000 > invalid["payload"]["max_tokens"]
     assert invalid["payload"]["output_budget"]["floor"] == 8000
-    assert invalid["payload"]["output_budget"]["ceiling"] == 8000
-    done = next(e for e in journal if e["entry_type"] == "call_done")
-    assert done["payload"]["truncated"] is True
-    assert done["payload"]["stop_reason"] == "max_tokens"
+    assert invalid["payload"]["output_budget"]["reasoning_headroom"] == 2000
+    assert invalid["payload"]["output_budget"]["granted"] == 10000
+    assert invalid["payload"]["output_budget"]["ceiling"] == 12000
+    retried = next(e for e in journal if e["entry_type"] == "structured_output_retry_result")
+    assert retried["payload"]["valid"] is False
+    assert retried["payload"]["final"] == "structured_output_recovery_exhausted"
+    assert retried["payload"]["max_tokens"] == 12000
+    done = [e for e in journal if e["entry_type"] == "call_done"]
+    assert len(done) == 2
+    assert all(d["payload"]["truncated"] is True for d in done)
+    assert all(d["payload"]["stop_reason"] == "max_tokens" for d in done)
     # Une mission `failed` n'accepte aucune action CEO.
     assert client.post(f"/missions/{mission['id']}/approve").status_code == 409
 
@@ -268,15 +274,18 @@ def test_expert_truncation_is_labelled_and_mission_continues(
     assert mission["status"] == "candidate"  # le cadrage est valide ; seuls les exposés ont échoué
     positions = mission["cartography"]["positions"]
     assert positions
-    # B14-prime (F) : l'exposé a une limite fixe ; une sortie coupée à cette limite n'est pas
-    # relancée à l'identique — un appel par expert, refus explicite et étiqueté.
+    # v1.3.6.2 (D21) : l'exposé (catégorie A) reçoit texte + marge (8 000) sous un plafond de
+    # 10 000 ; une sortie coupée est relancée UNE fois à limite recalculée, puis l'échec est
+    # explicite et étiqueté — deux appels par expert, jamais de boucle.
     assert all(
         p["parse_error"].startswith(
-            "structured_output_retry_refused_output_budget: structured_output_truncated"
+            "structured_output_recovery_exhausted: structured_output_truncated"
         )
         for p in positions
     )
-    assert len([c for c in llm.calls if c["call_type"] == "expert_tour0"]) == len(positions)
+    expert_calls = [c for c in llm.calls if c["call_type"] == "expert_tour0"]
+    assert len(expert_calls) == 2 * len(positions)
+    assert {c["max_tokens"] for c in expert_calls} == {8000, 10000}
     assert mission["cartography"]["experts_answered"] == 0
     assert mission["report"]["alternatives"] == []
 
@@ -364,8 +373,8 @@ def test_format_instruction_is_the_only_prompt_change() -> None:
         (
             "truncated",
             "structured_output_truncated",
-            "structured_output_retry_refused_output_budget",
-            1,
+            "structured_output_recovery_exhausted",
+            2,
         ),
         ("invalid", "structured_output_parse_error", "structured_output_recovery_exhausted", 2),
     ],
@@ -383,9 +392,9 @@ def test_framing_failure_stops_everything_without_artificial_composition(
     assert mission["status"] == "failed"
     assert mission["stop_reason"] == expected_reason
     assert mission["failure"]["category"] == expected_category
-    # Au plus deux appels LLM : le cadrage et, pour une erreur de syntaxe, sa relance corrective
-    # (B13) ; une troncature à limite fixe n'est pas relancée (B14-prime). Rien d'autre n'est
-    # appelé ni facturé.
+    # Au plus deux appels LLM : le cadrage et sa relance corrective (B13 : erreur de syntaxe ;
+    # v1.3.6.2 / D21 : troncature relancée une fois à limite recalculée sous le plafond).
+    # Rien d'autre n'est appelé ni facturé.
     assert [c["call_type"] for c in llm.calls] == ["framing"] * calls
     assert mission["llm_calls_used"] == calls
     # Aucune composition fictive persistée, aucun expert, aucune cartographie exploitée.

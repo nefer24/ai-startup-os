@@ -14,7 +14,7 @@ Règles d'honnêteté encodées ici :
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -259,7 +259,14 @@ class ConfrontationActOut(_Lenient):
 
 
 class ConfrontationOutput(_Lenient):
-    """Sortie de la confrontation d'un expert : zéro acte est une sortie légitime."""
+    """Sortie de la confrontation d'un expert : zéro acte est une sortie légitime.
+
+    D25 (v1.3.6.2) : les actes sont des éléments INDÉPENDANTS — un acte hors contrat (littéral
+    inconnu, champ invalide) est rejeté et journalisé individuellement, les autres actes et la
+    perspective sont conservés. Aucun littéral inconnu n'est reclassé sémantiquement.
+    """
+
+    TOLERANT_ITEM_LISTS: ClassVar[dict[str, type[BaseModel]]] = {"acts": ConfrontationActOut}
 
     acts: list[ConfrontationActOut] = Field(default_factory=list)
     convergence_note: str = ""
@@ -320,8 +327,18 @@ class VariantOut(_Lenient):
     difference: str = ""
 
 
+Reversibility = Literal["high", "medium", "low", "unknown"]
+
+
 class StrategyFamilyOut(_Lenient):
-    """Famille stratégique : options réellement équivalentes, variantes et désaccords internes."""
+    """Famille stratégique : options réellement équivalentes, variantes et désaccords internes.
+
+    D22 (v1.3.6.2) — représentation conceptuelle d'une ORIENTATION DÉCISIONNELLE : ce que la
+    famille vise (`objective`), sur quoi elle agit (`target`), sa réversibilité, ses prérequis, sa
+    condition de déclenchement et son arbitrage majeur. Deux options fusionnent si elles portent
+    la même orientation ; une condition qui change matériellement la décision reste une variante
+    ou une famille distincte, jamais une différence de formulation.
+    """
 
     family_id: str = ""
     label: str
@@ -329,6 +346,12 @@ class StrategyFamilyOut(_Lenient):
     option_ids: list[str] = Field(default_factory=list)
     variants: list[VariantOut] = Field(default_factory=list)
     internal_disagreements: list[str] = Field(default_factory=list)
+    objective: str = ""
+    target: str = ""
+    reversibility: Reversibility = "unknown"
+    prerequisites: list[str] = Field(default_factory=list)
+    trigger: str = ""
+    trade_off: str = ""
 
 
 class NotMergedOut(_Lenient):
@@ -339,7 +362,13 @@ class NotMergedOut(_Lenient):
 
 
 class ConsolidationOutput(_Lenient):
-    """Consolidation traçable : propositions atomiques → familles → variantes."""
+    """Consolidation traçable : propositions atomiques → familles → variantes.
+
+    D25 : une famille hors contrat est rejetée seule (ses options restent non consolidées et
+    déclarées) ; les autres familles sont conservées.
+    """
+
+    TOLERANT_ITEM_LISTS: ClassVar[dict[str, type[BaseModel]]] = {"families": StrategyFamilyOut}
 
     families: list[StrategyFamilyOut] = Field(default_factory=list)
     not_merged_because: list[NotMergedOut] = Field(default_factory=list)
@@ -359,12 +388,40 @@ class ComparisonRowOut(_Lenient):
     assessments: dict[str, CriterionAssessmentOut] = Field(default_factory=dict)
 
 
+COMPARISON_MIN_CRITERIA = 5
+COMPARISON_MAX_CRITERIA = 7
+
+
 class ComparisonOutput(_Lenient):
-    """Comparaison sur critères communs. Aucun score numérique : des appréciations fondées."""
+    """Comparaison sur critères communs. Aucun score numérique : des appréciations fondées.
+
+    D22 : le nombre de critères est BORNÉ (noyau de 5, au plus 7) ; les critères excédentaires
+    sont écartés et déclarés (`criteria_dropped`), jamais évalués en silence. D25 : une ligne hors
+    contrat est rejetée seule (la famille est déclarée non évaluée), les autres lignes conservées.
+    """
+
+    TOLERANT_ITEM_LISTS: ClassVar[dict[str, type[BaseModel]]] = {"rows": ComparisonRowOut}
 
     criteria: list[str] = Field(default_factory=list)
     rows: list[ComparisonRowOut] = Field(default_factory=list)
     notes: str = ""
+    criteria_dropped: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _bound_criteria(self) -> ComparisonOutput:
+        seen: list[str] = []
+        for c in self.criteria:
+            name = c.strip()
+            if name and name not in seen:
+                seen.append(name)
+        kept, dropped = seen[:COMPARISON_MAX_CRITERIA], seen[COMPARISON_MAX_CRITERIA:]
+        self.criteria = kept
+        self.criteria_dropped = dropped
+        if dropped:
+            gone = set(dropped)
+            for row in self.rows:
+                row.assessments = {k: v for k, v in row.assessments.items() if k not in gone}
+        return self
 
 
 class AssumptionOut(_Lenient):
@@ -410,7 +467,14 @@ class ResidualDisagreementOut(_Lenient):
 
 
 class RecommendationOutput(_Lenient):
-    """Contrat canonique en 14 champs (Décision 026 / document canonique §6.3)."""
+    """Contrat canonique en 14 champs (Décision 026 / document canonique §6.3).
+
+    D21 : après une sortie coupée et sa relance, une récupération locale des champs complets
+    n'est acceptable que si le bloc `recommendation` est intégralement présent ; les champs
+    absents sont déclarés à la porte, jamais complétés.
+    """
+
+    SALVAGE_REQUIRED_KEYS: ClassVar[tuple[str, ...]] = ("recommendation",)
 
     problem_understood: str = ""
     objective: str = ""

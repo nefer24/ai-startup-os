@@ -2252,10 +2252,53 @@ MISSION_NOTICE = (
 )
 
 
+def _build_state_label(build: dict[str, Any]) -> str:
+    short = build.get("running_commit_short") or build.get("git_commit_short")
+    if not short:
+        return "UNAVAILABLE"
+    return "DIRTY" if build.get("git_dirty") else "CLEAN"
+
+
+def render_build_banner(client: SolutionPlansAPIClient, expected_freeze: str = "") -> None:
+    """D20 — identité RÉELLE du serveur qui tourne (pas de la copie locale), avant tout lancement.
+
+    Affiche `BUILD <sha court>` avec CLEAN / DIRTY / UNAVAILABLE ; si un freeze est attendu,
+    affiche aussi MATCH / MISMATCH. Le benchmark ne dépend pas de la mémoire de l'opérateur : si
+    un ancien processus tourne encore, c'est SON commit qui s'affiche ici.
+    """
+    try:
+        pre = client.benchmark_preflight(expected_freeze)
+    except APIError as exc:
+        st.error(f"Pré-vol indisponible : {exc}")
+        return
+    state = _build_state_label(pre)
+    short = pre.get("running_commit_short") or "—"
+    line = (
+        f"**BUILD** `{short}` **{state}** · {pre.get('provider_adapter')} SDK "
+        f"{pre.get('provider_sdk_version')} · politique "
+        f"`{str(pre.get('reasoning_policy_fingerprint', ''))[:12]}` · config "
+        f"`{str(pre.get('mission_config_fingerprint', ''))[:12]}`"
+    )
+    if pre.get("expected_freeze"):
+        verdict = pre.get("verdict", "")
+        detail = (
+            f"Running build: `{pre.get('running_commit') or 'indisponible'}`  \n"
+            f"Expected freeze: `{pre['expected_freeze']}`  \n**{verdict}**"
+            + (f" — {pre.get('reason')} — mission bloquée" if verdict != "MATCH" else "")
+        )
+        (st.success if verdict == "MATCH" else st.error)(line + "  \n" + detail)
+    elif state == "CLEAN":
+        st.success(line)
+    else:
+        st.warning(line + "  \nHors benchmark : arbre modifié ou identité Git indisponible.")
+
+
 def render_mission_create(client: SolutionPlansAPIClient) -> None:
     """Formulaire d'entrée unique : problème / idée / objectif / solution existante."""
     st.subheader("Lancer une mission de cadrage")
     st.info(MISSION_NOTICE)
+    expected_default = str(st.session_state.get("expected_freeze", ""))
+    render_build_banner(client, expected_default)
     with st.form("mission_create_form"):
         input_type = st.selectbox(
             "Nature de l'entrée",
@@ -2274,6 +2317,11 @@ def render_mission_create(client: SolutionPlansAPIClient) -> None:
             "Classe déclarée (optionnel — sinon « importante provisoire / non déterminée »)",
             options=["", "courante", "importante", "structurante", "critique"],
             format_func=lambda v: v or "non déclarée",
+        )
+        expected_freeze = st.text_input(
+            "Freeze attendu (benchmark ; SHA court ou complet — la mission est refusée si le "
+            "serveur n'exécute pas exactement ce build, s'il est modifié ou non identifiable)",
+            value=expected_default,
         )
         override = st.checkbox(
             "Surcharger les plafonds de la classe (sinon : plafonds durs de la classe effective)",
@@ -2297,6 +2345,9 @@ def render_mission_create(client: SolutionPlansAPIClient) -> None:
         "ceo_preference": ceo_preference,
         "declared_class": declared_class,
     }
+    st.session_state["expected_freeze"] = expected_freeze.strip()
+    if expected_freeze.strip():
+        payload["expected_freeze"] = expected_freeze.strip()
     if override:
         payload["max_llm_calls"] = int(max_calls)
         payload["max_cost_eur"] = float(max_cost)
@@ -2420,11 +2471,16 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
     except APIError as exc:
         st.error(str(exc))
         return
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Statut", mission["status"])
     c2.metric("Appels", f"{mission['llm_calls_used']}/{mission['max_llm_calls']}")
     c3.metric("Coût connu (€)", f"{mission['cost_eur']:.4f}")
     c4.metric("Classe", mission["effective_class"])
+    build = mission.get("build_identity") or {}
+    c5.metric(
+        "Build",
+        (build.get("git_commit_short") or "—") + (f" {_build_state_label(build)}" if build else ""),
+    )
     # B12 — le coût connu n'est pas l'exposition : des tentatives fournisseur au coût inconnu sont
     # comptées comme borne supérieure, et le plafond CEO s'applique à cette borne.
     budget = (mission.get("report") or {}).get("budget") or {}

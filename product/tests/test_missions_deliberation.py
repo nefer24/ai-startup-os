@@ -1249,18 +1249,22 @@ def test_minimal_cycle_is_financed_and_optional_steps_yield_to_synthesis(
     )
     # Trois options (un lot de consolidation) : cœur nominal = 4 appels (consolidation,
     # comparaison, synthèse, porte).
-    mission = run(client, llm, "cycle minimal sous 14 appels", max_llm_calls=14)
+    mission = run(client, llm, "cycle minimal sous 15 appels", max_llm_calls=15)
     # v1.3.6 (B15) : 3 exposés + 1 auto-qualification groupée + 3 confrontations + 2 révisions
-    # réservées (⌈3/2⌉) + cœur borné 4 = 13 ≤ 13 restants (égalité admise) : plan délibérable,
-    # largeur préservée — et la révision n'est plus une variable d'ajustement.
+    # réservées (⌈3/2⌉) + cœur borné 5 (v1.3.6.2 / D21 : + 1 relance de synthèse réservée)
+    # = 14 ≤ 14 restants (égalité admise) : plan délibérable, largeur préservée — et la
+    # révision n'est plus une variable d'ajustement.
     bounds = mission["composition"]["bounds"]
     assert bounds["budget_plan"] == "full_deliberation"
     assert bounds["plan_feasible"] is True
-    assert bounds["total_required_calls"] == 13 == bounds["remaining_calls_at_composition"]
+    assert bounds["total_required_calls"] == 14 == bounds["remaining_calls_at_composition"]
     assert bounds["reserve_components"]["revisions"] == 2
+    assert bounds["reserve_components"]["synthesis_recovery"] == 1
     assert len(mission["composition"]["experts"]) == 3  # largeur préservée
     assert mission["stop_reason"] == ""
-    assert mission["llm_calls_used"] == 13  # une seule révision demandée sur les 2 réservées
+    # Une seule révision demandée sur les 2 réservées ; la relance de synthèse réservée n'est
+    # pas consommée (synthèse valide du premier coup).
+    assert mission["llm_calls_used"] == 13
     assert mission["deliberation"]["consolidation"]["calls"] == 1
     assert mission["recommendation"]["status"] == "produced"
     assert mission["recommendation"]["gate"]["passed"] is True
@@ -1278,10 +1282,11 @@ def test_minimal_cycle_is_financed_and_optional_steps_yield_to_synthesis(
 def test_deliberation_is_not_started_when_budget_cannot_afford_a_minimal_cycle(
     client: TestClient, use_llm: Callable[..., DeliberationLLM]
 ) -> None:
-    # B14-prime : à 9 appels, aucun plan à ≥ 2 positions ne tient (2 x 2 + 2 + cœur 4 = 10 > 8) ;
+    # B14-prime : à 9 appels, aucun plan à ≥ 2 positions ne tient (2 x 2 + 2 + cœur 5 = 11 > 8) ;
     # la composition s'arrête après le seul cadrage au lieu de dépenser Tour 0 et
     # auto-qualification « pour voir ». Demande chiffrée pour les 3 positions qu'appelle le
-    # cadrage : 3 x 2 + 3 + 4 = 13 appels, soit 5 de plus que les 8 restants.
+    # cadrage : 3 x 2 + 3 + 5 = 14 appels (v1.3.6.2 : cœur + relance de synthèse réservée),
+    # soit 6 de plus que les 8 restants.
     llm = use_llm(DeliberationLLM())
     mission = run(client, llm, "délibération non entamée (9 appels)", max_llm_calls=9)
     assert mission["llm_calls_used"] == 1
@@ -1296,15 +1301,15 @@ def test_deliberation_is_not_started_when_budget_cannot_afford_a_minimal_cycle(
     assert d["steps_done"] == []
     br = d["budget_request"]
     assert br["detected_at_step"] == "composition"
-    assert br["minimal_deliberation_calls"] == 13
+    assert br["minimal_deliberation_calls"] == 14
     assert br["remaining_calls"] == 8
-    assert br["additional_calls_estimate"] == 5
+    assert br["additional_calls_estimate"] == 6
     assert "uncovered_critical_dimensions" not in br
     # Le rapport reste honnête : aucune option examinée, aucune recommandation.
     fields = mission["report"]["fourteen_fields"]
     assert fields["05_options_examinees"] == []
     assert "aucune recommandation" in fields["10_recommandation"]["status"]
-    assert fields["10_recommandation"]["budget_request"]["additional_calls_estimate"] == 5
+    assert fields["10_recommandation"]["budget_request"]["additional_calls_estimate"] == 6
     assert not any("dimension critique" in a for a in fields["14_prochaine_action"])
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
     assert "Demande de budget" in md
@@ -1562,7 +1567,14 @@ def test_research_call_has_the_canonical_audit_chain(
     provider = research(FakeResearchProvider(status=status))
     llm = use_llm(DeliberationLLM(confrontation=FACT_CONFRONTATION))
     mission = run(client, llm, f"chaîne d'audit recherche ({status})")
-    entries = [e for e in journal(client, mission["id"]) if e["step"] == "recherche"]
+    all_entries = [e for e in journal(client, mission["id"]) if e["step"] == "recherche"]
+    # v1.3.6.2 (D24) : la sélection des questions est tracée avant tout appel
+    # (`research_candidate` / `research_selected`), sans appel LLM ni fournisseur.
+    assert [e["entry_type"] for e in all_entries][:2] == [
+        "research_candidate",
+        "research_selected",
+    ]
+    entries = [e for e in all_entries if not e["entry_type"].startswith("research_")]
     kinds = [e["entry_type"] for e in entries]
     assert kinds == ["call_planned", "call_done", "result"]
     planned, done, result = entries
@@ -1621,8 +1633,12 @@ def test_unavailable_research_provider_has_no_call_chain_and_no_cost(
     llm = use_llm(DeliberationLLM(confrontation=FACT_CONFRONTATION))
     mission = run(client, llm, "recherche indisponible : zéro appel")
     entries = [e for e in journal(client, mission["id"]) if e["step"] == "recherche"]
-    assert [e["entry_type"] for e in entries] == ["result"]
-    assert entries[0]["payload"]["status"] == "unavailable_external"
+    assert [e["entry_type"] for e in entries] == [
+        "research_candidate",
+        "research_selected",
+        "result",
+    ]
+    assert entries[-1]["payload"]["status"] == "unavailable_external"
     assert mission["llm_calls_used"] == len(llm.calls)
 
 
@@ -2075,13 +2091,17 @@ def test_gate_llm_verdict_cannot_override_upstream_failures(
     mission = run(client, llm, "synthèse tronquée")
     rec = mission["recommendation"]
     assert rec["status"] == "failed"
-    # B14-prime (F) : la synthèse a une limite fixe (plancher = plafond) ; une sortie coupée à
-    # cette limite n'est pas relancée à l'identique — refus explicite, aucun appel gaspillé.
+    # v1.3.6.2 (D21) : la synthèse dispose d'UNE relance de récupération (limite recalculée
+    # sous le plafond 16 000, financée par la composante `synthesis_recovery`), jamais d'une
+    # boucle ; les deux sorties étant tronquées, l'échec est terminal et nommé.
     assert rec["error"].startswith(
-        "structured_output_retry_refused_output_budget: structured_output_truncated"
+        "structured_output_recovery_exhausted: structured_output_truncated"
     )
-    assert len([c for c in llm.calls if c["call_type"] == "synthesis"]) == 1
-    assert mission["report"]["budget"]["structured_output_retries"] == 0
+    assert len([c for c in llm.calls if c["call_type"] == "synthesis"]) == 2
+    assert mission["report"]["budget"]["structured_output_retries"] == 1
+    stop = mission["deliberation"]["stop"]
+    assert stop["terminal_failure_reason"] == "synthesis_structured_output_failed"
+    assert stop["reason"] == "synthesis_structured_output_failed"
     assert mission["report"]["recommendation_produced"] is False
     assert any(
         s["step"] == "porte_qualite" and "aucune recommandation" in s["reason"]
@@ -2409,9 +2429,10 @@ def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
     # (qui aurait préservé la couverture) n'est pas financée → statut != ok, porte exécutée et
     # bloquante. v1.3.6 (B15) : la composition n'accepte 3 experts (cap 8 options) que si
     # 3 + 1 (auto-qualification groupée) + 3 + 2 révisions réservées + cœur borné (24 options →
-    # 2 lots + 1 méta = 3 → 6) = 15 ≤ restant → plafond 16 ; 17 groupes réels → consolidation en
-    # 2 lots + méta (3 appels). Deux objections → les 2 révisions réservées sont consommées.
-    # Appels : 1 + 3 + 1 + 3 + 2 + 3 + 1 (comparaison) + 1 + 1 = 16.
+    # 2 lots + 1 méta = 3 → 7 avec la relance de synthèse réservée, v1.3.6.2) = 16 ≤ restant →
+    # plafond 17 ; 17 groupes réels → consolidation en 2 lots + méta (3 appels). Deux
+    # objections → les 2 révisions réservées sont consommées.
+    # Appels : 1 + 3 + 1 + 3 + 2 + 3 + 1 (comparaison) + 1 + 1 = 16 (+ 1 réservé non consommé).
     options_cap(8)
     wide = coverage_options()
     wide["E3"] = [*wide["E3"], ("Stratégie A9", "build"), ("Stratégie A10", "build")]
@@ -2435,7 +2456,7 @@ def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
         llm,
         "relance de comparaison non finançable",
         input_text=COVERAGE_INPUT,
-        max_llm_calls=16,
+        max_llm_calls=17,
     )
     comp = mission["deliberation"]["comparison"]
     assert comp["status"] == "failed"
@@ -2450,7 +2471,7 @@ def test_comparison_retry_that_cannot_preserve_coverage_is_not_ok(
     assert rec["gate"]["passed"] is False
     assert rec["decision_ready"] is False
     assert "upstream_stage_failed:comparaison" in rec["gate"]["integrity_failures"]
-    assert mission["llm_calls_used"] == 16 == mission["max_llm_calls"]
+    assert mission["llm_calls_used"] == 16 == mission["max_llm_calls"] - 1
     assert mission["stop_reason"] == ""  # la porte n'a pas été sacrifiée : aucun arrêt dur
 
 
@@ -2546,12 +2567,13 @@ def test_budget_exactly_nominal_plus_comparison_retry_plus_gate_completes(
     client: TestClient, use_llm: Callable[..., DeliberationLLM]
 ) -> None:
     # 1 + 3 + 1 (auto-qualification groupée) + 3 (confrontation) + 2 (révisions réservées)
-    # + 1 (consolidation) + 1 + 1 (comparaison + relance) + 1 + 1 = 15
+    # + 1 (consolidation) + 1 + 1 (comparaison + relance) + 1 + 1 = 15, plus la relance de
+    # synthèse réservée (v1.3.6.2) qui n'est pas consommée : plafond 16, 15 appels dépensés.
     llm = use_llm(_reserve_llm(flaky_consolidation=False))
     mission = run(
-        client, llm, "B8 test 1 : nominal + relance comparaison + porte", max_llm_calls=15
+        client, llm, "B8 test 1 : nominal + relance comparaison + porte", max_llm_calls=16
     )
-    assert mission["llm_calls_used"] == 15 == mission["max_llm_calls"]
+    assert mission["llm_calls_used"] == 15 == mission["max_llm_calls"] - 1
     assert mission["stop_reason"] == ""
     comp = mission["deliberation"]["comparison"]
     assert [a["families"] for a in comp["attempts"]] == [5, 2]
@@ -2572,15 +2594,16 @@ def test_budget_insufficient_for_retry_keeps_the_gate(
     client: TestClient, use_llm: Callable[..., DeliberationLLM]
 ) -> None:
     llm = use_llm(_reserve_llm(flaky_consolidation=False))
-    mission = run(client, llm, "B8 test 2 : relance refusée, porte exécutée", max_llm_calls=14)
-    assert mission["llm_calls_used"] == 14 == mission["max_llm_calls"]
+    mission = run(client, llm, "B8 test 2 : relance refusée, porte exécutée", max_llm_calls=15)
+    assert mission["llm_calls_used"] == 14 == mission["max_llm_calls"] - 1
     assert mission["stop_reason"] == ""
     comp = mission["deliberation"]["comparison"]
     assert comp["status"] == "failed"
     assert [a["families"] for a in comp["attempts"]] == [5]
     entries = journal(client, mission["id"])
     refused = next(e for e in entries if e["entry_type"] == "retry_refused_budget")
-    assert refused["payload"]["reserved_for_higher_priority"] == 2  # synthèse + porte
+    # synthèse + relance de synthèse réservée (v1.3.6.2) + porte
+    assert refused["payload"]["reserved_for_higher_priority"] == 3
     rec = mission["recommendation"]
     assert rec["status"] == "produced"
     assert rec["gate"]["passed"] is False
@@ -2593,7 +2616,7 @@ def test_budget_insufficient_for_retry_keeps_the_gate(
 
 @pytest.mark.parametrize(
     ("max_calls", "expected_comparison_attempts", "expected_status"),
-    [(17, [5, 2], "ok"), (16, [5], "failed")],
+    [(18, [5, 2], "ok"), (17, [5], "failed")],
 )
 def test_consolidation_and_comparison_retries_in_the_same_mission(
     client: TestClient,
@@ -2603,6 +2626,8 @@ def test_consolidation_and_comparison_retries_in_the_same_mission(
     expected_status: str,
 ) -> None:
     # 1 + 3 + 1 + 3 + 2 + [1 + 2] (consolidation + relance scindée) + [1 (+1)] + 1 + 1
+    # (+ 1 relance de synthèse réservée, jamais consommée ici — v1.3.6.2)
+    # (+ 1 relance de synthèse réservée, jamais consommée ici — v1.3.6.2)
     llm = use_llm(_reserve_llm(flaky_consolidation=True))
     mission = run(
         client, llm, f"B8 test 3 : deux relances sous {max_calls} appels", max_llm_calls=max_calls
@@ -2614,8 +2639,9 @@ def test_consolidation_and_comparison_retries_in_the_same_mission(
     comp = mission["deliberation"]["comparison"]
     assert [a["families"] for a in comp["attempts"]] == expected_comparison_attempts
     assert comp["status"] == expected_status
-    # Test 4 : le plafond est atteint, mais jamais au détriment de la porte qualité.
-    assert mission["llm_calls_used"] == max_calls == mission["max_llm_calls"]
+    # Test 4 : le plafond (moins la relance de synthèse réservée) est atteint, mais jamais au
+    # détriment de la porte qualité.
+    assert mission["llm_calls_used"] == max_calls - 1 == mission["max_llm_calls"] - 1
     assert mission["stop_reason"] == ""
     assert "porte_qualite" in mission["deliberation"]["steps_done"]
     rec = mission["recommendation"]

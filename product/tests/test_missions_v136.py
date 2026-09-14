@@ -184,14 +184,16 @@ def test_a_reserve_property_over_classes_options_widths_and_budgets(effective_cl
                     "consolidation",
                     "comparison",
                     "synthesis",
+                    "synthesis_recovery",
                     "gate",
                 )
             )
+            assert comps["synthesis_recovery"] == 1  # v1.3.6.2 (D21)
             assert comps["confrontation"] == n
             assert comps["steelman"] == mandatory_steelman_calls(effective_class)
             assert comps["revisions"] == revision_allowance(n, cap=REVISION_CAP) >= 1
             assert comps["consolidation"] == b["consolidation_calls_upper_bound"]
-            assert comps["core_nominal"] == comps["consolidation"] + 3
+            assert comps["core_nominal"] == comps["consolidation"] + 4
             # Même formule que les portes de dépense de l'exécution.
             assert comps == deliberation_reserve(
                 n,
@@ -322,27 +324,29 @@ def test_b_synthetic_mission9_shape_reaches_the_gate_with_steelman_and_revision(
     mission = _post(client, declared_class="structurante")
     assert (mission["max_llm_calls"], mission["max_cost_eur"]) == (60, 8.0)
     bounds = mission["composition"]["bounds"]
-    # B15 : 17 perspectives ne sont pas finançables (17 + 6 + 17 + 2 + 8 + 12 = 62 > 59) ;
-    # 16 le sont exactement (16 + 6 + 16 + 2 + 8 + 11 = 59). La largeur est réduite d'un angle
-    # (jamais une dimension critique) et le plan est faisable AVANT tout Tour 0.
-    assert bounds["max_experts_feasible_deliberation"] == 16
+    # B15 + v1.3.6.2 (D21, relance de synthèse réservée) : 16 perspectives ne sont pas
+    # finançables (16 + 6 + 16 + 2 + 8 + 12 = 60 > 59) ; 15 le sont (15 + 5 + 15 + 2 + 8 + 12
+    # = 57 ≤ 59). La largeur est réduite de deux angles (jamais une dimension critique) et le
+    # plan est faisable AVANT tout Tour 0.
+    assert bounds["max_experts_feasible_deliberation"] == 15
     assert bounds["experts_proposed"] == 17
-    assert bounds["experts_retained"] == 16
+    assert bounds["experts_retained"] == 15
     assert bounds["plan_feasible"] is True
-    assert bounds["total_required_calls"] == 59 == bounds["remaining_calls_at_composition"]
+    assert bounds["total_required_calls"] == 57 <= bounds["remaining_calls_at_composition"]
     assert bounds["reserve_components"] == {
-        "confrontation": 16,
+        "confrontation": 15,
         "steelman": 2,
         "revisions": 8,
         "consolidation": 8,
         "comparison": 1,
         "synthesis": 1,
+        "synthesis_recovery": 1,
         "gate": 1,
-        "core_nominal": 11,
+        "core_nominal": 12,
         "total": 37,
     }
     assert mission["composition"]["uncovered_dimensions"] == []
-    assert len(mission["composition"]["experts"]) == 16
+    assert len(mission["composition"]["experts"]) == 15
     # Traversée complète sous les plafonds, steelman fait, au moins une révision exécutée.
     assert mission["status"] == "candidate"
     assert mission["stop_reason"] == ""
@@ -378,9 +382,9 @@ def test_b_synthetic_mission9_shape_reaches_the_gate_with_steelman_and_revision(
     counts: dict[str, int] = {}
     for c in llm.calls:
         counts[c["call_type"]] = counts.get(c["call_type"], 0) + 1
-    assert counts["expert_tour0"] == 16
-    assert counts["self_qualification"] == 6  # groupée par 3
-    assert counts["confrontation"] == 16
+    assert counts["expert_tour0"] == 15
+    assert counts["self_qualification"] == 5  # groupée par 3
+    assert counts["confrontation"] == 15
     assert counts["steelman"] == 1
     assert counts["revision"] >= 1
     entries = _journal(client, mission["id"])
@@ -400,7 +404,10 @@ def test_c_policy_table_is_explicit_per_call_type_and_never_a_json_shortcut() ->
     for ct in ("framing", "expert_tour0", "confrontation", "steelman", "revision", "synthesis"):
         assert table[ct]["category"] == "A"
         assert (table[ct]["thinking"], table[ct]["effort"]) == ("adaptive", "high")
-        assert table[ct]["headroom_tokens"] == 0
+        # v1.3.6.2 (D21) : la catégorie A garde le raisonnement fort ET reçoit une marge
+        # explicite, configurable et journalisée ; la synthèse en reçoit davantage.
+        expected = 4000 if ct == "synthesis" else 2000
+        assert table[ct]["headroom_tokens"] == expected
     for ct in ("comparison", "quality_gate"):
         assert table[ct]["category"] == "B"
         assert (table[ct]["thinking"], table[ct]["effort"]) == ("adaptive", "medium")
@@ -588,7 +595,10 @@ def test_c_mission_journal_carries_the_applied_policy_without_thinking_content(
     by_type = {e["payload"]["call_type"]: e["payload"] for e in planned}
     assert by_type["comparison"]["output_budget"]["reasoning_headroom"] == 1500
     assert by_type["self_qualification"]["output_budget"]["reasoning_headroom"] == 500
-    assert by_type["framing"]["output_budget"].get("reasoning_headroom", 0) == 0
+    # v1.3.6.2 (D21) : la catégorie A porte aussi sa marge, sous un plafond explicite.
+    assert by_type["framing"]["output_budget"]["reasoning_headroom"] == 2000
+    assert by_type["framing"]["output_budget"]["granted"] == 10000
+    assert by_type["framing"]["output_budget"]["ceiling"] == 12000
 
 
 # =================================================================================================
@@ -1165,8 +1175,8 @@ def test_i_redundant_angles_are_removed_before_unique_ones_when_the_budget_reduc
     client: TestClient, use_llm: Callable[..., Any]
 ) -> None:
     # 9 angles proposés sur 3 dimensions critiques ; « praticien » est porté par les trois
-    # cellules. Classe importante (30 appels) : 7 experts finançables → 2 retraits, qui sont les
-    # deux doublons (jamais un angle unique, jamais une dimension).
+    # cellules. Classe importante (30 appels) : 6 experts finançables (v1.3.6.2 : relance de
+    # synthèse réservée) → 3 retraits, dont les deux doublons EN PREMIER (jamais une dimension).
     framing = framing_with(
         [
             ("dimension v136 un", "high", ["praticien", "mesure", "sceptique"]),
@@ -1178,16 +1188,16 @@ def test_i_redundant_angles_are_removed_before_unique_ones_when_the_budget_reduc
     mission = _post(client)
     bounds = mission["composition"]["bounds"]
     assert bounds["experts_proposed"] == 9
-    assert bounds["max_experts_feasible_deliberation"] == 7
-    assert bounds["experts_retained"] == 7
+    assert bounds["max_experts_feasible_deliberation"] == 6
+    assert bounds["experts_retained"] == 6
     removed = bounds["duplicate_angles_removed"]
     assert len(removed) == 2
     assert len({r["angle"] for r in removed}) == 1  # le même angle redondant, deux fois
     assert len({r["dimension"] for r in removed}) == 2  # dans deux cellules différentes
     experts = mission["composition"]["experts"]
-    assert len(experts) == 7
+    assert len(experts) == 6
     titles = [e["angle_title"] for e in experts]
-    assert len(set(titles)) == 7  # aucun angle porté deux fois après réduction
+    assert len(set(titles)) == 6  # aucun angle porté deux fois après réduction
     assert removed[0]["angle"] in titles  # une occurrence de l'angle redondant est conservée
     assert {e["dimension"] for e in experts} == {
         "dimension v136 un",
@@ -1197,9 +1207,11 @@ def test_i_redundant_angles_are_removed_before_unique_ones_when_the_budget_reduc
     assert mission["composition"]["uncovered_dimensions"] == []
     composition = _entries(client, mission["id"], "composition_result")[0]["payload"]
     reductions = [e for e in composition["journal"] if e["event"] == "reduction_budget"]
-    assert len(reductions) == 2
-    assert all("angle redondant" in e["detail"] for e in reductions)
-    assert [e["removed_angle"] for e in reductions] == [r["angle"] for r in removed]
+    assert len(reductions) == 3
+    # Les deux doublons cèdent avant l'angle unique.
+    assert all("angle redondant" in e["detail"] for e in reductions[:2])
+    assert "angle redondant" not in reductions[2]["detail"]
+    assert [e["removed_angle"] for e in reductions[:2]] == [r["angle"] for r in removed]
     assert mission["status"] == "candidate"
     assert mission["llm_calls_used"] <= 30
 
@@ -1249,7 +1261,10 @@ def test_j_classification_is_declared_first_then_lexical_and_never_guessed_furth
     assert classify_fact_source(INTERNAL_Q) == "internal"
     assert classify_fact_source(EXTERNAL_Q) == "either"
     assert classify_fact_source(EXTERNAL_Q, declared="internal") == "internal"
-    assert classify_fact_source(INTERNAL_Q, declared="external") == "external"
+    # v1.3.6.2 (D23) : une déclaration `external` ne peut pas envoyer sur le web une question
+    # qui porte manifestement sur une donnée détenue par l'organisation (garde conservatrice).
+    assert classify_fact_source(INTERNAL_Q, declared="external") == "internal"
+    assert classify_fact_source(EXTERNAL_Q, declared="external") == "external"
     assert classify_fact_source("Combien de contrats avons-nous signés en interne ?") == "internal"
 
 
@@ -1280,7 +1295,7 @@ def test_j_internal_question_is_an_information_request_external_one_is_researche
     assert "Informations INTERNES à demander" in synthesis_prompt
     assert INTERNAL_Q in synthesis_prompt
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
-    assert "Informations à demander au demandeur (1)" in md
+    assert "Informations internes à obtenir (1)" in md
     assert INTERNAL_Q in md
 
 
@@ -1294,8 +1309,15 @@ def test_j_without_provider_external_is_unavailable_external_and_internal_stays_
     assert items[EXTERNAL_Q]["provenance"] == "unavailable"
     assert items[INTERNAL_Q]["status"] == "internal_data_required"
     assert not [c for c in llm.calls if c["call_type"] == "research"]
-    # L'absence externe prime dans la raison d'arrêt ; les deux restent visibles dans la synthèse.
-    assert mission["deliberation"]["stop"]["reason"] == "missing_external_info"
+    # v1.3.6.2 (§7) : l'information interne manquante prime (c'est le demandeur qui peut la
+    # fournir) ; les deux natures restent visibles dans l'arrêt et dans la synthèse.
+    stop = mission["deliberation"]["stop"]
+    assert stop["reason"] == "missing_internal_info"
+    assert not stop["terminal_failure_reason"]
+    assert {m["kind"] for m in stop["missing_information"]} == {
+        "internal_data_required",
+        "external_research_unresolved",
+    }
     synthesis_prompt = next(c for c in llm.calls if c["call_type"] == "synthesis")["prompt"]
     assert "EXTERNES NON résolues" in synthesis_prompt
     assert "Informations INTERNES à demander" in synthesis_prompt
@@ -1318,9 +1340,11 @@ def test_j_declared_fact_source_overrides_the_lexical_fallback(
     mission = _post(client)
     items = {e["question"]: e for e in mission["deliberation"]["research"]}
     assert items[EXTERNAL_Q]["status"] == "internal_data_required"
-    assert items[INTERNAL_Q]["status"] == "found"
-    assert items[INTERNAL_Q]["fact_source"] == "external"
-    assert provider.questions == [INTERNAL_Q]
+    # v1.3.6.2 (D23) : la déclaration `external` ne l'emporte pas sur les marqueurs manifestes
+    # d'une donnée interne (« notre marge ») : rien n'est envoyé au fournisseur.
+    assert items[INTERNAL_Q]["status"] == "internal_data_required"
+    assert items[INTERNAL_Q]["fact_source"] == "internal"
+    assert provider.questions == []
 
 
 # =================================================================================================

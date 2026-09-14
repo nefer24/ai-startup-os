@@ -79,6 +79,9 @@ class StructuredOutcome:
     raw_length_chars: int = 0
     raw_head: str = ""
     raw_tail: str = ""
+    # D25 (v1.3.6.2) — éléments d'une liste indépendante rejetés individuellement (index, champ,
+    # erreur de validation, littéral reçu) ; la sortie reste valide sans eux.
+    rejected_items: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def valid(self) -> bool:
@@ -100,7 +103,73 @@ class StructuredOutcome:
             "raw_length_chars": self.raw_length_chars,
             "raw_head": self.raw_head,
             "raw_tail": self.raw_tail,
+            "items_rejected": len(self.rejected_items),
         }
+
+
+def _literal_received(item: Any, error: Any) -> str:
+    """Valeur reçue pour le premier champ en erreur (bornée), sans autre contenu."""
+    loc = error.get("loc") or ()
+    value: Any = item
+    for part in loc:
+        try:
+            value = value[part]
+        except (KeyError, IndexError, TypeError):
+            return ""
+    return str(value)[:80]
+
+
+def validate_with_item_tolerance(
+    data: dict[str, Any], model: type[BaseModel]
+) -> tuple[BaseModel | None, list[dict[str, Any]], str]:
+    """Validation stricte, puis — si le contrat déclare des listes d'éléments INDÉPENDANTS
+    (`TOLERANT_ITEM_LISTS`) — validation élément par élément : les éléments invalides sont retirés
+    et décrits (index, champ, erreur, littéral reçu), les autres conservés, et l'objet est validé
+    à nouveau sans eux. Aucun élément n'est transformé ni reclassé (D25).
+
+    Retourne (objet ou None, éléments rejetés, message d'erreur)."""
+    from pydantic import ValidationError
+
+    try:
+        return model.model_validate(data), [], ""
+    except ValidationError as exc:
+        first_error = str(exc)[:ERROR_LIMIT]
+    tolerant = getattr(model, "TOLERANT_ITEM_LISTS", None)
+    if not tolerant or not isinstance(data, dict):
+        return None, [], first_error
+    cleaned = dict(data)
+    rejected: list[dict[str, Any]] = []
+    for field_name, item_model in tolerant.items():
+        items = cleaned.get(field_name)
+        if not isinstance(items, list):
+            continue
+        kept: list[Any] = []
+        for index, item in enumerate(items):
+            try:
+                item_model.model_validate(item)
+            except ValidationError as item_exc:
+                errors = item_exc.errors()
+                first: dict[str, Any] = dict(errors[0]) if errors else {}
+                rejected.append(
+                    {
+                        "field": field_name,
+                        "index": index,
+                        "validation_error": str(item_exc)[:ERROR_LIMIT],
+                        "error_field": ".".join(str(p) for p in first.get("loc", ())),
+                        "literal_received": (
+                            _literal_received(item, first) if isinstance(item, dict) else ""
+                        ),
+                    }
+                )
+                continue
+            kept.append(item)
+        cleaned[field_name] = kept
+    if not rejected:
+        return None, [], first_error
+    try:
+        return model.model_validate(cleaned), rejected, ""
+    except ValidationError as exc:
+        return None, rejected, str(exc)[:ERROR_LIMIT]
 
 
 def _excerpt(text: str, *, head: bool) -> str:
@@ -211,9 +280,10 @@ def _is_json_value(text: str) -> bool:
 def analyze_structured_output(response: LLMResponse, model: type[BaseModel]) -> StructuredOutcome:
     """Classe une réponse contre `model` : récupération locale, parsing, validation stricte.
 
-    La validation utilise exactement `model.model_validate` — aucune tolérance ajoutée. Une
-    réponse coupée (`stop_reason = max_tokens`) mais malgré tout valide est acceptée et signalée
-    comme tronquée dans les métadonnées.
+    La validation utilise `model.model_validate` ; la seule tolérance (D25) porte sur les listes
+    d'éléments indépendants déclarées par le contrat : un élément invalide est rejeté et décrit,
+    jamais transformé. Une réponse coupée (`stop_reason = max_tokens`) mais malgré tout valide est
+    acceptée et signalée comme tronquée dans les métadonnées.
     """
     raw = response.text or ""
     outcome = StructuredOutcome(
@@ -249,12 +319,13 @@ def analyze_structured_output(response: LLMResponse, model: type[BaseModel]) -> 
         outcome.category = STRUCTURED_OUTPUT_SCHEMA_ERROR
         outcome.error = f"schema_invalide: objet attendu, {type(data).__name__} reçu"
         return outcome
-    try:
-        outcome.output = model.model_validate(data)
-    except ValueError as exc:  # pydantic.ValidationError hérite de ValueError
+    output, rejected, error = validate_with_item_tolerance(data, model)
+    outcome.rejected_items = rejected
+    if output is None:
         outcome.category = STRUCTURED_OUTPUT_SCHEMA_ERROR
-        outcome.error = f"schema_invalide: {str(exc)[:ERROR_LIMIT]}"
+        outcome.error = f"schema_invalide: {error}"
         return outcome
+    outcome.output = output
     outcome.schema_ok = True
     return outcome
 

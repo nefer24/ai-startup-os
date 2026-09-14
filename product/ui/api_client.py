@@ -77,6 +77,13 @@ class SolutionPlansAPIClient:
         result: dict[str, Any] = self._request("GET", "/product/status")
         return result
 
+    def benchmark_preflight(self, expected_freeze: str = "") -> dict[str, Any]:
+        """D20 — pré-vol benchmark (`GET /benchmark/preflight`) : identité réelle du serveur qui
+        tourne et verdict MATCH / MISMATCH contre le freeze attendu (lecture seule)."""
+        params = {"expected_freeze": expected_freeze} if expected_freeze else None
+        result: dict[str, Any] = self._request("GET", "/benchmark/preflight", params=params)
+        return result
+
     def create_plan(self, input_type: str, title: str, description: str) -> dict[str, Any]:
         """Crée un plan candidat depuis une entrée CEO (`POST /solutions/plans`)."""
         payload = {"input_type": input_type, "title": title, "description": description}

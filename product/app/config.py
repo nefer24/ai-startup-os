@@ -80,6 +80,16 @@ class Settings(BaseSettings):
     mission_output_ceiling_clerk: int = 8000
     mission_output_ceiling_consolidation: int = 8000
     mission_output_ceiling_comparison: int = 8000
+    # D21 (v1.3.6.2) — étapes de catégorie A à cardinalité fixe : la limite historique reste le
+    # budget TEXTE (plancher) ; la marge de raisonnement A s'y ajoute ; le plafond borne la relance
+    # à limite recalculée (une seule) lorsque la sortie est coupée. Aucun doublement aveugle : la
+    # marge est un réglage explicite, journalisé, distinct du texte requis.
+    mission_output_ceiling_framing: int = 12000
+    mission_output_ceiling_expert: int = 10000
+    mission_output_ceiling_confrontation: int = 8000
+    mission_output_ceiling_steelman: int = 8000
+    mission_output_ceiling_revision: int = 6000
+    mission_output_ceiling_synthesis: int = 16000
     # B15 (v1.3.6) — réserve unique : allocation de révisions réservée dès la composition
     # (`revision_allowance` : ceil(n / 2), bornée par ce plafond) ; nombre maximal de positions
     # qualifiées par appel d'auto-qualification groupée (1 = un appel par position).
@@ -98,6 +108,25 @@ class Settings(BaseSettings):
     mission_reasoning_thinking_c: str = "adaptive"
     mission_reasoning_headroom_tokens_b: int = 1500
     mission_reasoning_headroom_tokens_c: int = 500
+    # D21 (v1.3.6.2) — marge de raisonnement de la catégorie A (cadrage, exposés, confrontation,
+    # steelman, révision) et marge dédiée de la synthèse (étape terminale à matière large :
+    # 14 champs sur des dizaines de familles). Les traces réelles montrent des sorties A où le
+    # texte utile seul approche la limite historique : sans marge, un raisonnement adaptatif
+    # élevé coupe la sortie structurée. La marge s'ajoute au texte ; elle ne le remplace pas.
+    mission_reasoning_headroom_tokens_a: int = 2000
+    mission_reasoning_headroom_tokens_synthesis: int = 4000
+    # D22 (v1.3.6.2) — contrat de comparaison : nombre maximal de critères produits (noyau de 5,
+    # au plus 7). Le modèle ne peut pas en inventer davantage : les critères excédentaires sont
+    # écartés et déclarés, jamais évalués en silence.
+    mission_comparison_max_criteria: int = 7
+    # D20 (v1.3.6.2) — intégrité des benchmarks : freeze attendu (SHA court ou complet) et mode
+    # strict (fail closed : commit différent, identité Git indisponible ou arbre modifié → la
+    # mission ne démarre pas, aucun appel LLM). `mission_allow_dirty_build_dev` est réservé au
+    # développement hors benchmark : il n'a AUCUN effet en mode strict ni quand un freeze est
+    # attendu.
+    mission_expected_freeze: str = ""
+    mission_benchmark_strict: bool = False
+    mission_allow_dirty_build_dev: bool = False
     # B14-prime (O2) — cardinalité maximale des options proposées par un expert au Tour 0 :
     # contrat de
     # sortie explicite qui borne le plan de consolidation (lots, méta-passes) à la composition.

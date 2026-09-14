@@ -199,6 +199,11 @@ CALLS_PER_EXPERT = 3
 # Cœur de synthèse : consolidation, comparaison, synthèse, porte qualité. Les étapes optionnelles
 # (steelman, recherche, révision) ne sont financées que si ce cœur reste finançable après elles.
 SYNTHESIS_CORE_CALLS = 4
+# D21 (v1.3.6.2) — la synthèse est l'étape terminale obligatoire : sa capacité de récupération
+# (UNE relance à limite recalculée si la sortie est coupée) est réservée dès la composition, avec
+# le même invariant qu'à l'exécution. Une récupération locale (éléments complets) reste possible
+# sans appel ; la relance n'est jamais bouclée.
+SYNTHESIS_RECOVERY_CALLS = 1
 CLASS_ORDER = ["courante", "importante", "structurante", "critique"]
 
 
@@ -263,7 +268,7 @@ def consolidation_core_bound(
         "batches_upper_bound": batches,
         "meta_passes_upper_bound": meta,
         "consolidation_calls_upper_bound": nominal,
-        "core_nominal_bound": (SYNTHESIS_CORE_CALLS - 1) + nominal,
+        "core_nominal_bound": (SYNTHESIS_CORE_CALLS - 1) + SYNTHESIS_RECOVERY_CALLS + nominal,
     }
 
 
@@ -381,9 +386,10 @@ def deliberation_reserve(
         "consolidation": max(0, int(consolidation_calls)),
         "comparison": 1,
         "synthesis": 1,
+        "synthesis_recovery": SYNTHESIS_RECOVERY_CALLS,
         "gate": 1,
     }
-    core = components["consolidation"] + 3
+    core = components["consolidation"] + 3 + SYNTHESIS_RECOVERY_CALLS
     return {
         **components,
         "core_nominal": core,

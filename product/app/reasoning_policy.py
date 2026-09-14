@@ -10,7 +10,10 @@ et journalisée pour chaque appel. Trois catégories, jamais « sortie JSON = ra
 
 * **A — raisonnement intellectuel fort** : cadrage, exposés du Tour 0, confrontation, steelman
   (et ses appels de reconnaissance / contradiction), révision, synthèse. Raisonnement adaptatif,
-  effort élevé ; on ne réduit pas le raisonnement pour économiser des tokens.
+  effort élevé ; on ne réduit pas le raisonnement pour économiser des tokens. D21 (v1.3.6.2) :
+  marge de sortie explicite (`mission_reasoning_headroom_tokens_a`, marge dédiée pour la
+  synthèse) ajoutée au budget TEXTE de l'étape, sous un plafond qui laisse place à une relance à
+  limite recalculée si la sortie est coupée.
 * **B — raisonnement structuré / modéré** : comparaison, porte qualité. Raisonnement adaptatif,
   effort contrôlé (plus bas que le défaut), marge de sortie explicite pour que le texte attendu
   ne soit pas rogné par le raisonnement.
@@ -85,12 +88,21 @@ def reasoning_policy_for(call_type: str, settings: Any) -> ReasoningPolicy:
     """Politique de raisonnement d'un `call_type` selon la configuration (source unique)."""
     category = CALL_TYPE_CATEGORY.get(call_type, CATEGORY_A)
     if category == CATEGORY_A:
+        # D21 (v1.3.6.2) — la catégorie A garde son raisonnement fort ET reçoit une marge de sortie
+        # explicite : `max_tokens` couvre raisonnement + texte ; sans marge, une étape
+        # intellectuellement forte perd sa sortie structurée. La synthèse (terminale, matière
+        # large, 14 champs) a sa propre marge.
+        headroom_setting = (
+            "mission_reasoning_headroom_tokens_synthesis"
+            if call_type == "synthesis"
+            else "mission_reasoning_headroom_tokens_a"
+        )
         return ReasoningPolicy(
             call_type=call_type,
             category=category,
             thinking="adaptive",
             effort=_effort(getattr(settings, "mission_reasoning_effort_a", "high"), "high"),
-            headroom_tokens=0,
+            headroom_tokens=max(0, int(getattr(settings, headroom_setting, 0))),
         )
     if category == CATEGORY_B:
         return ReasoningPolicy(

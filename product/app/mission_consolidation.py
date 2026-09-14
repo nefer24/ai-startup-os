@@ -228,12 +228,20 @@ def _family(
     variants: list[dict[str, str]],
     internal: list[str],
     source: str,
+    semantics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_kinds: list[str] = []
     for p in parts:
         for k in p.get("source_kinds", [p.get("kind", WILDCARD_KIND)]):
             if k not in source_kinds:
                 source_kinds.append(k)
+    sem = semantics or {}
+    if not sem:
+        # Fusion de familles déjà sémantisées (méta-passe) : première description non vide.
+        for p in parts:
+            if p.get("objective") or p.get("target"):
+                sem = {k: p.get(k) for k in _SEMANTIC_FIELDS if k in p}
+                break
     return {
         "label": short_label(label),
         "kind": canonical_kind(source_kinds, declared_kind),
@@ -244,6 +252,29 @@ def _family(
         "variants": variants,
         "internal_disagreements": list(dict.fromkeys(internal)),
         "source": source,
+        # D22 — orientation décisionnelle (objectif, cible, réversibilité, prérequis, condition,
+        # arbitrage) telle que décrite par le greffier ; vide si non fournie, jamais inventée.
+        "objective": str(sem.get("objective", "") or ""),
+        "target": str(sem.get("target", "") or ""),
+        "reversibility": str(sem.get("reversibility", "unknown") or "unknown"),
+        "prerequisites": list(sem.get("prerequisites", []) or []),
+        "trigger": str(sem.get("trigger", "") or ""),
+        "trade_off": str(sem.get("trade_off", "") or ""),
+    }
+
+
+_SEMANTIC_FIELDS = ("objective", "target", "reversibility", "prerequisites", "trigger", "trade_off")
+
+
+def family_semantics(fam: Any) -> dict[str, Any]:
+    """Champs D22 d'une famille produite par le greffier (schéma `StrategyFamilyOut`)."""
+    return {
+        "objective": getattr(fam, "objective", ""),
+        "target": getattr(fam, "target", ""),
+        "reversibility": getattr(fam, "reversibility", "unknown"),
+        "prerequisites": list(getattr(fam, "prerequisites", []) or []),
+        "trigger": getattr(fam, "trigger", ""),
+        "trade_off": getattr(fam, "trade_off", ""),
     }
 
 
@@ -256,6 +287,7 @@ def _split_incompatible(
     internal: list[str],
     source: str,
     notes: list[str],
+    semantics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Garde : une famille mêlant action et non-action est scindée (journalisé)."""
     action = [p for p in parts if p["kind"] in ACTION_KINDS]
@@ -270,6 +302,7 @@ def _split_incompatible(
                 variants=variants,
                 internal=internal,
                 source=source,
+                semantics=semantics,
             )
         ]
     notes.append(f"famille « {label} » scindée : action et non-action ne se fusionnent pas")
@@ -284,6 +317,7 @@ def _split_incompatible(
                 variants=[v for v in variants if v["option_id"] in ids],
                 internal=internal,
                 source=source + "+scission",
+                semantics=semantics,
             )
         )
     return out
@@ -328,6 +362,7 @@ def families_from_batch(
             internal=list(fam.internal_disagreements),
             source="greffier",
             notes=notes,
+            semantics=family_semantics(fam),
         )
     for g in items:
         if g["group_id"] not in assigned and not partial:
@@ -378,11 +413,91 @@ def merge_families_from_meta(
             + list(fam.internal_disagreements),
             source="greffier+meta" if len(parts) > 1 else parts[0]["source"],
             notes=notes,
+            semantics=family_semantics(fam) if (fam.objective or fam.target) else None,
         )
     for f in families:
         if f["temp_id"] not in assigned:
             merged.append({k: v for k, v in f.items() if k != "temp_id"})
     return merged
+
+
+def _semantic_key(family: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Clé d'équivalence STRUCTURÉE d'une famille (D22) : nature + objectif + cible + condition,
+    normalisés — None si l'objectif ou la cible manquent (aucune fusion possible sur le seul
+    libellé)."""
+    objective = normalize_label(str(family.get("objective", "")))
+    target = normalize_label(str(family.get("target", "")))
+    trigger = normalize_label(str(family.get("trigger", "")))
+    if not objective or not target:
+        return None
+    return (str(family.get("kind", "")), objective, target, trigger)
+
+
+def conservative_merge_families(
+    families: list[dict[str, Any]], notes: list[str]
+) -> tuple[list[dict[str, Any]], int]:
+    """D22 — repli DÉTERMINISTE et CONSERVATEUR quand la méta-consolidation LLM a échoué.
+
+    Fusionne deux familles de lots différents UNIQUEMENT si (a) leur nature est identique et leur
+    libellé normalisé est identique, ou (b) leurs métadonnées structurées (nature, objectif,
+    cible, déclencheur) sont identiques. Rien d'autre : pas de radical lexical, pas de
+    rapprochement sémantique ; dans le doute, rien n'est fusionné. Les familles fusionnées gardent
+    toutes leurs options, leurs variantes (les libellés absorbés deviennent des variantes) et
+    leurs désaccords internes. Retourne (familles, nombre de fusions)."""
+    merged: list[dict[str, Any]] = []
+    by_label: dict[tuple[str, str], int] = {}
+    by_semantic: dict[tuple[str, str, str, str], int] = {}
+    fusions = 0
+    for fam in families:
+        label_key = (str(fam.get("kind", "")), normalize_label(str(fam.get("label", ""))))
+        sem_key = _semantic_key(fam)
+        index = by_label.get(label_key)
+        if index is not None and sem_key is not None:
+            # Même libellé mais métadonnées structurées différentes (objectif, cible ou
+            # condition de déclenchement) : une condition matérielle sépare les familles.
+            host_key = _semantic_key(merged[index])
+            if host_key is not None and host_key != sem_key:
+                index = None
+        if index is None and sem_key is not None:
+            index = by_semantic.get(sem_key)
+        if index is None:
+            copy = {k: (list(v) if isinstance(v, list) else v) for k, v in fam.items()}
+            merged.append(copy)
+            by_label[label_key] = len(merged) - 1
+            if sem_key is not None:
+                by_semantic[sem_key] = len(merged) - 1
+            continue
+        host = merged[index]
+        fusions += 1
+        new_ids = [o for o in fam.get("option_ids", []) if o not in host["option_ids"]]
+        host["option_ids"].extend(new_ids)
+        host.setdefault("group_ids", [])
+        host["group_ids"].extend(g for g in fam.get("group_ids", []) if g not in host["group_ids"])
+        host.setdefault("variants", [])
+        if normalize_label(str(fam.get("label", ""))) != normalize_label(str(host.get("label"))):
+            for oid in new_ids:
+                host["variants"].append(
+                    {"option_id": oid, "difference": f"formulation : {fam.get('label', '')}"}
+                )
+        host["variants"].extend(v for v in fam.get("variants", []) if v not in host["variants"])
+        host.setdefault("internal_disagreements", [])
+        host["internal_disagreements"].extend(
+            d
+            for d in fam.get("internal_disagreements", [])
+            if d not in host["internal_disagreements"]
+        )
+        host.setdefault("source_kinds", [])
+        host["source_kinds"].extend(
+            k for k in fam.get("source_kinds", []) if k not in host["source_kinds"]
+        )
+        host["source"] = "greffier+repli_deterministe"
+    if fusions:
+        notes.append(
+            f"repli déterministe après méta-consolidation non exploitable : {fusions} fusion(s) "
+            "sur identité stricte (nature + libellé normalisé, ou nature + objectif + cible + "
+            "déclencheur) ; aucune autre"
+        )
+    return merged, fusions
 
 
 def direct_family(group: dict[str, Any]) -> dict[str, Any]:
@@ -424,6 +539,13 @@ def finalize_families(
                 "option_ids": list(f["option_ids"]),
                 "variants": list(f.get("variants", [])),
                 "internal_disagreements": list(f.get("internal_disagreements", [])),
+                # D22 — représentation conceptuelle de l'orientation décisionnelle.
+                "objective": str(f.get("objective", "")),
+                "target": str(f.get("target", "")),
+                "reversibility": str(f.get("reversibility", "unknown") or "unknown"),
+                "prerequisites": list(f.get("prerequisites", [])),
+                "trigger": str(f.get("trigger", "")),
+                "trade_off": str(f.get("trade_off", "")),
                 "supporting_experts": sorted(
                     {by_option[o]["expert_id"] for o in f["option_ids"] if o in by_option}
                 ),

@@ -335,11 +335,29 @@ def _deliberation_summary(delib: dict[str, Any]) -> dict[str, Any]:
             }
             for r in delib.get("research", [])
         ],
+        # D23 — section décisionnelle : question, pourquoi elle discrimine les options (le désaccord
+        # dont elle dépend), propriétaire probable si connu, décision qu'elle pourrait modifier
+        # (positions concernées).
         "internal_information_requests": [
-            {"id": r["id"], "question": r["question"], "positions": r.get("positions", [])}
+            {
+                "id": r["id"],
+                "question": r["question"],
+                "why_it_discriminates": r.get("claim", ""),
+                "raised_by": r.get("raised_by", ""),
+                "positions": r.get("positions", []),
+                "objection_ids": r.get("objection_ids", []),
+                "probable_owner": r.get("probable_owner", ""),
+                "decision_it_could_change": (
+                    "positions " + ", ".join(r.get("positions", []))
+                    if r.get("positions")
+                    else "non déterminée"
+                ),
+            }
             for r in delib.get("research", [])
             if r.get("status") == "internal_data_required"
         ],
+        "research_deferred": delib.get("research_deferred", []),
+        "step_outcomes": delib.get("step_outcomes", {}),
         "revisions": [
             {
                 "label": r["label"],
@@ -409,6 +427,26 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
         f"- Étapes réalisées : {', '.join(d.get('steps_done', [])) or 'aucune'} — arrêt : "
         f"{stop.get('reason', '')}"
     )
+    # §7 — cause terminale, informations manquantes, étapes dégradées, avertissements : séparés.
+    if stop.get("terminal_failure_reason"):
+        lines.append(f"- **Cause terminale** : `{stop['terminal_failure_reason']}`")
+    for mi in stop.get("missing_information", []):
+        lines.append(
+            f"- Information manquante : {mi.get('kind')} ({mi.get('count')}) — "
+            f"{', '.join(mi.get('ids', []))}"
+        )
+    if stop.get("degraded_steps"):
+        lines.append("- Étapes dégradées : " + ", ".join(stop["degraded_steps"]))
+    if stop.get("warnings"):
+        lines.append("- Avertissements : " + ", ".join(stop["warnings"]))
+    outcomes = d.get("step_outcomes", {})
+    if outcomes.get("revision"):
+        o = outcomes["revision"]
+        lines.append(
+            f"- Révision : {o.get('evaluated', 0)} position(s) évaluée(s), "
+            f"{o.get('requested', 0)} demandée(s), {o.get('executed', 0)} exécutée(s) (appel LLM), "
+            f"{o.get('changed_position', 0)} changement(s) de position — `{o.get('label', '')}`"
+        )
     for s in d.get("steps_skipped", []):
         lines.append(f"- Étape sautée « {s['step']} » : {s['reason']}")
     objections = d.get("objections", [])
@@ -463,14 +501,28 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
     )
     internal = d.get("internal_information_requests", [])
     if internal:
-        lines += ["", f"### Informations à demander au demandeur ({len(internal)})"]
+        lines += ["", f"### Informations internes à obtenir ({len(internal)})"]
         lines += _bullets(
             [
                 {
-                    "text": f"{r['id']} « {r['question']} » — positions concernées : "
-                    f"{', '.join(r.get('positions', [])) or '—'}"
+                    "text": f"{r['id']} « {r['question']} » — pourquoi elle discrimine : "
+                    f"{r.get('why_it_discriminates') or '—'} — propriétaire probable : "
+                    f"{r.get('probable_owner') or 'non identifié'} — décision concernée : "
+                    f"{r.get('decision_it_could_change') or '—'}"
                 }
                 for r in internal
+            ]
+        )
+    deferred = d.get("research_deferred", [])
+    if deferred:
+        lines += ["", f"### Questions factuelles non recherchées (plafond) ({len(deferred)})"]
+        lines += _bullets(
+            [
+                {
+                    "text": f"« {q['question']} » ({q.get('source', 'either')}) — "
+                    f"{q.get('reason', '')}"
+                }
+                for q in deferred
             ]
         )
     revisions = d.get("revisions", [])
@@ -600,6 +652,24 @@ def _render_cost_exposure(b: dict[str, Any]) -> list[str]:
     ]
 
 
+def _render_build(build: dict[str, Any]) -> list[str]:
+    """D20 — identité du build qui a exécuté la mission (ligne d'en-tête du rapport)."""
+    if not build:
+        return ["**Build :** non enregistré (mission antérieure à v1.3.6.2)"]
+    short = build.get("git_commit_short")
+    if not short:
+        state = "UNAVAILABLE"
+    else:
+        state = "DIRTY" if build.get("git_dirty") else "CLEAN"
+    return [
+        f"**Build :** `{short or 'indisponible'}` {state} · produit "
+        f"{build.get('product_version', '?')}"
+        f" · {build.get('provider_adapter', '?')} SDK {build.get('provider_sdk_version', '?')} · "
+        f"politique `{str(build.get('reasoning_policy_fingerprint', ''))[:12]}` · config "
+        f"`{str(build.get('mission_config_fingerprint', ''))[:12]}`"
+    ]
+
+
 def render_situation_report_markdown(report: dict[str, Any]) -> str:
     """Rendu Markdown déterministe du rapport de situation."""
     f = report["fourteen_fields"]
@@ -626,6 +696,7 @@ def render_situation_report_markdown(report: dict[str, Any]) -> str:
         f"{b.get('cost_eur', 0.0):.4f} € / {b.get('max_cost_eur', 0.0):.2f} € · "
         f"{b.get('input_tokens', 0)} tokens entrée · {b.get('output_tokens', 0)} tokens sortie",
         *_render_cost_exposure(b),
+        *_render_build(report.get("build") or {}),
         "",
         banner,
         "",

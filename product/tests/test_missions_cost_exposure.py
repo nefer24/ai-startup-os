@@ -485,7 +485,8 @@ def test_b8_reserve_holds_with_ambiguous_failures_on_the_last_admitted_call(
             {"quality_gate": [ambiguous_timeout(), ambiguous_timeout()]},
         )
     )
-    mission = _post(client, max_llm_calls=6)  # borne B14-prime d'une position unique : 5 + cadrage
+    # Borne d'une position unique : 6 (v1.3.6.2 : + 1 relance de synthèse réservée) + cadrage.
+    mission = _post(client, max_llm_calls=7)
     assert mission["status"] == "candidate"
     assert mission["llm_calls_used"] == 5
     assert "porte_qualite" in mission["deliberation"]["steps_done"]

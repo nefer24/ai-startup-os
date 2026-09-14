@@ -108,7 +108,9 @@ class ShapedLLM:
         pending = self.plan.get(call_type)
         kind = pending.pop(0) if pending else "ok"
         text, stop_reason, out_tokens = _shape(kind, response.text, max_tokens)
-        self.calls.append({"call_type": call_type, "prompt": prompt, "shape": kind})
+        self.calls.append(
+            {"call_type": call_type, "prompt": prompt, "shape": kind, "max_tokens": max_tokens}
+        )
         return LLMResponse(
             text=text,
             usage=LLMUsage(input_tokens=1000, output_tokens=out_tokens),
@@ -444,16 +446,15 @@ def test_retry_is_refused_when_calls_or_cost_cap_would_be_violated(
 def test_observable_truncation_is_labelled_and_never_retried_blindly(
     client: TestClient, use_llm: Callable[..., Any]
 ) -> None:
-    # B14-prime (F) : le cadrage a une limite fixe (plancher = plafond) ; une sortie coupée à
-    # cette limite n'est pas relancée « en espérant » une compression : refus explicite, rien
-    # n'est complété localement. (La relance après troncature avec limite recalculée est testée
-    # sur les étapes à cardinalité variable dans `test_missions_output_budget.py`.)
+    # v1.3.6.2 (D21) : le cadrage (catégorie A) est accordé texte + marge de raisonnement
+    # (10 000) sous un plafond explicite (12 000) ; une sortie coupée à la limite accordée est
+    # relancée UNE fois avec une limite recalculée (jamais à l'identique, jamais en boucle),
+    # rien n'est complété localement. La troncature reste une catégorie distincte.
     llm = use_llm(
         ShapedLLM(ScriptedStructuredLLM(SIMPLE_FRAMING), {"framing": ["truncated", "ok"]})
     )
     mission = _post(client)
-    assert mission["status"] == "failed"
-    assert mission["stop_reason"] == "structured_output_retry_refused_output_budget"
+    assert mission["status"] == "candidate"
     p = _entries(client, mission["id"], "structured_output_invalid")[0]["payload"]
     assert p["category"] == STRUCTURED_OUTPUT_TRUNCATED
     assert p["truncated"] is True
@@ -462,12 +463,14 @@ def test_observable_truncation_is_labelled_and_never_retried_blindly(
     assert p["local_recovery_attempted"] is True
     assert p["local_recovery_applied"] is False
     assert p["json_candidates"] == 0
-    assert p["will_retry"] is False
-    assert p["retry_refusal_reason"] == "structured_output_retry_refused_output_budget"
-    assert p["truncation_retry_plan"]["allowed"] is False
-    assert [c["call_type"] for c in llm.calls if c["call_type"] == "framing"] == ["framing"]
-    assert mission["report"]["budget"]["structured_output_retries"] == 0
-    assert mission["framing"]["parsed"] is None
+    assert p["will_retry"] is True
+    assert p["truncation_retry_plan"]["allowed"] is True
+    assert p["truncation_retry_plan"]["max_tokens"] > p["max_tokens"]
+    framing_calls = [c for c in llm.calls if c["call_type"] == "framing"]
+    assert len(framing_calls) == 2
+    assert framing_calls[1]["max_tokens"] > framing_calls[0]["max_tokens"]
+    assert mission["report"]["budget"]["structured_output_retries"] == 1
+    assert mission["framing"]["parsed"] is not None
 
 
 # --- TEST I — plusieurs objets JSON : aucune sélection locale ------------------------------------

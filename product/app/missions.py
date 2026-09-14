@@ -21,6 +21,15 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.build_identity import (
+    BENCHMARK_BUILD_DIRTY,
+    BENCHMARK_BUILD_UNAVAILABLE,
+    GIT_STATUS_OK,
+    BenchmarkBuildError,
+    BuildIdentity,
+    benchmark_check,
+    compute_build_identity,
+)
 from app.config import Settings
 from app.consensus_guard import claims_superiority, consensus_as_evidence
 from app.db import LLMCallLog, Mission, MissionJournalEntry
@@ -50,6 +59,7 @@ from app.mission_consolidation import (
     build_batch_prompt,
     build_compact_comparison_prompt,
     build_meta_prompt,
+    conservative_merge_families,
     coverage_requirements,
     direct_family,
     families_from_batch,
@@ -96,6 +106,7 @@ from app.mission_deliberation import (
     is_premature_convergence,
     material_fact_questions,
     select_contradictor,
+    select_research_questions,
     strawman_flags,
 )
 from app.mission_exploration import (
@@ -171,6 +182,7 @@ from app.structured_output import (
     STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET,
     STRUCTURED_OUTPUT_SALVAGED,
     STRUCTURED_OUTPUT_TRUNCATED,
+    StructuredOutcome,
     analyze_structured_output,
     build_correction_block,
     salvage_structured_output,
@@ -263,6 +275,9 @@ class _Run:
     # §8.A (v1.3.6) — récupération partielle du dernier appel structuré (éléments complets d'une
     # sortie coupée), lue par l'étape appelante immédiatement après l'appel.
     last_salvage: dict[str, Any] | None = None
+    # v1.3.6.2 (D21) — limite de sortie effectivement accordée à la dernière tentative du dernier
+    # appel structuré (texte + marge de raisonnement, ou limite recalculée après troncature).
+    last_max_tokens: int | None = None
     # B10 — comptabilité des tentatives fournisseur, distincte des appels logiques du registre :
     # `llm_calls_used` compte les appels logiques réussis ; les tentatives physiques, relances et
     # échecs sont comptés ici et journalisés par tentative.
@@ -277,6 +292,12 @@ class _Run:
     structured_output_recoveries: int = 0
     structured_output_retries: int = 0
     structured_output_exhausted: int = 0
+    # D25 — éléments de listes indépendantes rejetés individuellement (perspective conservée).
+    items_rejected: int = 0
+    # D24 — questions factuelles écartées par le plafond de recherche (tracées, jamais perdues).
+    research_deferred: list[dict[str, Any]] = field(default_factory=list)
+    # §7 (v1.3.6.2) — issue réelle de chaque étape (évaluée / exécutée / a changé quelque chose).
+    step_outcomes: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Réserve totale posée à la clôture du Tour 0 (journal, rapport) et plan associé.
     deliberation_reserve: int | None = None
     deliberation_plan: dict[str, Any] = field(default_factory=dict)
@@ -679,11 +700,19 @@ def _release_reserve(run: _Run, component: str) -> None:
         run.reserve_state[component] = 0
 
 
+# D21 — étapes dont la relance corrective est FINANCÉE PAR UNE COMPOSANTE RÉSERVÉE (même invariant
+# à la composition et à l'exécution) : la synthèse dispose d'une relance à limite recalculée.
+RETRY_RESERVE_COMPONENT_BY_STEP = {"synthese": "synthesis_recovery"}
+
+
 def _structured_retry_reserve(run: _Run, step: str) -> tuple[int, str]:
-    """(réserve exigée, nom de la réserve) pour une relance corrective à cette étape."""
+    """(réserve exigée, nom de la réserve) pour une relance corrective à cette étape.
+
+    La composante de relance propre à l'étape (D21 : `synthesis_recovery`) n'est pas exigée
+    contre elle-même : c'est précisément l'appel qu'elle finance."""
     if step == "cadrage":
         return 0, "none"
-    reserve = _reserve_remaining(run)
+    reserve = _reserve_remaining(run, excluding=RETRY_RESERVE_COMPONENT_BY_STEP.get(step, ""))
     if reserve == 0:
         return 0, "none"
     return (
@@ -705,11 +734,20 @@ def _output_budget_for(settings: Settings, call_type: str, n_items: int | None) 
     B16 : la marge de raisonnement de la politique de l'étape s'ajoute au budget textuel des
     étapes à cardinalité variable (sous plafond) ; elle ne remplace pas le pilotage de l'effort.
     """
-    floor = int(getattr(settings, f"mission_max_tokens_{_SETTING_SUFFIX[call_type]}"))
-    if n_items is None or call_type not in OUTPUT_BUDGET_RULES:
-        return fixed_output_budget(call_type, floor)
-    ceiling = int(getattr(settings, f"mission_output_ceiling_{_SETTING_SUFFIX[call_type]}"))
+    suffix = _SETTING_SUFFIX[call_type]
+    floor = int(getattr(settings, f"mission_max_tokens_{suffix}"))
     headroom = reasoning_policy_for(call_type, settings).headroom_tokens
+    if n_items is None or call_type not in OUTPUT_BUDGET_RULES:
+        # D21 — étapes à cardinalité fixe (catégories A et porte) : texte + marge, sous un plafond
+        # qui laisse place à une relance recalculée si la sortie est coupée.
+        raw_ceiling = getattr(settings, f"mission_output_ceiling_{suffix}", None)
+        return fixed_output_budget(
+            call_type,
+            floor,
+            ceiling=int(raw_ceiling) if raw_ceiling is not None else None,
+            reasoning_headroom=headroom,
+        )
+    ceiling = int(getattr(settings, f"mission_output_ceiling_{suffix}"))
     return output_budget(
         call_type, n_items, floor=floor, ceiling=ceiling, reasoning_headroom=headroom
     )
@@ -772,6 +810,7 @@ def _call_structured[T: BaseModel](
     budget = _output_budget_for(settings, call_type, n_items)
     max_tokens = budget.granted
     run.last_salvage = None
+    run.last_max_tokens = max_tokens
     component = RESERVE_COMPONENT_BY_STEP.get(step, "")
     response = _call(
         session,
@@ -813,6 +852,7 @@ def _call_structured[T: BaseModel](
                 **outcome.to_journal(),
             },
         )
+    _journal_rejected_items(session, run, step, actor, call_type, logical_call_id, outcome)
     if outcome.valid:
         return response, outcome.output, ""
     run.structured_output_failures += 1
@@ -912,6 +952,10 @@ def _call_structured[T: BaseModel](
             return response, salvaged, f"{STRUCTURED_OUTPUT_SALVAGED}: {prefix}: {error}"
         return response, None, f"{prefix}: {error}"
     run.structured_output_retries += 1
+    # D21 — la relance d'une étape à composante de récupération réservée la consomme.
+    recovery_component = RETRY_RESERVE_COMPONENT_BY_STEP.get(step, "")
+    if recovery_component:
+        _consume_reserve(run, recovery_component)
     _journal(
         session,
         run,
@@ -925,8 +969,10 @@ def _call_structured[T: BaseModel](
             "estimated_cost_eur": estimate,
             "max_tokens": retry_max_tokens,
             "max_tokens_initial": max_tokens,
+            "financed_by_reserve_component": recovery_component or None,
         },
     )
+    run.last_max_tokens = retry_max_tokens
     retry_response = _call(
         session,
         run,
@@ -951,6 +997,9 @@ def _call_structured[T: BaseModel](
         return response, None, f"{STRUCTURED_OUTPUT_RETRY_REFUSED_BUDGET}: {error}"
     retry_outcome = analyze_structured_output(retry_response, model)
     retry_logical_call_id = f"LC-{run.logical_calls}"
+    _journal_rejected_items(
+        session, run, step, actor, call_type, retry_logical_call_id, retry_outcome
+    )
     if retry_outcome.recovery.applied:
         run.structured_output_recoveries += 1
     if not retry_outcome.valid:
@@ -996,6 +1045,35 @@ def _call_structured[T: BaseModel](
     return retry_response, None, exhausted
 
 
+def _journal_rejected_items(
+    session: Session,
+    run: _Run,
+    step: str,
+    actor: str,
+    call_type: str,
+    logical_call_id: str,
+    outcome: StructuredOutcome,
+) -> None:
+    """D25 — un élément invalide d'une liste indépendante est rejeté SEUL : journal attribuable
+    (perspective, index, champ, erreur, littéral reçu), sortie et perspective conservées."""
+    for item in outcome.rejected_items:
+        run.items_rejected += 1
+        _journal(
+            session,
+            run,
+            step,
+            "item_rejected",
+            actor,
+            {
+                "logical_call_id": logical_call_id,
+                "call_type": call_type,
+                "perspective_id": actor,
+                **item,
+                "note": "élément hors contrat rejeté individuellement ; aucun reclassement",
+            },
+        )
+
+
 def _try_salvage[T: BaseModel](
     session: Session,
     run: _Run,
@@ -1017,9 +1095,27 @@ def _try_salvage[T: BaseModel](
     if not enabled or not response.truncated or category not in _LENGTH_CATEGORIES:
         return None
     output, result = salvage_structured_output(response, model)
-    if output is None or result.items_kept == 0:
+    if output is None or result.data is None:
         return None
-    run.last_salvage = {**result.to_dict(), "logical_call_id": f"LC-{run.logical_calls}"}
+    # Acceptable si au moins un élément complet a été conservé OU, pour un contrat à champs
+    # obligatoires déclarés (D21 : la synthèse exige son bloc `recommendation`), si ces champs sont
+    # intégralement présents ; les champs absents sont déclarés, jamais complétés.
+    required = tuple(getattr(model, "SALVAGE_REQUIRED_KEYS", ()))
+    required_ok = bool(required) and all(k in result.data for k in required)
+    if result.items_kept == 0 and not required_ok:
+        return None
+    if required and not required_ok:
+        return None
+    missing_fields = [
+        name
+        for name in model.model_fields
+        if name not in result.data or name == result.truncated_key
+    ]
+    run.last_salvage = {
+        **result.to_dict(),
+        "missing_fields": missing_fields,
+        "logical_call_id": f"LC-{run.logical_calls}",
+    }
     _journal(
         session,
         run,
@@ -1153,6 +1249,10 @@ def run_mission(
 ) -> Mission:
     """Crée et exécute une mission de cadrage sous budget ; retourne la mission `candidate`."""
     declared = request.declared_class or ""
+    # D20 — identité du build capturée AVANT toute création : en mode benchmark, un build qui ne
+    # correspond pas au freeze attendu ne crée aucune mission et ne consomme aucun appel.
+    identity = compute_build_identity(settings)
+    benchmark = _benchmark_gate(identity, request, settings)
     mission = Mission(
         input_type=request.input_type,
         input_text=request.input_text,
@@ -1171,6 +1271,7 @@ def run_mission(
     )
     mission.max_llm_calls = planned_calls
     mission.max_cost_eur = planned_cost
+    mission.build_identity_json = json.dumps(identity.to_dict(), ensure_ascii=False, default=str)
     session.add(mission)
     session.commit()
     session.refresh(mission)
@@ -1196,6 +1297,8 @@ def run_mission(
             "class_is_provisional": mission.class_is_provisional,
             "budget_source": budget_source,
             "budget": run.ledger.snapshot(),
+            "build_identity": identity.compact(),
+            "benchmark": benchmark,
         },
     )
     class_info: dict[str, Any] = {
@@ -1226,6 +1329,47 @@ def run_mission(
         _journal(session, run, "mission", "failed", "facilitateur", {"error": mission.stop_reason})
         raise
     return mission
+
+
+def _benchmark_gate(
+    identity: BuildIdentity, request: MissionCreateRequest, settings: Settings
+) -> dict[str, Any]:
+    """D20 — contrôle d'identité du build avant la création de la mission (fail closed).
+
+    Freeze attendu (requête, sinon configuration) : commit différent, identité Git indisponible ou
+    arbre modifié → `BenchmarkBuildError` (aucune mission, aucun appel). Mode strict sans freeze :
+    identité indisponible ou arbre modifié → refus. Hors benchmark : rien n'est bloqué, mais un
+    arbre modifié est signalé dans le journal (sauf `mission_allow_dirty_build_dev`, qui ne fait
+    que taire l'avertissement et n'a aucun effet en benchmark).
+    """
+    expected = (
+        request.expected_freeze
+        if request.expected_freeze is not None
+        else settings.mission_expected_freeze
+    ) or ""
+    strict = (
+        request.benchmark_strict
+        if request.benchmark_strict is not None
+        else settings.mission_benchmark_strict
+    )
+    check = benchmark_check(identity, expected)
+    check["strict"] = bool(strict)
+    check["enforced"] = bool(expected) or bool(strict)
+    if expected and not check["match"]:
+        raise BenchmarkBuildError(check["reason"], check, identity)
+    if strict and not expected:
+        if identity.git_identity_status != GIT_STATUS_OK:
+            check["reason"] = BENCHMARK_BUILD_UNAVAILABLE
+            raise BenchmarkBuildError(check["reason"], check, identity)
+        if identity.git_dirty:
+            check["reason"] = BENCHMARK_BUILD_DIRTY
+            raise BenchmarkBuildError(check["reason"], check, identity)
+    check["warnings"] = (
+        ["build_dirty_outside_benchmark"]
+        if (identity.git_dirty and not settings.mission_allow_dirty_build_dev)
+        else []
+    )
+    return check
 
 
 def _run_pipeline(
@@ -1346,7 +1490,7 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
             "error": error,
             "stop_reason": response.stop_reason,
             "output_tokens": response.usage.output_tokens,
-            "max_tokens": settings.mission_max_tokens_framing,
+            "max_tokens": run.last_max_tokens or settings.mission_max_tokens_framing,
             "raw": response.text,
         },
         ensure_ascii=False,
@@ -1377,7 +1521,7 @@ def _step_framing(session: Session, run: _Run, llm: LLMClient, settings: Setting
                 "error": error,
                 "stop_reason": response.stop_reason,
                 "output_tokens": response.usage.output_tokens,
-                "max_tokens": settings.mission_max_tokens_framing,
+                "max_tokens": run.last_max_tokens or settings.mission_max_tokens_framing,
                 "raw_length_chars": len(response.text),
             },
         )
@@ -1675,6 +1819,7 @@ RESERVE_COMPONENT_KEYS = (
     "consolidation",
     "comparison",
     "synthesis",
+    "synthesis_recovery",
     "gate",
 )
 
@@ -2003,6 +2148,7 @@ def _budget_snapshot(run: _Run) -> dict[str, Any]:
         "structured_output_recoveries": run.structured_output_recoveries,
         "structured_output_retries": run.structured_output_retries,
         "structured_output_exhausted": run.structured_output_exhausted,
+        "structured_output_items_rejected": run.items_rejected,
         "reserved_deliberation_calls": run.deliberation_reserve,
         "deliberation_plan": dict(run.deliberation_plan),
         "revision_allowance": run.revision_allowance,
@@ -2043,6 +2189,9 @@ def _finalize(
     m.status = "failed" if (failed or run.stop_reason.startswith("framing_failed")) else "candidate"
     report["status"] = m.status
     report["failure"] = run.failure or None
+    # D20 — l'identité du build accompagne le rapport (vue compacte, sans le détail des réglages).
+    identity_raw = json.loads(m.build_identity_json) if m.build_identity_json else {}
+    report["build"] = {k: v for k, v in identity_raw.items() if k != "mission_config"}
     m.cartography_json = json.dumps(cartography, ensure_ascii=False, default=str)
     m.report_json = json.dumps(report, ensure_ascii=False, default=str)
     m.stop_reason = run.stop_reason
@@ -2752,12 +2901,83 @@ def _step_research(session: Session, run: _Run, llm: LLMClient, settings: Settin
     if run.stop_reason:
         _skip(session, run, step, f"arrêt en cours : {run.stop_reason}")
         return
-    questions = material_fact_questions(
-        run.confrontations, run.cartography, run.labels, cap=settings.mission_max_research_tasks
-    )
-    if not questions:
+    candidates = material_fact_questions(run.confrontations, run.cartography, run.labels)
+    if not candidates:
         _skip(session, run, step, "aucun désaccord pertinent ne dépend d'un fait vérifiable")
         return
+    # D24 — sélection traçable : chaque question candidate est journalisée avec sa
+    # classification ; les internes ne consomment pas le plafond ; les externes retenues le sont
+    # par couverture (auteurs, positions concernées, dimensions critiques, pouvoir discriminant),
+    # jamais par simple ordre d'apparition ; les écartées sont journalisées avec leur raison.
+    critical = (
+        {d.name for d in run.framing.dimensions if d.presumed_criticality == "high"}
+        if (run.framing)
+        else set()
+    )
+    dims_by_label = {
+        run.labels.get(e["expert_id"], e["expert_id"]): e.get("dimension", "")
+        for e in run.composition.get("experts", [])
+    }
+    for q in candidates:
+        _journal(
+            session,
+            run,
+            step,
+            "research_candidate",
+            q["raised_by"],
+            {
+                "question": q["question"],
+                "declared_source": q.get("declared_source", "either"),
+                "source": q.get("source", "either"),
+                "internal_markers": q.get("internal_markers", []),
+                "positions": q.get("positions", []),
+                "raised_by_all": q.get("raised_by_all", []),
+                "target": q.get("target", ""),
+            },
+        )
+    questions, deferred = select_research_questions(
+        candidates,
+        cap=settings.mission_max_research_tasks,
+        critical_dimensions=critical,
+        dimensions_by_label=dims_by_label,
+    )
+    for q in questions:
+        _journal(
+            session,
+            run,
+            step,
+            "research_selected",
+            q["raised_by"],
+            {
+                "question": q["question"],
+                "source": q.get("source", "either"),
+                "counts_against_cap": q.get("source") != "internal",
+            },
+        )
+    for q in deferred:
+        _journal(
+            session,
+            run,
+            step,
+            "research_deferred",
+            q["raised_by"],
+            {
+                "question": q["question"],
+                "source": q.get("source", "either"),
+                "positions": q.get("positions", []),
+                "reason": q.get("deferred_reason", ""),
+            },
+        )
+    run.research_deferred = [
+        {
+            "question": q["question"],
+            "raised_by": q["raised_by"],
+            "positions": list(q.get("positions", [])),
+            "source": q.get("source", "either"),
+            "reason": q.get("deferred_reason", ""),
+        }
+        for q in deferred
+    ]
     provider = build_research_provider(settings)
     for q in questions:
         if run.stop_reason:
@@ -3126,7 +3346,25 @@ def _step_revision(session: Session, run: _Run, llm: LLMClient, settings: Settin
     order_index = {r["expert_id"]: i for i, r in enumerate(answered)}
     run.revisions.sort(key=lambda rev: order_index.get(rev["expert_id"], len(order_index)))
     _release_reserve(run, "revisions")
-    run.steps_done.append(step)
+    # §7 (v1.3.6.2) — l'issue réelle de la phase : évaluée (positions passées en revue),
+    # exécutée (appels de révision réels), a changé une position. Une phase sans aucun appel
+    # n'est pas présentée comme une révision intellectuelle : `revision_evaluated`.
+    executed = [r for r in run.revisions if r.get("called")]
+    changed = [r for r in executed if r["revised_position"] != r["previous_position"]]
+    refused = [r for r in run.revisions if r.get("budget_reserved")]
+    run.step_outcomes["revision"] = {
+        "evaluated": len(run.revisions),
+        "requested": len([r for r in run.revisions if r.get("new_information_ids")]),
+        "executed": len(executed),
+        "changed_position": len(changed),
+        "refused_for_budget": len(refused),
+        "label": (
+            "revision_changed_position"
+            if changed
+            else ("revision_executed" if executed else "revision_evaluated")
+        ),
+    }
+    run.steps_done.append(step if executed else "revision_evaluated")
 
 
 def _residual_disagreements(run: _Run) -> list[dict[str, Any]]:
@@ -3342,6 +3580,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
             families_raw.extend(fams)
             not_merged += nm
     # Méta-consolidation (bornée) : familles issues de lots différents, natures compatibles.
+    meta_failed = False
     if meta_passes and families_raw and not budget_stop and not run.stop_reason:
         ordered = sorted(families_raw, key=lambda f: f["label"].lower())
         merged_all: list[dict[str, Any]] = []
@@ -3373,6 +3612,7 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
                 merged_all += merged
             else:
                 last_error = error or last_error
+                meta_failed = True
                 if not budget_stop and status == "ok":
                     status = "partial"
                 notes.append("méta-consolidation non exploitable : familles des lots conservées")
@@ -3382,6 +3622,26 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
             if budget_stop:
                 break
         families_raw = merged_all
+    fallback_fusions = 0
+    if meta_failed and not budget_stop:
+        # D22 — une méta-consolidation qui échoue ne renvoie pas toutes les familles locales non
+        # dédoublonnées vers la comparaison : repli déterministe CONSERVATEUR (identité stricte
+        # de nature + libellé normalisé, ou de nature + objectif + cible + déclencheur) ; dans le
+        # doute, aucune fusion.
+        families_raw, fallback_fusions = conservative_merge_families(families_raw, notes)
+        _journal(
+            session,
+            run,
+            step,
+            "meta_fallback",
+            "facilitateur",
+            {
+                "fusions": fallback_fusions,
+                "families_after": len(families_raw),
+                "rule": "identité stricte (nature + libellé normalisé | nature + objectif + cible "
+                "+ déclencheur) ; aucun rapprochement lexical ni sémantique",
+            },
+        )
     if budget_stop:
         status = "failed"
     families, trace = finalize_families(families_raw, options)
@@ -3401,6 +3661,8 @@ def _step_consolidation(session: Session, run: _Run, llm: LLMClient, settings: S
         "llm_calls_spent": run.ledger.max_calls - run.ledger.remaining_calls - spent_before,
         "retries": retries,
         "salvaged_batches": salvaged_batches,
+        "meta_failed": meta_failed,
+        "fallback_fusions": fallback_fusions,
         "notes": notes,
         "parse_error": last_error,
     }
@@ -3716,6 +3978,16 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
             },
         )
     criteria, rows, missing = _comparison_rows(output, compared)
+    criteria_dropped = list(output.criteria_dropped) if output else []
+    if criteria_dropped:
+        _journal(
+            session,
+            run,
+            step,
+            "criteria_truncated",
+            "facilitateur",
+            {"kept": criteria, "dropped": criteria_dropped},
+        )
     compared_ids = {f["family_id"] for f in compared}
     coverage_preserved = all(fid in compared_ids for fid in mandatory) and not picked["unsatisfied"]
     if output is None:
@@ -3745,6 +4017,7 @@ def _step_comparison(session: Session, run: _Run, llm: LLMClient, settings: Sett
         "not_compared": deferred,
         "missing_family_ids": missing,
         "salvaged": salvaged,
+        "criteria_dropped": criteria_dropped,
         "attempts": attempts,
         "notes": output.notes if output else coverage_note,
         "coverage_note": coverage_note,
@@ -3912,6 +4185,10 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
         _skip(session, run, step, "aucune matière consolidée")
         return
     residual = _residual_disagreements(run)
+    # D21 — la synthèse est terminale : une sortie coupée a droit à UNE relance à limite
+    # recalculée (financée par la composante `synthesis_recovery` réservée dès la composition),
+    # puis à une récupération locale des champs complets (bloc `recommendation` exigé) ; jamais
+    # de boucle, jamais de champ inventé.
     response, output, error = _call_structured(
         session,
         run,
@@ -3923,7 +4200,9 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
         prompt=build_synthesis_prompt(matter=_synthesis_matter(run, residual)),
         call_type=SYNTHESIS_CALL_TYPE,
         model=RecommendationOutput,
+        salvage=True,
     )
+    _release_reserve(run, "synthesis_recovery")
     if response is None:
         return
     if output is None:
@@ -3931,6 +4210,10 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
         _journal(session, run, step, "failed", "Synthétiseur", {"parse_error": error})
         return
     rec: dict[str, Any] = output.model_dump()
+    salvage = run.last_salvage if error.startswith(STRUCTURED_OUTPUT_SALVAGED) else None
+    rec["salvaged"] = salvage is not None
+    rec["salvaged_missing_fields"] = list(salvage.get("missing_fields", [])) if salvage else []
+    rec["synthesis_error"] = error
     # Déterministe : les désaccords résiduels du facilitateur ne peuvent pas disparaître.
     known_desc = {d["description"] for d in rec["residual_disagreements"]}
     for d in residual:
@@ -3965,6 +4248,8 @@ def _step_synthesis(session: Session, run: _Run, llm: LLMClient, settings: Setti
             "information_insufficient": rec["information_insufficient"],
             "residual_disagreements": len(rec["residual_disagreements"]),
             "ceo_arbitration_required": rec["ceo_arbitration_required"],
+            "salvaged": rec["salvaged"],
+            "salvaged_missing_fields": rec["salvaged_missing_fields"],
             "parse_error": error,
         },
     )
@@ -4128,6 +4413,21 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
             "comparaison partielle — familles non évaluées : "
             + ", ".join(comp.get("missing_family_ids", []))
         )
+    if comp.get("criteria_dropped"):
+        issues.append(
+            "comparaison — critères excédentaires écartés (contrat 5 à 7) : "
+            + ", ".join(comp.get("criteria_dropped", []))
+        )
+    # D21 — synthèse récupérée partiellement : les champs absents sont déclarés à la porte.
+    if run.recommendation.get("salvaged"):
+        missing_fields = run.recommendation.get("salvaged_missing_fields", [])
+        checks["synthesis_complete"] = False
+        issues.append(
+            "synthèse récupérée partiellement après sortie coupée — champs absents : "
+            + (", ".join(missing_fields) or "aucun")
+        )
+    else:
+        checks["synthesis_complete"] = True
     cons = run.consolidation
     if cons.get("status") == "partial" and cons.get("unconsolidated_option_ids"):
         issues.append(
@@ -4175,30 +4475,103 @@ def _step_gate(session: Session, run: _Run, llm: LLMClient, settings: Settings) 
 
 
 def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, Any]:
-    reason: str
+    """§7 (v1.3.6.2) — l'état de fin représente la CAUSE TERMINALE principale, séparée des
+    informations manquantes, des étapes dégradées et des avertissements. Le premier `if` vrai
+    ne devient jamais artificiellement « la cause » de l'échec.
+
+    * `terminal_failure_reason` : ce qui a empêché une recommandation contrôlée (échec de
+      synthèse, budget, cadrage, étape obligatoire invalide) — vide si la recommandation existe ;
+    * `missing_information` : questions internes à obtenir et recherches externes non résolues ;
+    * `degraded_steps` : étapes partielles, sautées ou récupérées ;
+    * `warnings` : contexte (fournisseur de recherche indisponible, arbre de build modifié…) ;
+    * `reason` : synthèse d'un mot pour l'interface, dérivée dans cet ordre.
+    """
     framing_output_failed = (
         run.failure.get("kind") == "structured_output" and run.failure.get("step") == "cadrage"
     )
+    terminal = ""
     if run.stop_reason.startswith("framing_failed") or framing_output_failed:
-        reason = "framing_failed"
+        terminal = "framing_failed"
     elif (
         run.stop_reason in BUDGET_STOP_REASONS or run.stop_reason == "critical_dimension_uncovered"
     ):
-        reason = "budget"
-    elif any(e["status"] in UNRESOLVED_EXTERNAL_STATUSES for e in run.research):
-        reason = "missing_external_info"
-    elif any(e["status"] == "internal_data_required" for e in run.research):
+        terminal = "budget"
+    elif run.failure.get("reason") and run.mission.status == "failed":
+        terminal = str(run.failure.get("reason"))
+    elif run.recommendation.get("status") == "failed":
+        terminal = "synthesis_structured_output_failed"
+    elif "synthese" in run.steps_done and run.recommendation.get("status") != "produced":
+        terminal = "synthesis_failed"
+    elif run.consolidation and run.consolidation.get("status") == "failed":
+        terminal = "consolidation_failed"
+    elif "consolidation" in run.steps_done and not run.recommendation:
+        terminal = "synthesis_not_executed"
+    missing: list[dict[str, Any]] = []
+    internal = [e for e in run.research if e["status"] == "internal_data_required"]
+    external = [e for e in run.research if e["status"] in UNRESOLVED_EXTERNAL_STATUSES]
+    if internal:
+        missing.append(
+            {
+                "kind": "internal_data_required",
+                "count": len(internal),
+                "ids": [e["id"] for e in internal],
+            }
+        )
+    if external:
+        missing.append(
+            {
+                "kind": "external_research_unresolved",
+                "count": len(external),
+                "ids": [e["id"] for e in external],
+            }
+        )
+    degraded: list[str] = []
+    if run.consolidation.get("status") == "partial":
+        degraded.append("consolidation_partial")
+    if run.comparison.get("status") in {"partial", "failed"}:
+        degraded.append(f"comparison_{run.comparison['status']}")
+    if run.recommendation.get("salvaged"):
+        degraded.append("synthesis_salvaged_partial")
+    if run.steelman.get("required") and run.steelman.get("status") not in {
+        "accepted",
+        "accepted_partial",
+    }:
+        degraded.append(f"steelman_{run.steelman.get('status', 'absent')}")
+    outcome = run.step_outcomes.get("revision", {})
+    if outcome and outcome.get("requested", 0) > outcome.get("executed", 0):
+        degraded.append("revision_incomplete")
+    degraded += [f"skipped:{s['step']}" for s in run.steps_skipped]
+    warnings: list[str] = []
+    if any(e.get("provider") == "none" for e in external):
+        warnings.append("research_provider_unavailable")
+    if run.research_deferred:
+        warnings.append(f"research_questions_deferred:{len(run.research_deferred)}")
+    if run.items_rejected:
+        warnings.append(f"structured_items_rejected:{run.items_rejected}")
+    if terminal:
+        reason = terminal
+    elif internal:
+        # D23 — une information interne manquante n'est JAMAIS présentée comme externe.
         reason = "missing_internal_info"
+    elif external:
+        reason = "missing_external_info"
     elif any(d["nature"] == "value" for d in residual):
         reason = "ceo_decision_needed"
     elif residual:
         reason = "residual_only"
-    elif "revision" in run.steps_done:
-        called = any(r.get("called") for r in run.revisions)
-        reason = "converged" if called else "no_new_information"
+    elif outcome:
+        reason = "converged" if outcome.get("executed") else "no_new_information"
     else:
         reason = "not_deliberated"
-    return {"reason": reason, "stop_reason": run.stop_reason, "steps_done": list(run.steps_done)}
+    return {
+        "reason": reason,
+        "terminal_failure_reason": terminal,
+        "missing_information": missing,
+        "degraded_steps": degraded,
+        "warnings": warnings,
+        "stop_reason": run.stop_reason,
+        "steps_done": list(run.steps_done),
+    }
 
 
 def _deliberation_payload(run: _Run) -> dict[str, Any]:
@@ -4222,6 +4595,8 @@ def _deliberation_payload(run: _Run) -> dict[str, Any]:
         "gate": run.gate,
         "residual_disagreements": residual,
         "stop": _deliberation_stop(run, residual),
+        "step_outcomes": dict(run.step_outcomes),
+        "research_deferred": list(run.research_deferred),
         "budget_request": run.budget_request,
         "reserve": {
             "plan": dict(run.deliberation_plan),
@@ -4309,4 +4684,5 @@ def mission_payload(mission: Mission) -> dict[str, Any]:
         "deliberation": _load(mission.deliberation_json),
         "recommendation": _load(mission.recommendation_json),
         "failure": _load(mission.failure_json),
+        "build_identity": _load(mission.build_identity_json),
     }

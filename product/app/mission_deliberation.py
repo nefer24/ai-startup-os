@@ -124,11 +124,21 @@ CONFRONTATION_SYSTEM = (
     "refute (tu montres qu'une position ne tient pas), third_way (tu proposes une voie que "
     "personne n'a formulée), none (tu n'as rien de substantiel à opposer).\n"
     "Règles : une simple opposition non argumentée n'est pas recevable ; ne fabrique aucun "
-    "désaccord ; si tu es d'accord avec une position, dis-le (convergence_note) plutôt que "
-    "d'inventer une critique ; si ton désaccord dépend d'un FAIT vérifiable, mets "
-    "depends_on_fact = true, formule la question précise à rechercher (fact_question) et indique "
-    "où la réponse se trouve (fact_source) : internal (données propres du demandeur : ses "
-    "clients, ses contrats, ses marges), external (sources publiques), either.\n"
+    "désaccord ; si tu es d'accord avec une position, dis-le (convergence_note, un texte libre, "
+    "JAMAIS un acte) plutôt que d'inventer une critique ; si ton désaccord dépend d'un FAIT "
+    "vérifiable, mets depends_on_fact = true, formule la question précise à rechercher "
+    "(fact_question) et indique OBLIGATOIREMENT où la réponse se trouve (fact_source) :\n"
+    "- internal : information détenue ou produite par l'organisation du demandeur, même si la "
+    "question est formulée à la troisième personne — performance par unité / site / équipe, "
+    "historique de transactions ou de commandes, coûts internes, comportement des clients de "
+    "l'organisation, configuration ou paramétrage de ses systèmes, données de personnel, "
+    "contrats privés ;\n"
+    "- external : fait public vérifiable indépendamment de l'organisation (réglementation, "
+    "norme, marché, prix publics, littérature, données d'un tiers accessibles) ;\n"
+    "- either : une partie est publique mais la réponse complète exige des données internes.\n"
+    "La personne grammaticale n'est pas la nature épistémique de la donnée : « les clients de "
+    "l'entreprise » est aussi interne que « nos clients ». Dans le doute : either, jamais "
+    "external.\n"
     + EPISTEMIC_RULE
     + "\n\n"
     + COMPACT
@@ -499,26 +509,99 @@ def is_premature_convergence(
 FACT_SOURCE_INTERNAL = "internal"
 FACT_SOURCE_EXTERNAL = "external"
 FACT_SOURCE_EITHER = "either"
-_INTERNAL_MARKERS = re.compile(
-    r"\b(nos|notre|en interne|interne(s)?|de l'entreprise|de la societe|chez nous|"
-    r"nos clients|nos contrats|notre marge|nos donnees|nos equipes|dans l'entreprise|"
-    r"du demandeur|de l'organisation)\b"
+# D23 (v1.3.6.2) — garde CONSERVATRICE sur des catégories conceptuelles génériques de données
+# détenues par une organisation (jamais un mot propre à un cas) : la personne grammaticale n'est
+# pas la nature épistémique de la donnée.
+_OWNED_RECORDS = (
+    r"(historique|registre|base|journal|trace|cartographie|referentiel|crm|erp|configuration|"
+    r"parametrage|regle(s)? (de|d')|contrat(s)?|clause(s)?|procedure|politique interne|grille|"
+    r"donnees? (de|du|des|internes?|propres?)|fichier|releve|facture|commande(s)?|"
+    r"transaction(s)?|ticket(s)?|incident(s)?|reclamation(s)?|plainte(s)?)"
+)
+_PRIVATE_METRICS = (
+    r"(taux|cout|marge|delai|volume|chiffre|rentabilite|productivite|charge|rotation|"
+    r"performance|part|proportion|repartition|concentration|frequence|nombre|montant|"
+    r"niveau|score|budget|effectif|absenteisme|turnover|satisfaction)"
+)
+_ORG_UNITS = (
+    r"(site|unite|entite|region|agence|etablissement|equipe|service|departement|direction|"
+    r"filiale|magasin|usine|atelier|point de vente|centre|client|segment|compte|fournisseur|"
+    r"produit|reference|gamme|offre|contrat|collaborateur|salarie|vendeur|"
+    r"utilisateur|canal|zone|pays)"
+)
+_ORG_POSSESSIVE = (
+    r"\b(nos|notre|en interne|internes?|chez nous|de l'entreprise|de la societe|de "
+    r"l'organisation|du demandeur|du groupe|de la structure|maison)\b"
+)
+_INTERNAL_PATTERNS = [
+    re.compile(_ORG_POSSESSIVE),
+    # « le taux de X par site », « la marge par client », « répartis sur les 5 agences »
+    re.compile(
+        rf"\b{_PRIVATE_METRICS}\b[^.;?]{{0,60}}\b(par|selon|entre|sur les|dans les|chez "
+        rf"les)\s+(les\s+|nos\s+|ses\s+|chaque\s+|\d+\s+)?{_ORG_UNITS}s?\b"
+    ),
+    # « l'historique des commandes », « le paramétrage de l'ERP », « les contrats fournisseurs »
+    re.compile(rf"\b{_OWNED_RECORDS}\b"),
+    # « existe-t-il une trace / une procédure / un contrat », « est-il enregistré / documenté »
+    re.compile(
+        r"\b(existe-t-il|y a-t-il|est-il|sont-ils|sont-elles|est-elle)\b[^.;?]{0,40}"
+        r"\b(trace|procedure|contrat|politique|regle|documentation|enregistre|documente|"
+        r"formalise|parametre|active|tracee?s?)\b"
+    ),
+    # « les clients / commerciaux / équipes ... de l'organisation » : comportement des acteurs
+    re.compile(
+        rf"\bles\s+{_ORG_UNITS}s?\b[^.;?]{{0,50}}\b(promettent|pratiquent|appliquent|"
+        rf"utilisent|respectent|declarent|signalent|vendent|negocient|gerent)\b"
+    ),
+]
+_EXTERNAL_PATTERNS = re.compile(
+    r"\b(reglementation|reglementaire|norme|loi|directive|jurisprudence|marche|secteur|"
+    r"concurrent(s|e|es)?|benchmark|etude publique|publie|publication|litterature|statistique "
+    r"nationale|prix public|tarif public|taux directeur|inflation|indice|cours|barometre|"
+    r"rapport annuel d'un tiers|source publique|open data|donnees publiques)\b"
 )
 
 
-def classify_fact_source(question: str, *, declared: str = "either") -> str:
-    """Où la réponse à une question factuelle se trouve (v1.3.6 — §9).
+def internal_data_markers(question: str) -> list[str]:
+    """Catégories génériques de donnée interne reconnues dans la question (trace de la garde)."""
+    folded = _fold(question)
+    names = [
+        "possessif_organisation",
+        "metrique_privee_par_unite",
+        "enregistrement_detenu",
+        "existence_procedure_ou_trace",
+        "comportement_acteurs_internes",
+    ]
+    return [
+        name
+        for name, pattern in zip(names, _INTERNAL_PATTERNS, strict=True)
+        if pattern.search(folded)
+    ]
 
-    La déclaration de la perspective (`fact_source`) prime ; à défaut (`either`), un repli lexical
-    déterministe reconnaît une question sur les données propres du demandeur (« nos », « notre »,
-    « en interne »…) comme `internal`. Tout le reste reste `either` : jamais de fait inventé, jamais
-    de fournisseur web appelé pour une donnée interne.
+
+def classify_fact_source(question: str, *, declared: str = "either") -> str:
+    """Où la réponse à une question factuelle se trouve (§9 — v1.3.6, garde D23 — v1.3.6.2).
+
+    La déclaration de la perspective est l'information première, pas une autorité infaillible :
+    * `internal` déclaré → internal ;
+    * garde conservatrice : une question manifestement interne (catégories génériques ci-dessus)
+      sans marqueur public devient `internal`, même déclarée `external` ou `either` ;
+    * marqueurs interne ET public → `either` ;
+    * `external` déclaré sans marqueur interne → external ; `either` sans marqueur → either.
+    En cas de doute : `either`, jamais `external`. Aucun mot propre à un cas métier.
     """
     declared = (declared or "either").strip().lower()
-    if declared in {FACT_SOURCE_INTERNAL, FACT_SOURCE_EXTERNAL}:
-        return declared
-    if _INTERNAL_MARKERS.search(_fold(question)):
+    if declared == FACT_SOURCE_INTERNAL:
         return FACT_SOURCE_INTERNAL
+    folded = _fold(question)
+    internal = bool(internal_data_markers(question))
+    external = bool(_EXTERNAL_PATTERNS.search(folded))
+    if internal and external:
+        return FACT_SOURCE_EITHER
+    if internal:
+        return FACT_SOURCE_INTERNAL
+    if declared == FACT_SOURCE_EXTERNAL:
+        return FACT_SOURCE_EXTERNAL
     return FACT_SOURCE_EITHER
 
 
@@ -527,9 +610,10 @@ def material_fact_questions(
     cartography: dict[str, Any],
     labels: dict[str, str],
     *,
-    cap: int,
+    cap: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Questions factuelles dont dépend un désaccord pertinent (dédoublonnées, plafonnées).
+    """Questions factuelles dont dépend un désaccord pertinent (dédoublonnées ; `cap` tronque
+    par ordre d'apparition — D24 : préférer `select_research_questions`, qui trace les écartées).
 
     Chaque question conserve sa **provenance de débat** : qui l'a soulevée (`raised_by`), quelle
     position elle vise (`target`) et, surtout, les **positions concernées** (`positions`) — celles
@@ -563,7 +647,9 @@ def material_fact_questions(
                 "target": target,
                 "nature": nature,
                 "positions": [],
+                "declared_source": (source or "either").strip().lower(),
                 "source": classify_fact_source(question, declared=source),
+                "internal_markers": internal_data_markers(question),
             }
             by_key[key] = entry
             order.append(key)
@@ -599,7 +685,56 @@ def material_fact_questions(
             continue
         raised_by = labels.get(str(d.get("source", "")), str(d.get("source", "")))
         _add(question, d.get("description", ""), raised_by, "", "fact", [raised_by])
-    return [by_key[k] for k in order][:cap]
+    questions = [by_key[k] for k in order]
+    return questions[:cap] if cap is not None else questions
+
+
+def select_research_questions(
+    questions: list[dict[str, Any]],
+    *,
+    cap: int,
+    critical_dimensions: set[str] | None = None,
+    dimensions_by_label: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """D24 — sélection TRAÇABLE des questions envoyées à la recherche externe.
+
+    Les questions internes (`source = internal`) ne consomment aucun appel : elles ne comptent pas
+    dans le plafond et sont toutes conservées comme informations à obtenir. Parmi les autres, la
+    sélection ne suit pas l'ordre d'apparition : elle maximise la couverture — diversité des
+    auteurs, positions concernées non encore couvertes, dimensions critiques, puis pouvoir
+    discriminant (nombre de positions dont la question dépend, nombre d'auteurs). Aucun appel LLM.
+
+    Retourne (sélectionnées, écartées) ; chaque écartée porte `deferred_reason`.
+    """
+    critical = critical_dimensions or set()
+    dims = dimensions_by_label or {}
+    internal = [q for q in questions if q.get("source") == FACT_SOURCE_INTERNAL]
+    candidates = [q for q in questions if q.get("source") != FACT_SOURCE_INTERNAL]
+    selected: list[dict[str, Any]] = []
+    covered_authors: set[str] = set()
+    covered_positions: set[str] = set()
+    remaining = list(candidates)
+    while remaining and len(selected) < max(0, cap):
+
+        def score(q: dict[str, Any]) -> tuple[int, int, int, int, int]:
+            positions = set(q.get("positions", []))
+            authors = set(q.get("raised_by_all", [q.get("raised_by", "")]))
+            new_positions = len(positions - covered_positions)
+            new_authors = len(authors - covered_authors)
+            touches_critical = int(any(dims.get(p, "") in critical for p in positions | authors))
+            return (new_authors > 0, new_positions, touches_critical, len(positions), len(authors))
+
+        best = max(remaining, key=score)
+        remaining.remove(best)
+        selected.append(best)
+        covered_authors.update(best.get("raised_by_all", [best.get("raised_by", "")]))
+        covered_positions.update(best.get("positions", []))
+    for q in remaining:
+        q["deferred_reason"] = (
+            f"plafond de recherche ({cap}) atteint ; couverture déjà assurée par une question "
+            "sélectionnée (auteur ou positions concernées) ou pouvoir discriminant moindre"
+        )
+    return [*internal, *selected], remaining
 
 
 # --- F. Révision -------------------------------------------------------------------------------
@@ -653,16 +788,25 @@ def build_revision_prompt(
 # --- G. Consolidation, comparaison, synthèse, porte qualité ------------------------------------
 CONSOLIDATION_SYSTEM = (
     "Tu es le GREFFIER d'une étude. Tu regroupes les options proposées en FAMILLES STRATÉGIQUES : "
-    "une famille réunit uniquement des options réellement équivalentes (même orientation de fond). "
-    "Les variantes conservées et les désaccords internes à une famille restent visibles. Deux "
-    "options proches mais réellement différentes ne sont PAS fusionnées : indique pourquoi. Tu "
-    "ne classes pas, tu ne préfères pas, tu ne recommandes pas. Tu n'emploies que les "
-    "identifiants fournis et tu ne recopies pas les libellés au-delà du nécessaire.\n\n"
+    "une famille est une ORIENTATION DÉCISIONNELLE, définie par ce qu'elle vise (objective), ce "
+    "sur quoi elle agit (target), son type d'action (kind), sa réversibilité, ses prérequis, sa "
+    "condition de déclenchement (trigger) et son arbitrage majeur (trade_off). Deux options qui "
+    "portent la même orientation FUSIONNENT même si leurs mots diffèrent (« auditer avant de "
+    "décider », « diagnostic préalable », « ne pas engager avant analyse » = une famille) ; une "
+    "différence de formulation, de périmètre marginal ou de calendrier devient une VARIANTE de la "
+    "famille, pas une famille. Seule une condition qui change matériellement la décision "
+    "(objet différent, prérequis incompatible, réversibilité opposée) justifie une famille "
+    "distincte : indique alors pourquoi, en une phrase. Les désaccords internes à une famille "
+    "restent visibles. Tu ne classes pas, tu ne préfères pas, tu ne recommandes pas. Tu "
+    "n'emploies que les identifiants fournis, tu ne recopies pas les libellés au-delà du "
+    "nécessaire, et chaque champ texte tient en une phrase courte.\n\n"
     + COMPACT
     + ' : {"families": [{"family_id": "F1", "label": "…", "kind": "build|integrate|buy|wait|test|'
-    'simplify|do_nothing|other", "option_ids": ["E1-O1"], "variants": [{"option_id": "E2-O1", '
-    '"difference": "…"}], "internal_disagreements": ["…"]}], "not_merged_because": '
-    '[{"option_ids": ["E1-O1", "E3-O1"], "reason": "…"}]}'
+    'simplify|do_nothing|other", "objective": "…", "target": "…", "reversibility": '
+    '"high|medium|low|unknown", "prerequisites": ["…"], "trigger": "…", "trade_off": "…", '
+    '"option_ids": ["E1-O1"], "variants": [{"option_id": "E2-O1", "difference": "…"}], '
+    '"internal_disagreements": ["…"]}], "not_merged_because": [{"option_ids": ["E1-O1", '
+    '"E3-O1"], "reason": "…"}]}'
 )
 
 
@@ -681,12 +825,12 @@ def build_consolidation_prompt(
 
 COMPARISON_SYSTEM = (
     "Tu compares des familles stratégiques sur des critères COMMUNS pertinents pour le problème. "
-    "Noyau minimal lorsque pertinent : résultat attendu, coût, délai, risque, réversibilité, "
-    "dépendances, qualité des preuves, principales inconnues ; le problème peut en appeler "
-    "d'autres. Chaque appréciation est qualitative et indique sa BASE : evidence (preuve "
-    "sourcée), inference, hypothesis, unknown, ceo_input, model_knowledge. Aucun score "
-    "numérique. Le nombre de "
-    "perspectives favorables à une option n'est jamais un critère : la preuve prime sur la "
+    "Noyau OBLIGATOIRE de 5 critères : résultat attendu, coût, délai, risque, réversibilité ; tu "
+    "peux en ajouter AU PLUS DEUX si le problème l'exige (par exemple dépendances, qualité des "
+    "preuves) — jamais plus de 7 critères au total, les mêmes pour toutes les familles. Chaque "
+    "appréciation tient en une phrase courte et indique sa BASE : evidence (preuve sourcée), "
+    "inference, hypothesis, unknown, ceo_input, model_knowledge. Aucun score numérique. Le nombre "
+    "de perspectives favorables à une option n'est jamais un critère : la preuve prime sur la "
     "majorité.\n\n"
     + COMPACT
     + ' : {"criteria": ["résultat attendu", "coût", "…"], "rows": [{"family_id": "F1", '
@@ -756,7 +900,13 @@ SYNTHESIS_SYSTEM = (
     "- les preuves sont étiquetées par provenance : ceo_input, external, model_knowledge, "
     "inference, hypothesis ; aucune source inventée ;\n"
     "- la confiance (low|medium|high) est justifiée par la stabilité, les preuves, les "
-    "inconnues ;\n- "
+    "inconnues ;\n"
+    "- COMPRESSION SÉMANTIQUE, pas appauvrissement : la matière fournie est déjà structurée "
+    "(familles F1…, preuves EV-…, objections OBJ-…) — RÉFÉRENCE ces identifiants au lieu de "
+    "recopier leur texte ; au plus 8 options, 6 preuves, 5 avantages, 5 inconvénients, 6 risques, "
+    "5 conditions de changement, 6 désaccords résiduels (les plus décisifs) ; chaque élément de "
+    "liste en une phrase ; « rationale » et « justification » en 3 à 5 phrases ; aucune "
+    "répétition entre champs ; la recommandation reste complète et décisionnelle ;\n- "
     + EPISTEMIC_RULE
     + "\n\n"
     + COMPACT

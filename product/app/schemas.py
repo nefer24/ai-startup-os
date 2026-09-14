@@ -849,6 +849,12 @@ class MissionCreateRequest(BaseModel):
     declared_class: MissionDeclaredClass = ""
     max_llm_calls: int | None = Field(default=None, gt=0)
     max_cost_eur: float | None = Field(default=None, gt=0)
+    # D20 (v1.3.6.2) — intégrité des benchmarks : freeze attendu (SHA court ≥ 7 ou complet) ;
+    # la mission ne démarre pas (409, aucun appel LLM) si le build qui tourne diffère, si son
+    # identité Git est indisponible ou si l'arbre est modifié. `benchmark_strict` impose les deux
+    # dernières conditions même sans freeze attendu.
+    expected_freeze: str | None = Field(default=None, max_length=64)
+    benchmark_strict: bool | None = None
 
     @field_validator("input_text")
     @classmethod
@@ -903,6 +909,8 @@ class MissionOut(BaseModel):
     recommendation: dict[str, Any] | None = None
     # B10 / B11 : échec structuré (étape, acteur, catégorie, tentatives, raison) si `failed`.
     failure: dict[str, Any] | None = None
+    # D20 : identité immuable du build qui a exécuté la mission (commit, versions, empreintes).
+    build_identity: dict[str, Any] | None = None
 
 
 class MissionJournalEntryOut(BaseModel):

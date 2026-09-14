@@ -137,6 +137,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.build_identity import BenchmarkBuildError, preflight
 from app.company_deliverables import (
     CompanyNotApprovedError,
     CompanyNotFoundError,
@@ -1789,10 +1790,33 @@ def _get_mission_or_404(db: Session, mission_id: int) -> Any:
         raise HTTPException(status_code=404, detail="mission introuvable") from exc
 
 
+@app.get("/benchmark/preflight")
+def benchmark_preflight(expected_freeze: str = "") -> dict[str, Any]:
+    """D20 — pré-vol benchmark : identité réelle du processus qui tourne (commit, arbre, SDK,
+    politique de raisonnement, empreinte de configuration, plafonds) et verdict MATCH / MISMATCH
+    contre le freeze attendu. Lecture seule, aucun LLM, aucune écriture."""
+    return preflight(get_settings(), expected_freeze or get_settings().mission_expected_freeze)
+
+
 @app.post("/missions", response_model=MissionOut, status_code=201)
 def create_mission(payload: MissionCreateRequest, db: DbSession, llm: LLM) -> MissionOut:
-    """Crée et exécute une mission de cadrage sous budget ; retourne le rapport `candidate`."""
-    mission = run_mission(db, llm, payload, get_settings())
+    """Crée et exécute une mission de cadrage sous budget ; retourne le rapport `candidate`.
+
+    D20 : en mode benchmark (freeze attendu ou strict), un build qui ne correspond pas est refusé
+    AVANT toute création de mission et tout appel LLM (409, raison explicite)."""
+    try:
+        mission = run_mission(db, llm, payload, get_settings())
+    except BenchmarkBuildError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": exc.reason,
+                "benchmark": exc.check,
+                "build": exc.identity.compact(),
+                "llm_calls_used": 0,
+                "cost_eur": 0.0,
+            },
+        ) from exc
     log_product_event(
         db,
         "mission_report_ready",

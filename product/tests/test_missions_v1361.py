@@ -273,9 +273,10 @@ def test_d19_regression_structurante_synthetic_case_still_reaches_the_gate_under
     assert (mission["max_llm_calls"], mission["max_cost_eur"]) == (60, 8.0)
     bounds = mission["composition"]["bounds"]
     assert bounds["self_qualification_fits"] is True
-    assert bounds["self_qualification_group_size"] == 3  # 16 positions : 5 496 + 500 ≤ 6 000
-    assert bounds["total_required_calls"] == 59 == bounds["remaining_calls_at_composition"]
-    assert len(mission["composition"]["experts"]) == 16
+    assert bounds["self_qualification_group_size"] == 3  # 15 positions : 5 496 + 500 ≤ 6 000
+    # v1.3.6.2 (D21) : 15 experts (15 + 5 + 15 + 2 + 8 + 12 = 57 ≤ 59).
+    assert bounds["total_required_calls"] == 57 <= bounds["remaining_calls_at_composition"]
+    assert len(mission["composition"]["experts"]) == 15
     assert mission["status"] == "candidate"
     assert mission["stop_reason"] == ""
     assert mission["llm_calls_used"] <= 60
@@ -294,6 +295,6 @@ def test_d19_regression_structurante_synthetic_case_still_reaches_the_gate_under
     assert mission["deliberation"]["steelman"]["status"] in {"accepted", "accepted_partial"}
     assert [r for r in mission["deliberation"]["revisions"] if r["called"]]
     assert mission["recommendation"]["gate"]["passed"] is True
-    assert [c["call_type"] for c in llm.calls].count("self_qualification") == 6
+    assert [c["call_type"] for c in llm.calls].count("self_qualification") == 5
     entries = _entries(client, mission["id"], "skipped_for_deliberation_reserve")
     assert entries == []
