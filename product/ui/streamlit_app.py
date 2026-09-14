@@ -2253,10 +2253,15 @@ MISSION_NOTICE = (
 
 
 def _build_state_label(build: dict[str, Any]) -> str:
+    """CLEAN / DIRTY / UNAVAILABLE du PROCESSUS ; `FS-DIVERGENT` si le dépôt courant ne correspond
+    plus au code chargé (D26 : checkout / pull sans redémarrage)."""
     short = build.get("running_commit_short") or build.get("git_commit_short")
     if not short:
         return "UNAVAILABLE"
-    return "DIRTY" if build.get("git_dirty") else "CLEAN"
+    state = "DIRTY" if (build.get("git_dirty") or build.get("filesystem_dirty")) else "CLEAN"
+    if build.get("process_vs_filesystem_match") is False:
+        state += " FS-DIVERGENT"
+    return state
 
 
 def render_build_banner(client: SolutionPlansAPIClient, expected_freeze: str = "") -> None:
@@ -2274,7 +2279,7 @@ def render_build_banner(client: SolutionPlansAPIClient, expected_freeze: str = "
     state = _build_state_label(pre)
     short = pre.get("running_commit_short") or "—"
     line = (
-        f"**BUILD** `{short}` **{state}** · {pre.get('provider_adapter')} SDK "
+        f"**BUILD (processus)** `{short}` **{state}** · {pre.get('provider_adapter')} SDK "
         f"{pre.get('provider_sdk_version')} · politique "
         f"`{str(pre.get('reasoning_policy_fingerprint', ''))[:12]}` · config "
         f"`{str(pre.get('mission_config_fingerprint', ''))[:12]}`"
@@ -2282,13 +2287,19 @@ def render_build_banner(client: SolutionPlansAPIClient, expected_freeze: str = "
     if pre.get("expected_freeze"):
         verdict = pre.get("verdict", "")
         detail = (
-            f"Running build: `{pre.get('running_commit') or 'indisponible'}`  \n"
+            f"Process build: `{pre.get('process_commit') or 'indisponible'}`  \n"
+            f"Filesystem: `{pre.get('filesystem_commit') or 'indisponible'}`  \n"
             f"Expected freeze: `{pre['expected_freeze']}`  \n**{verdict}**"
             + (f" — {pre.get('reason')} — mission bloquée" if verdict != "MATCH" else "")
         )
         (st.success if verdict == "MATCH" else st.error)(line + "  \n" + detail)
     elif state == "CLEAN":
         st.success(line)
+    elif "FS-DIVERGENT" in state:
+        st.error(
+            line + "  \nLe dépôt a changé depuis le démarrage du serveur : le code exécuté est "
+            "celui du processus, pas celui du disque — redémarrer avant tout benchmark."
+        )
     else:
         st.warning(line + "  \nHors benchmark : arbre modifié ou identité Git indisponible.")
 

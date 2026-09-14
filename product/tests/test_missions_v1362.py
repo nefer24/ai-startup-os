@@ -23,17 +23,22 @@ from app.build_identity import (
     BENCHMARK_BUILD_DIRTY,
     BENCHMARK_BUILD_MISMATCH,
     BENCHMARK_BUILD_UNAVAILABLE,
+    BENCHMARK_PROCESS_FILESYSTEM_MISMATCH,
     GIT_STATUS_OK,
     GIT_STATUS_UNAVAILABLE,
     MISSION_CONFIG_FIELDS,
     GitProbe,
+    ProcessBuild,
     benchmark_check,
     canonical_json,
+    capture_process_build,
+    clean_state_reason,
     commits_match,
     compute_build_identity,
     git_probe,
     is_secret_setting,
     mission_config_snapshot,
+    process_build,
 )
 from app.config import Settings, get_settings
 from app.mission_budget import SYNTHESIS_RECOVERY_CALLS, deliberation_reserve
@@ -115,21 +120,58 @@ def research(monkeypatch: pytest.MonkeyPatch) -> Callable[[Any], Any]:
     return _set
 
 
+def _probe(commit: str | None, dirty: bool | None, detail: str = "") -> GitProbe:
+    return GitProbe(
+        commit,
+        dirty,
+        "product/increment-2" if commit else "",
+        GIT_STATUS_OK if commit else GIT_STATUS_UNAVAILABLE,
+        detail,
+    )
+
+
+def _process(commit: str | None, dirty: bool | None = False, detail: str = "") -> ProcessBuild:
+    g = _probe(commit, dirty, detail)
+    return ProcessBuild(
+        commit=g.commit,
+        dirty=g.dirty,
+        branch=g.branch,
+        status=g.status,
+        detail=g.detail,
+        product_version="0.0.0-test",
+        python_version="3.12.0",
+        provider_adapter="anthropic",
+        provider_sdk_version="0.78.0",
+        captured_at="2026-09-14T00:00:00+00:00",
+    )
+
+
 @pytest.fixture
 def git(monkeypatch: pytest.MonkeyPatch) -> Callable[..., GitProbe]:
-    """Identité Git simulée : le code ne lit que ce que la sonde rapporte (jamais d'invention)."""
+    """Identité simulée : le code ne lit que ce que la sonde rapporte (jamais d'invention).
+
+    D26 : `process` fixe l'identité figée du processus ; la sonde du dépôt courant (filesystem)
+    est simulée séparément. Par défaut, processus = dépôt (serveur démarré sur ce commit)."""
 
     def _set(
-        commit: str | None = CLEAN_SHA, *, dirty: bool | None = False, detail: str = ""
+        commit: str | None = CLEAN_SHA,
+        *,
+        dirty: bool | None = False,
+        detail: str = "",
+        process: str | bool | None = True,
+        process_dirty: bool | None = None,
     ) -> GitProbe:
-        probe = GitProbe(
-            commit,
-            dirty,
-            "product/increment-2" if commit else "",
-            GIT_STATUS_OK if commit else GIT_STATUS_UNAVAILABLE,
-            detail,
-        )
+        probe = _probe(commit, dirty, detail)
         monkeypatch.setattr(bi, "git_probe", lambda repo_dir=None: probe)
+        proc_commit: str | None = commit if isinstance(process, bool) else process
+        proc_dirty = dirty if process_dirty is None else process_dirty
+        if proc_commit is None:
+            proc_dirty = None
+        monkeypatch.setattr(
+            bi,
+            "_PROCESS_BUILD",
+            _process(proc_commit, proc_dirty, detail if proc_commit else "git indisponible"),
+        )
         return probe
 
     return _set
@@ -164,7 +206,10 @@ def test_01_build_identity_is_computed_never_invented_and_fingerprinted(
     git(CLEAN_SHA)
     settings = Settings.model_construct()
     identity = compute_build_identity(settings)
-    assert identity.git_commit_full == CLEAN_SHA
+    assert identity.git_commit_full == CLEAN_SHA == identity.process_commit
+    assert identity.filesystem_commit == CLEAN_SHA
+    assert identity.process_vs_filesystem_match is True
+    assert identity.process_captured_at
     assert identity.git_commit_short == CLEAN_SHA[:7]
     assert identity.git_dirty is False
     assert identity.git_identity_status == GIT_STATUS_OK
@@ -178,7 +223,7 @@ def test_01_build_identity_is_computed_never_invented_and_fingerprinted(
     assert identity.label == f"{CLEAN_SHA[:7]} CLEAN"
     # Sonde indisponible : aucun SHA, statut explicite, libellé UNAVAILABLE — jamais une valeur
     # plausible fabriquée.
-    git(None, dirty=None, detail="not a git repository")
+    git(None, dirty=None, detail="not a git repository", process=None)
     missing = compute_build_identity(settings)
     assert (missing.git_commit_full, missing.git_commit_short, missing.git_dirty) == (
         None,
@@ -186,7 +231,7 @@ def test_01_build_identity_is_computed_never_invented_and_fingerprinted(
         None,
     )
     assert missing.git_identity_status == GIT_STATUS_UNAVAILABLE
-    assert missing.git_detail == "not a git repository"
+    assert missing.git_detail == "git indisponible"
     assert missing.label == "UNAVAILABLE"
     # Vérification de freeze : forme courte (≥ 7) ou complète ; jamais un préfixe trop court.
     assert commits_match(CLEAN_SHA, CLEAN_SHA[:7]) is True
@@ -243,7 +288,8 @@ def test_02_mission_with_matching_expected_freeze_starts_and_persists_the_identi
     assert status["build"]["git_commit_full"] == CLEAN_SHA
     assert status["build_label"] == f"{CLEAN_SHA[:7]} CLEAN"
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
-    assert f"**Build :** `{CLEAN_SHA[:7]}` CLEAN" in md
+    assert f"**Build (processus) :** `{CLEAN_SHA[:7]}` CLEAN" in md
+    assert build["process_vs_filesystem_match"] is True
 
 
 def test_03_wrong_expected_freeze_refuses_the_mission_before_any_llm_call(
@@ -409,8 +455,9 @@ def test_07_preflight_endpoint_cli_and_ui_client_report_the_running_build(
     assert preflight_main(["--expected", CLEAN_SHA]) == 0
     text = capsys.readouterr().out
     assert "Verdict        : MATCH" in text
-    assert f"Running commit : {CLEAN_SHA}" in text
+    assert f"Process commit : {CLEAN_SHA}" in text
     assert "Working tree   : CLEAN" in text
+    assert "cohérent avec le processus" in text
     assert preflight_main(["--expected", OTHER_SHA]) == 1
     assert BENCHMARK_BUILD_MISMATCH in capsys.readouterr().out
     assert preflight_main(["--expected", CLEAN_SHA, "--json"]) == 0
@@ -435,6 +482,182 @@ def test_07_preflight_endpoint_cli_and_ui_client_report_the_running_build(
     result = ui.benchmark_preflight(CLEAN_SHA[:7])
     assert (seen["path"], seen["expected"]) == ("/benchmark/preflight", CLEAN_SHA[:7])
     assert result["verdict"] == "MISMATCH"
+
+
+# =================================================================================================
+# D26 (v1.3.6.2.1) — identité du PROCESSUS, pas du HEAD lu dynamiquement. Cas A-E obligatoires.
+# =================================================================================================
+def _post_benchmark(client: TestClient, expected: str) -> Any:
+    return client.post(
+        "/missions",
+        json={
+            "input_type": "problem",
+            "input_text": "entrée synthétique v1362",
+            "expected_freeze": expected,
+        },
+    )
+
+
+def _post_plain(client: TestClient) -> Any:
+    return client.post(
+        "/missions", json={"input_type": "problem", "input_text": "entrée synthétique v1362"}
+    )
+
+
+def test_d26_process_identity_is_captured_once_and_never_recomputed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Le premier appel fige l'identité ; un nouvel appel ne la recalcule pas, même si la sonde du
+    # dépôt change entre-temps : le HEAD du disque ne remplace jamais le commit du processus.
+    monkeypatch.setattr(bi, "_PROCESS_BUILD", None)
+    first = capture_process_build(probe=_probe(CLEAN_SHA, False))
+    monkeypatch.setattr(bi, "git_probe", lambda repo_dir=None: _probe(OTHER_SHA, False))
+    assert capture_process_build() is first
+    assert process_build().commit == CLEAN_SHA
+    assert capture_process_build(probe=_probe(OTHER_SHA, True)) is first
+    identity = compute_build_identity(Settings.model_construct())
+    assert identity.process_commit == CLEAN_SHA
+    assert identity.filesystem_commit == OTHER_SHA
+    assert identity.process_vs_filesystem_match is False
+    assert identity.git_commit_full == CLEAN_SHA  # la preuve reste le processus
+    assert identity.label == f"{CLEAN_SHA[:7]} CLEAN FS-DIVERGENT"
+    assert clean_state_reason(identity) == BENCHMARK_PROCESS_FILESYSTEM_MISMATCH
+    # Le runtime réel a figé son identité à l'import du module `app.main`.
+    from app import main as app_main
+
+    assert isinstance(app_main.PROCESS_BUILD, ProcessBuild)
+    assert app_main.PROCESS_BUILD.captured_at
+
+
+def test_d26_case_a_process_filesystem_and_expected_agree_match(
+    client: TestClient, use_llm: Callable[..., Any], git: Callable[..., GitProbe]
+) -> None:
+    git(CLEAN_SHA, process=CLEAN_SHA)
+    pre = client.get("/benchmark/preflight", params={"expected_freeze": CLEAN_SHA}).json()
+    assert (pre["verdict"], pre["reason"]) == ("MATCH", "")
+    assert pre["process_commit"] == pre["filesystem_commit"] == CLEAN_SHA
+    assert pre["process_vs_filesystem_match"] is True
+    llm = use_llm(DeliberationLLM())
+    response = _post_benchmark(client, CLEAN_SHA)
+    assert response.status_code == 201, response.text
+    mission = response.json()
+    assert mission["build_identity"]["process_commit"] == CLEAN_SHA
+    assert mission["build_identity"]["process_vs_filesystem_match"] is True
+    assert len(llm.calls) == mission["llm_calls_used"] > 0
+
+
+def test_d26_case_b_holdout10_regression_filesystem_matches_expected_but_process_does_not(
+    client: TestClient, use_llm: Callable[..., Any], git: Callable[..., GitProbe]
+) -> None:
+    # Serveur démarré sur A, dépôt passé à B sans redémarrage, freeze attendu B :
+    # `git rev-parse HEAD` dirait B — il est INTERDIT d'afficher MATCH.
+    git(OTHER_SHA, process=CLEAN_SHA)
+    pre = client.get("/benchmark/preflight", params={"expected_freeze": OTHER_SHA}).json()
+    assert pre["verdict"] == "MISMATCH"
+    assert pre["reason"] == BENCHMARK_BUILD_MISMATCH
+    assert pre["process_commit"] == CLEAN_SHA
+    assert pre["filesystem_commit"] == OTHER_SHA
+    assert pre["process_vs_filesystem_match"] is False
+    assert pre["running_commit"] == CLEAN_SHA  # jamais le HEAD du disque
+    llm = use_llm(DeliberationLLM())
+    response = _post_benchmark(client, OTHER_SHA)
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["reason"] == BENCHMARK_BUILD_MISMATCH
+    assert detail["benchmark"]["process_commit"] == CLEAN_SHA
+    assert detail["benchmark"]["filesystem_commit"] == OTHER_SHA
+    assert detail["benchmark"]["process_vs_filesystem_match"] is False
+    assert (detail["llm_calls_used"], detail["cost_eur"]) == (0, 0.0)
+    assert llm.calls == []
+    assert client.get("/missions/1").status_code == 404
+    status = client.get("/product/status").json()
+    assert status["build"]["process_commit"] == CLEAN_SHA
+    assert status["build_label"] == f"{CLEAN_SHA[:7]} CLEAN FS-DIVERGENT"
+
+
+def test_d26_case_c_process_matches_expected_but_repository_moved_fails(
+    client: TestClient,
+    use_llm: Callable[..., Any],
+    git: Callable[..., GitProbe],
+    settings_env: Callable[[str, str], None],
+) -> None:
+    # Le processus exécute bien A, mais le dépôt a changé depuis le démarrage : l'état
+    # expérimental n'est plus propre → refus, avec freeze attendu comme en mode strict seul.
+    git(OTHER_SHA, process=CLEAN_SHA)
+    pre = client.get("/benchmark/preflight", params={"expected_freeze": CLEAN_SHA}).json()
+    assert (pre["verdict"], pre["reason"]) == ("MISMATCH", BENCHMARK_PROCESS_FILESYSTEM_MISMATCH)
+    llm = use_llm(DeliberationLLM())
+    response = _post_benchmark(client, CLEAN_SHA)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["reason"] == BENCHMARK_PROCESS_FILESYSTEM_MISMATCH
+    assert llm.calls == []
+    settings_env("MISSION_BENCHMARK_STRICT", "true")
+    strict = _post_plain(client)
+    assert strict.status_code == 409
+    assert strict.json()["detail"]["reason"] == BENCHMARK_PROCESS_FILESYSTEM_MISMATCH
+    assert llm.calls == []
+    # Hors benchmark : accepté mais signalé (le processus reste la preuve, le disque un signal).
+    settings_env("MISSION_BENCHMARK_STRICT", "false")
+    mission = _post(client)
+    created = _entries(client, mission["id"], "created")[0]["payload"]
+    assert "process_filesystem_mismatch_outside_benchmark" in created["benchmark"]["warnings"]
+    assert mission["build_identity"]["process_commit"] == CLEAN_SHA
+    assert mission["build_identity"]["filesystem_commit"] == OTHER_SHA
+    md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
+    assert f"**Build (processus) :** `{CLEAN_SHA[:7]}` CLEAN FS-DIVERGENT" in md
+
+
+def test_d26_case_d_dirty_tree_fails_strict_even_when_commits_agree(
+    client: TestClient,
+    use_llm: Callable[..., Any],
+    git: Callable[..., GitProbe],
+    settings_env: Callable[[str, str], None],
+) -> None:
+    git(CLEAN_SHA, dirty=True, process=CLEAN_SHA)  # arbre modifié au démarrage et maintenant
+    pre = client.get("/benchmark/preflight", params={"expected_freeze": CLEAN_SHA}).json()
+    assert (pre["verdict"], pre["reason"]) == ("MISMATCH", BENCHMARK_BUILD_DIRTY)
+    llm = use_llm(DeliberationLLM())
+    assert _post_benchmark(client, CLEAN_SHA).status_code == 409
+    settings_env("MISSION_BENCHMARK_STRICT", "true")
+    strict = _post_plain(client)
+    assert (strict.status_code, strict.json()["detail"]["reason"]) == (409, BENCHMARK_BUILD_DIRTY)
+    assert llm.calls == []
+    # Arbre propre au démarrage mais modifié depuis : refus également (état non propre).
+    git(CLEAN_SHA, dirty=True, process=CLEAN_SHA, process_dirty=False)
+    pre = client.get("/benchmark/preflight", params={"expected_freeze": CLEAN_SHA}).json()
+    assert (pre["verdict"], pre["reason"]) == ("MISMATCH", BENCHMARK_BUILD_DIRTY)
+    assert _post_benchmark(client, CLEAN_SHA).status_code == 409
+    assert llm.calls == []
+
+
+def test_d26_case_e_process_identity_unavailable_fails_strict(
+    client: TestClient,
+    use_llm: Callable[..., Any],
+    git: Callable[..., GitProbe],
+    settings_env: Callable[[str, str], None],
+) -> None:
+    # Le disque affiche un commit propre ; le processus, lui, n'a pas pu établir son identité.
+    git(CLEAN_SHA, process=None)
+    pre = client.get("/benchmark/preflight", params={"expected_freeze": CLEAN_SHA}).json()
+    assert (pre["verdict"], pre["reason"]) == ("MISMATCH", BENCHMARK_BUILD_UNAVAILABLE)
+    assert pre["process_commit"] is None
+    assert pre["filesystem_commit"] == CLEAN_SHA
+    assert pre["build_label"] == "UNAVAILABLE"
+    llm = use_llm(DeliberationLLM())
+    assert _post_benchmark(client, CLEAN_SHA).status_code == 409
+    settings_env("MISSION_BENCHMARK_STRICT", "true")
+    strict = _post_plain(client)
+    assert (strict.status_code, strict.json()["detail"]["reason"]) == (
+        409,
+        BENCHMARK_BUILD_UNAVAILABLE,
+    )
+    assert llm.calls == []
+    # Sans freeze ni strict : accepté, identité `unavailable` enregistrée telle quelle.
+    settings_env("MISSION_BENCHMARK_STRICT", "false")
+    mission = _post(client)
+    assert mission["build_identity"]["process_commit"] is None
+    assert mission["build_identity"]["git_identity_status"] == GIT_STATUS_UNAVAILABLE
+    assert mission["build_identity"]["filesystem_commit"] == CLEAN_SHA
 
 
 # =================================================================================================
@@ -1427,4 +1650,4 @@ def test_e2e_synthetic_problem_traverses_the_full_pipeline_under_the_structurant
     md = client.get(f"/missions/{mission['id']}/report/markdown").json()["markdown"]
     assert "### Informations internes à obtenir (1)" in md
     assert "alternative écartée" in md
-    assert f"**Build :** `{CLEAN_SHA[:7]}` CLEAN" in md
+    assert f"**Build (processus) :** `{CLEAN_SHA[:7]}` CLEAN" in md

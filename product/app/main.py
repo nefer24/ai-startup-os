@@ -137,7 +137,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.build_identity import BenchmarkBuildError, preflight
+from app.build_identity import BenchmarkBuildError, capture_process_build, preflight
 from app.company_deliverables import (
     CompanyNotApprovedError,
     CompanyNotFoundError,
@@ -354,6 +354,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.llm_client = build_llm_client(settings)
     yield
 
+
+# D26 (v1.3.6.2.1) — l'identité du code chargé dans CE processus est figée à l'import du runtime :
+# c'est elle, et jamais le HEAD du dépôt lu plus tard, qui prouve le code exécuté par une mission.
+PROCESS_BUILD = capture_process_build()
 
 app = FastAPI(title="AI-SOS Product Runtime", version="0.1.0", lifespan=lifespan)
 

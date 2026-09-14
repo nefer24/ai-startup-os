@@ -1215,6 +1215,20 @@ score numérique). (6) **§7 — arrêt** : `terminal_failure_reason` (cause) s�
 `revision_executed` / `revision_changed_position`. Plafonds 60 appels / 8 € inchangés ; doctrine
 inchangée.
 
+**Identité du processus (v1.3.6.2.1 — D26)** : le commit qui prouve le code exécuté est celui du
+**processus**, capturé une seule fois à l'import du runtime (`capture_process_build()` dans
+`app/main.py`, `ProcessBuild` immuable), jamais le `HEAD` du dépôt lu au moment de la requête. Le
+dépôt courant est sondé en parallèle (`filesystem_commit`, `filesystem_dirty`) uniquement pour
+détecter une divergence (`process_vs_filesystem_match`) ; il ne remplace jamais `process_commit`.
+Scénario interdit et testé (régression de Holdout #10) : serveur démarré sur A, `checkout` / `pull`
+vers B sans redémarrage, freeze attendu B ⇒ `MISMATCH` (`benchmark_build_mismatch`,
+`process_commit = A`), jamais `MATCH`. Dépôt divergent alors que le processus correspond au
+freeze ⇒ `benchmark_process_filesystem_mismatch` (l'état expérimental n'est plus propre) ; arbre
+modifié au démarrage **ou** maintenant ⇒ `benchmark_build_dirty` ; identité du processus
+indisponible ⇒ `benchmark_build_unavailable` — tous fail closed (409, 0 appel) avec un freeze
+attendu ou en mode strict. Pré-vol, statut produit, rapport (`Build (processus)`) et bandeau
+Streamlit affichent le commit du processus et signalent `FS-DIVERGENT`.
+
 **État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
 `GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec
 `detail.state` = `running` ou `failed` (+ `failure`), 404 si inexistante. L'interface annonce

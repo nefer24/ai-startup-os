@@ -22,12 +22,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.build_identity import (
-    BENCHMARK_BUILD_DIRTY,
-    BENCHMARK_BUILD_UNAVAILABLE,
     GIT_STATUS_OK,
     BenchmarkBuildError,
     BuildIdentity,
     benchmark_check,
+    clean_state_reason,
     compute_build_identity,
 )
 from app.config import Settings
@@ -1357,18 +1356,20 @@ def _benchmark_gate(
     check["enforced"] = bool(expected) or bool(strict)
     if expected and not check["match"]:
         raise BenchmarkBuildError(check["reason"], check, identity)
-    if strict and not expected:
-        if identity.git_identity_status != GIT_STATUS_OK:
-            check["reason"] = BENCHMARK_BUILD_UNAVAILABLE
-            raise BenchmarkBuildError(check["reason"], check, identity)
-        if identity.git_dirty:
-            check["reason"] = BENCHMARK_BUILD_DIRTY
-            raise BenchmarkBuildError(check["reason"], check, identity)
-    check["warnings"] = (
-        ["build_dirty_outside_benchmark"]
-        if (identity.git_dirty and not settings.mission_allow_dirty_build_dev)
-        else []
-    )
+    # D26 — état expérimental impropre (identité du processus indisponible, dépôt divergent du
+    # processus, arbre modifié) : refus en mode strict même sans freeze attendu.
+    state = clean_state_reason(identity)
+    if strict and not expected and state:
+        check["reason"] = state
+        raise BenchmarkBuildError(state, check, identity)
+    warnings: list[str] = []
+    if not identity.process_vs_filesystem_match and identity.git_identity_status == GIT_STATUS_OK:
+        warnings.append("process_filesystem_mismatch_outside_benchmark")
+    if (
+        identity.git_dirty or identity.filesystem_dirty
+    ) and not settings.mission_allow_dirty_build_dev:
+        warnings.append("build_dirty_outside_benchmark")
+    check["warnings"] = warnings
     return check
 
 

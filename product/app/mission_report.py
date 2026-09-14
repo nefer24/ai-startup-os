@@ -661,8 +661,10 @@ def _render_build(build: dict[str, Any]) -> list[str]:
         state = "UNAVAILABLE"
     else:
         state = "DIRTY" if build.get("git_dirty") else "CLEAN"
+    if short and not build.get("process_vs_filesystem_match", True):
+        state += " FS-DIVERGENT"
     return [
-        f"**Build :** `{short or 'indisponible'}` {state} · produit "
+        f"**Build (processus) :** `{short or 'indisponible'}` {state} · produit "
         f"{build.get('product_version', '?')}"
         f" · {build.get('provider_adapter', '?')} SDK {build.get('provider_sdk_version', '?')} · "
         f"politique `{str(build.get('reasoning_policy_fingerprint', ''))[:12]}` · config "

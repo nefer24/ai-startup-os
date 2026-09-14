@@ -12,6 +12,12 @@ avec elle (immuable), journalisée, exposée par l'API, le rapport, le statut pr
 Règles :
 * aucun SHA inventé : sans dépôt Git lisible, `git_commit_full = None` et
   `git_identity_status = "unavailable"` ;
+* **D26 (v1.3.6.2.1) — identité du PROCESSUS** : le commit qui prouve le code exécuté est capturé
+  UNE SEULE FOIS, à l'import du runtime (`process_build()`), puis reste immuable pendant toute la
+  vie du processus. Le dépôt courant est sondé en parallèle (`filesystem_commit`) uniquement pour
+  détecter une divergence (`process_vs_filesystem_match`) ; il ne remplace jamais le commit du
+  processus. Un dépôt qui a changé depuis le démarrage (checkout / pull sans redémarrage) refuse
+  tout benchmark : `benchmark_process_filesystem_mismatch` ;
 * le fingerprint de configuration couvre les paramètres capables de modifier le comportement
   intellectuel ou budgétaire d'une mission (sérialisation canonique + SHA-256), jamais un secret,
   une clé, un jeton ni du contenu utilisateur ;
@@ -42,6 +48,7 @@ GIT_STATUS_UNAVAILABLE = "unavailable"
 BENCHMARK_BUILD_MISMATCH = "benchmark_build_mismatch"
 BENCHMARK_BUILD_UNAVAILABLE = "benchmark_build_unavailable"
 BENCHMARK_BUILD_DIRTY = "benchmark_build_dirty"
+BENCHMARK_PROCESS_FILESYSTEM_MISMATCH = "benchmark_process_filesystem_mismatch"
 _GIT_TIMEOUT_SECONDS = 5.0
 
 # Paramètres de mission dont dépend le comportement intellectuel ou budgétaire (jamais de secret).
@@ -121,8 +128,37 @@ class GitProbe:
 
 
 @dataclass(frozen=True)
+class ProcessBuild:
+    """D26 — identité du code chargé dans CE processus : capturée une fois, jamais recalculée.
+
+    C'est la seule preuve admissible du code exécuté. Le dépôt peut changer sous le processus ;
+    cette valeur, non.
+    """
+
+    commit: str | None
+    dirty: bool | None
+    branch: str
+    status: str
+    detail: str
+    product_version: str
+    python_version: str
+    provider_adapter: str
+    provider_sdk_version: str
+    captured_at: str
+
+    @property
+    def short(self) -> str | None:
+        return self.commit[:7] if self.commit else None
+
+
+@dataclass(frozen=True)
 class BuildIdentity:
-    """Identité auditable d'un build : code, environnement, politique, réglages, horodatage."""
+    """Identité auditable d'un build : code, environnement, politique, réglages, horodatage.
+
+    `git_commit_full` / `git_commit_short` / `git_dirty` / `git_identity_status` désignent le
+    PROCESSUS (D26) ; `filesystem_*` décrit le dépôt courant au moment de la capture, à titre de
+    contrôle de divergence seulement.
+    """
 
     git_commit_full: str | None
     git_commit_short: str | None
@@ -137,6 +173,12 @@ class BuildIdentity:
     mission_config_fingerprint: str
     created_at: str
     git_detail: str = ""
+    process_commit: str | None = None
+    process_captured_at: str = ""
+    filesystem_commit: str | None = None
+    filesystem_dirty: bool | None = None
+    filesystem_status: str = GIT_STATUS_UNAVAILABLE
+    process_vs_filesystem_match: bool = False
     mission_config: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -150,10 +192,12 @@ class BuildIdentity:
 
     @property
     def label(self) -> str:
-        """Libellé court pour l'interface : `abc1234 CLEAN|DIRTY|UNAVAILABLE`."""
+        """Libellé court pour l'interface : `abc1234 CLEAN|DIRTY|UNAVAILABLE` (+ `FS-DIVERGENT`
+        si le dépôt courant ne correspond plus au processus)."""
         if self.git_commit_short is None:
             return "UNAVAILABLE"
-        return f"{self.git_commit_short} {'DIRTY' if self.git_dirty else 'CLEAN'}"
+        base = f"{self.git_commit_short} {'DIRTY' if self.git_dirty else 'CLEAN'}"
+        return base if self.process_vs_filesystem_match else base + " FS-DIVERGENT"
 
 
 def _run_git(args: list[str], cwd: Path) -> str:
@@ -195,6 +239,41 @@ def _distribution_version(name: str) -> str:
         return "unknown"
 
 
+def _now_iso(now: dt.datetime | None = None) -> str:
+    return (now or dt.datetime.now(dt.UTC)).isoformat(timespec="seconds")
+
+
+_PROCESS_BUILD: ProcessBuild | None = None
+
+
+def capture_process_build(
+    *, probe: GitProbe | None = None, now: dt.datetime | None = None
+) -> ProcessBuild:
+    """D26 — capture l'identité du processus si elle ne l'est pas encore ; sinon renvoie la
+    valeur figée (le premier appel gagne : ni recalcul, ni remplacement)."""
+    global _PROCESS_BUILD
+    if _PROCESS_BUILD is None:
+        g = probe or git_probe()
+        _PROCESS_BUILD = ProcessBuild(
+            commit=g.commit,
+            dirty=g.dirty,
+            branch=g.branch,
+            status=g.status,
+            detail=g.detail,
+            product_version=_distribution_version(PRODUCT_DISTRIBUTION),
+            python_version=platform.python_version(),
+            provider_adapter=PROVIDER_ADAPTER,
+            provider_sdk_version=_distribution_version(PROVIDER_SDK_DISTRIBUTION),
+            captured_at=_now_iso(now),
+        )
+    return _PROCESS_BUILD
+
+
+def process_build() -> ProcessBuild:
+    """Identité figée du processus (capturée à l'import du runtime par `app.main`)."""
+    return capture_process_build()
+
+
 def canonical_json(data: Any) -> str:
     """Sérialisation canonique déterministe (clés triées, séparateurs fixes, ASCII)."""
     return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
@@ -234,26 +313,43 @@ def mission_config_snapshot(settings: Any) -> dict[str, Any]:
 
 
 def compute_build_identity(
-    settings: Any, *, probe: GitProbe | None = None, now: dt.datetime | None = None
+    settings: Any,
+    *,
+    process: ProcessBuild | None = None,
+    filesystem: GitProbe | None = None,
+    now: dt.datetime | None = None,
 ) -> BuildIdentity:
-    """Capture l'identité du build courant (à appeler à la création de chaque mission)."""
-    g = probe or git_probe()
+    """Identité du build à la création d'une mission : commit du PROCESSUS (figé, D26) + réglages
+    du moment + sonde du dépôt courant pour le seul contrôle de divergence."""
+    proc = process or process_build()
+    fs = filesystem or git_probe()
     config = mission_config_snapshot(settings)
-    created = (now or dt.datetime.now(dt.UTC)).isoformat(timespec="seconds")
+    match = (
+        proc.status == GIT_STATUS_OK
+        and fs.status == GIT_STATUS_OK
+        and proc.commit is not None
+        and proc.commit == fs.commit
+    )
     return BuildIdentity(
-        git_commit_full=g.commit,
-        git_commit_short=g.commit[:7] if g.commit else None,
-        git_dirty=g.dirty,
-        git_identity_status=g.status,
-        git_branch=g.branch,
-        product_version=_distribution_version(PRODUCT_DISTRIBUTION),
-        python_version=platform.python_version(),
-        provider_adapter=PROVIDER_ADAPTER,
-        provider_sdk_version=_distribution_version(PROVIDER_SDK_DISTRIBUTION),
+        git_commit_full=proc.commit,
+        git_commit_short=proc.short,
+        git_dirty=proc.dirty,
+        git_identity_status=proc.status,
+        git_branch=proc.branch,
+        product_version=proc.product_version,
+        python_version=proc.python_version,
+        provider_adapter=proc.provider_adapter,
+        provider_sdk_version=proc.provider_sdk_version,
         reasoning_policy_fingerprint=fingerprint(policy_table(settings)),
         mission_config_fingerprint=fingerprint(config),
-        created_at=created,
-        git_detail=g.detail,
+        created_at=_now_iso(now),
+        git_detail=proc.detail,
+        process_commit=proc.commit,
+        process_captured_at=proc.captured_at,
+        filesystem_commit=fs.commit,
+        filesystem_dirty=fs.dirty,
+        filesystem_status=fs.status,
+        process_vs_filesystem_match=match,
         mission_config=config,
     )
 
@@ -271,29 +367,53 @@ def commits_match(running: str | None, expected: str) -> bool:
     return run.startswith(exp) if len(exp) < len(run) else run == exp
 
 
+def clean_state_reason(identity: BuildIdentity) -> str:
+    """D26 — ce qui rend l'état expérimental impropre à un benchmark, indépendamment du freeze
+    attendu : identité du processus indisponible, dépôt courant divergent du processus
+    (checkout / pull sans redémarrage), arbre modifié (au démarrage ou maintenant)."""
+    if identity.git_identity_status != GIT_STATUS_OK or not identity.process_commit:
+        return BENCHMARK_BUILD_UNAVAILABLE
+    if not identity.process_vs_filesystem_match:
+        return BENCHMARK_PROCESS_FILESYSTEM_MISMATCH
+    if identity.git_dirty or identity.filesystem_dirty:
+        return BENCHMARK_BUILD_DIRTY
+    return ""
+
+
 def benchmark_check(identity: BuildIdentity, expected_freeze: str) -> dict[str, Any]:
-    """Verdict de pré-vol : MATCH ou raison explicite de refus (fail closed)."""
+    """Verdict de pré-vol : MATCH ou raison explicite de refus (fail closed).
+
+    Le freeze attendu est comparé au commit du PROCESSUS (D26), jamais au HEAD du dépôt. Un dépôt
+    qui ne correspond plus au processus, ou modifié, refuse le benchmark même si le processus
+    correspond au freeze : l'état expérimental n'est plus propre.
+    """
     expected = _normalize_sha(expected_freeze)
     result: dict[str, Any] = {
         "expected_freeze": expected,
-        "running_commit": identity.git_commit_full,
+        "running_commit": identity.process_commit,
         "running_commit_short": identity.git_commit_short,
+        "process_commit": identity.process_commit,
+        "process_captured_at": identity.process_captured_at,
+        "filesystem_commit": identity.filesystem_commit,
+        "filesystem_dirty": identity.filesystem_dirty,
+        "process_vs_filesystem_match": identity.process_vs_filesystem_match,
         "git_identity_status": identity.git_identity_status,
         "git_dirty": identity.git_dirty,
         "match": False,
         "reason": "",
     }
+    state = clean_state_reason(identity)
     if not expected:
-        result["match"] = identity.git_identity_status == GIT_STATUS_OK
-        result["reason"] = "" if result["match"] else BENCHMARK_BUILD_UNAVAILABLE
+        result["match"] = state == ""
+        result["reason"] = state
         result["verdict"] = "NO_EXPECTED_FREEZE"
         return result
-    if identity.git_identity_status != GIT_STATUS_OK or not identity.git_commit_full:
-        result["reason"] = BENCHMARK_BUILD_UNAVAILABLE
-    elif not commits_match(identity.git_commit_full, expected):
+    if state == BENCHMARK_BUILD_UNAVAILABLE:
+        result["reason"] = state
+    elif not commits_match(identity.process_commit, expected):
         result["reason"] = BENCHMARK_BUILD_MISMATCH
-    elif identity.git_dirty:
-        result["reason"] = BENCHMARK_BUILD_DIRTY
+    elif state:
+        result["reason"] = state
     else:
         result["match"] = True
     result["verdict"] = "MATCH" if result["match"] else "MISMATCH"
@@ -322,8 +442,14 @@ def preflight(settings: Any, expected_freeze: str = "") -> dict[str, Any]:
         for cls in ("courante", "importante", "structurante", "critique")
     }
     return {
-        "running_commit": identity.git_commit_full,
+        "running_commit": identity.process_commit,
         "running_commit_short": identity.git_commit_short,
+        "process_commit": identity.process_commit,
+        "process_captured_at": identity.process_captured_at,
+        "filesystem_commit": identity.filesystem_commit,
+        "filesystem_dirty": identity.filesystem_dirty,
+        "filesystem_status": identity.filesystem_status,
+        "process_vs_filesystem_match": identity.process_vs_filesystem_match,
         "git_branch": identity.git_branch,
         "git_dirty": identity.git_dirty,
         "git_identity_status": identity.git_identity_status,
@@ -347,15 +473,26 @@ def preflight(settings: Any, expected_freeze: str = "") -> dict[str, Any]:
 
 def render_preflight(report: dict[str, Any]) -> str:
     """Rendu texte du pré-vol (commande `python -m app.preflight`)."""
+
+    def tree(dirty: bool | None) -> str:
+        return "UNAVAILABLE" if dirty is None else ("DIRTY" if dirty else "CLEAN")
+
     lines = [
         "AI-SOS — benchmark preflight",
-        f"Running commit : {report['running_commit'] or '(indisponible)'}"
-        + (f" ({report['git_branch']})" if report.get("git_branch") else ""),
-        "Working tree   : "
+        f"Process commit : {report['process_commit'] or '(indisponible)'}"
+        + (f" ({report['git_branch']})" if report.get("git_branch") else "")
         + (
-            "UNAVAILABLE"
-            if report["git_dirty"] is None
-            else ("DIRTY" if report["git_dirty"] else "CLEAN")
+            f" — capturé {report['process_captured_at']}"
+            if report.get("process_captured_at")
+            else ""
+        ),
+        f"Working tree   : {tree(report['git_dirty'])}",
+        f"Filesystem     : {report.get('filesystem_commit') or '(indisponible)'} "
+        f"{tree(report.get('filesystem_dirty'))} — "
+        + (
+            "cohérent avec le processus"
+            if report.get("process_vs_filesystem_match")
+            else "DIVERGENT du processus"
         ),
         f"Expected freeze: {report['expected_freeze'] or '(aucun)'}",
         f"Verdict        : {report['verdict']}"

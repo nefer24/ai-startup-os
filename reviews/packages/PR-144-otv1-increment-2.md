@@ -3,8 +3,22 @@
 **Pull Request :** #144 — *OT-V1 — Incrément 2 : délibération probante → recommandation décisionnelle*
 **Branche :** `product/increment-2` (créée depuis `product/mvp` au freeze v3.1 `d2931a7`) → `develop`
 **Auteur :** Claude Code (Chief System Architect)
-**Date :** 2026-09-14 (ARP v1.3.6.2, après le post-mortem indépendant Holdout #10 / Mission #10 : D20 identité du build, D21 catégorie A / synthèse, D22 familles, D23-D24 interne / externe, D25 tolérance par élément, §7 raison d'arrêt ; v1.3.6.1 : D18 plancher SDK, D19 auto-qualification et marge)
+**Date :** 2026-09-14 (ARP v1.3.6.2.1 : D26 identité du processus ; v1.3.6.2, après le post-mortem indépendant Holdout #10 / Mission #10 : D20 identité du build, D21 catégorie A / synthèse, D22 familles, D23-D24 interne / externe, D25 tolérance par élément, §7 raison d'arrêt ; v1.3.6.1 : D18 plancher SDK, D19 auto-qualification et marge)
 **Commits :** départ `d2931a7` (PR #143, freeze v3.1 + ARP) → freeze v1 `dc72da2`, rebasé à l'identique sur `develop` après fusion de #143 en `6d53926` → freeze v1.1 `f3749e8` (C1–C4) → freeze v1.2 `82caaf8` (B1–B5) → **INCREMENT 2 CODE FREEZE v1.3** (B6–B8 + garde-fou épistémique ; SHA dans le message de commit et dans `TRACEABILITY.md`)
+
+## 0 duodecies. Micro-correctif v1.3.6.2.1 — D26 « identité du processus »
+
+**Défaut (audit indépendant du freeze `5aece5a`, bloquant).** D20 calculait `BuildIdentity` à la création de la mission par `git rev-parse HEAD` : cela identifie le système de fichiers courant, pas le code déjà chargé dans le processus Python. Scénario interdit : serveur démarré sur A → modules A chargés → dépôt `checkout` / `pull` vers B → serveur non redémarré → pré-vol lit `HEAD = B` → `expected_freeze = B` → `MATCH` affiché alors que le processus exécute A. C'est exactement le mécanisme de Holdout #10 ; l'invariant de D20 était détruit.
+
+**Correction.**
+* `app/build_identity.py` : `ProcessBuild` (commit, dirty, branche, statut, versions produit / Python / SDK, `captured_at`) et `capture_process_build()` — le premier appel fige l'identité, tout appel ultérieur renvoie la même valeur (ni recalcul, ni remplacement) ; `process_build()`. `compute_build_identity(settings, process=, filesystem=)` : `git_commit_full` / `git_commit_short` / `git_dirty` / `git_identity_status` désignent le PROCESSUS ; nouveaux champs `process_commit`, `process_captured_at`, `filesystem_commit`, `filesystem_dirty`, `filesystem_status`, `process_vs_filesystem_match`. `clean_state_reason` (unavailable → process/filesystem mismatch → dirty au démarrage ou maintenant). `benchmark_check` compare le freeze au commit du processus, puis exige un état propre : `benchmark_process_filesystem_mismatch` si le dépôt a changé depuis le démarrage (même si le processus correspond au freeze), `benchmark_build_dirty`, `benchmark_build_unavailable`. `preflight` / `render_preflight` : `Process commit`, `Filesystem … cohérent | DIVERGENT`. Libellé `FS-DIVERGENT`.
+* `app/main.py` : `PROCESS_BUILD = capture_process_build()` à l'import du runtime (avant `FastAPI()`).
+* `app/missions.py` : `_benchmark_gate` — freeze attendu ⇒ tout verdict non MATCH refuse ; strict sans freeze ⇒ `clean_state_reason` refuse ; hors benchmark ⇒ avertissements `process_filesystem_mismatch_outside_benchmark`, `build_dirty_outside_benchmark`.
+* `app/mission_report.py` (`Build (processus)`, `FS-DIVERGENT`), `ui/streamlit_app.py` (bandeau : processus vs disque, erreur explicite « redémarrer avant tout benchmark »).
+
+**Tests (6, `tests/test_missions_v1362.py`).** Capture unique jamais recalculée (la sonde change, l'identité non ; le HEAD du disque n'est jamais adopté) ; **A** process = A, fs = A, attendu = A ⇒ MATCH, mission créée ; **B** process = A, fs = B, attendu = B ⇒ `MISMATCH` / `benchmark_build_mismatch`, `running_commit = A`, 409 sans appel ni mission, statut produit `FS-DIVERGENT` (régression fondamentale de Holdout #10 : MATCH interdit) ; **C** process = A, fs = B, attendu = A ⇒ `benchmark_process_filesystem_mismatch` (freeze attendu et strict), avertissement hors benchmark ; **D** dirty (au démarrage, ou seulement maintenant) ⇒ `benchmark_build_dirty` strict ; **E** identité du processus indisponible alors que le disque est propre ⇒ `benchmark_build_unavailable` strict. Tests D20 existants adaptés (processus = dépôt par défaut).
+
+**Totaux v1.3.6.2.1** : **660 tests produit verts** (654 + 6), 1 780 racine ; ruff / format / mypy verts (produit et racine). Budgets inchangés ; B15–D25 inchangés hors D20 ; Mission #10 non relancée, Holdout #11 non lancé, PR #144 non fusionnée.
 
 ## 0 undecies. Correctif v1.3.6.2 — D20 à D25, §7 « identité du build, robustesse du pipeline décisionnel »
 
