@@ -430,6 +430,11 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
     # §7 — cause terminale, informations manquantes, étapes dégradées, avertissements : séparés.
     if stop.get("terminal_failure_reason"):
         lines.append(f"- **Cause terminale** : `{stop['terminal_failure_reason']}`")
+    if stop.get("interrupted_step"):
+        lines.append(
+            f"- **Étape interrompue** : `{stop['interrupted_step']}`"
+            + (" — reprise possible" if stop.get("resume_possible") else "")
+        )
     for mi in stop.get("missing_information", []):
         lines.append(
             f"- Information manquante : {mi.get('kind')} ({mi.get('count')}) — "
@@ -464,7 +469,14 @@ def _render_deliberation(report: dict[str, Any]) -> list[str]:
     )
     st = d.get("steelman", {})
     lines += ["", "### Steelman"]
-    if st.get("required"):
+    if st.get("required") and str(st.get("status", "")).startswith("interrupted"):
+        # §7 (v1.3.7) — un steelman requis mais interrompu n'est ni « non requis » ni réalisé.
+        lines.append(
+            f"- Requis ({st.get('reason')}) — **interrompu** (`{st.get('status')}`) : la "
+            "délibération ne s'est pas terminée normalement, le steelman n'a pas été mené à "
+            "son terme, aucune étape ultérieure n'a été exercée."
+        )
+    elif st.get("required"):
         if st.get("mode") == "discarded_alternative":
             alt = st.get("alternative") or {}
             lines.append(
@@ -652,6 +664,70 @@ def _render_cost_exposure(b: dict[str, Any]) -> list[str]:
     ]
 
 
+def _render_pricing(b: dict[str, Any]) -> list[str]:
+    """§16 (v1.3.7) — barème comptabilisé (€) vs barème public de référence daté (USD) : rendus
+    côte à côte, jamais confondus, aucun calcul modifié."""
+    p = b.get("pricing") or {}
+    if not p:
+        return []
+    acc = p.get("accounted_eur_per_mtok", {})
+    ref = p.get("reference_usd_per_mtok", {})
+    ref_cost = p.get("reference_cost_usd_same_tokens")
+    return [
+        f"**Barème :** comptabilisé {acc.get('input')} / {acc.get('output')} €/Mtok (entrée / "
+        f"sortie, conservateur) · référence publique {ref.get('input')} / {ref.get('output')} "
+        f"$/Mtok ({p.get('reference_price_date') or 'non datée'})"
+        + (
+            f" · même usage au barème de référence ≈ {ref_cost:.4f} $"
+            if ref_cost is not None
+            else ""
+        )
+    ]
+
+
+def _render_pause(pause: dict[str, Any] | None) -> list[str]:
+    """§11 (v1.3.7) — rapport d'interruption récupérable : étape, cause, intervention, checkpoint,
+    budget consommé / restant, identité fournisseur / modèle, reprise."""
+    if not pause:
+        return []
+    cp = pause.get("checkpoint") or {}
+    budget = pause.get("budget_consumed") or {}
+    lines = [
+        "",
+        "> **MISSION EN PAUSE RÉCUPÉRABLE** — ni succès, ni échec, ni benchmark consommé : une "
+        "condition externe doit être levée avant reprise. Aucune recommandation n'a été produite.",
+        "",
+        "## 0. Interruption récupérable",
+        f"- Étape interrompue : `{pause.get('interrupted_step', '')}`"
+        + (f" ({pause.get('actor')})" if pause.get("actor") else "")
+        + (f" — appel `{pause.get('call_type')}`" if pause.get("call_type") else "")
+        + (f" {pause.get('logical_call_id')}" if pause.get("logical_call_id") else ""),
+        f"- Cause : `{pause.get('category', '')}` — {pause.get('error_type') or 'type non précisé'}"
+        + (f" (HTTP {pause.get('status_code')})" if pause.get("status_code") else "")
+        + (f" — {pause.get('message')}" if pause.get("message") else ""),
+        f"- Intervention requise : {pause.get('required_intervention', '')}",
+        f"- Dernier checkpoint valide : étape durable « {cp.get('last_durable_step') or 'aucune'} »"
+        f" — {cp.get('calls_count', 0)} appel(s) logique(s) validé(s) rejouable(s)"
+        + (f" — horodatage {cp.get('created_at')}" if cp.get("created_at") else ""),
+        f"- Budget consommé : {budget.get('llm_calls_used', 0)}/{budget.get('max_llm_calls', 0)} "
+        f"appels · {float(budget.get('cost_eur', 0.0)):.4f} € / "
+        f"{float(budget.get('max_cost_eur', 0.0)):.2f} € — restant : "
+        f"{budget.get('remaining_calls', 0)} appel(s) · "
+        f"{float(budget.get('remaining_cost_eur', 0.0)):.4f} €",
+        f"- Fournisseur / modèle attendus à la reprise : {pause.get('provider', '')} / "
+        f"{pause.get('model', '')}",
+        f"- Reprise possible : **{'oui' if pause.get('resume_possible') else 'non'}** — "
+        f"{pause.get('resume_endpoint', '')} (politique `{pause.get('policy', '')}` : "
+        + (
+            "même freeze, même modèle, même fournisseur, même configuration exigés"
+            if pause.get("policy") == "benchmark"
+            else "même modèle, même fournisseur, même configuration exigés"
+        )
+        + ")",
+    ]
+    return lines
+
+
 def _render_build(build: dict[str, Any]) -> list[str]:
     """D20 — identité du build qui a exécuté la mission (ligne d'en-tête du rapport)."""
     if not build:
@@ -679,13 +755,22 @@ def render_situation_report_markdown(report: dict[str, Any]) -> str:
     b = report["budget"]
     cls = report["class"]
     produced = bool(report.get("recommendation_produced"))
-    banner = (
-        "> Recommandation **produite par les agents** : ils recommandent, ils ne décident pas. "
-        "Le rapport reste `candidate` jusqu'à une action explicite du CEO ; aucune exécution."
-        if produced
-        else "> Ce rapport ne contient aucune recommandation : la délibération n'a pas été menée "
-        "à terme. Il reste `candidate` jusqu'à une action explicite du CEO."
-    )
+    paused = report.get("status") == "paused_recoverable"
+    if produced:
+        banner = (
+            "> Recommandation **produite par les agents** : ils recommandent, ils ne décident pas. "
+            "Le rapport reste `candidate` jusqu'à une action explicite du CEO ; aucune exécution."
+        )
+    elif paused:
+        banner = (
+            "> Ce rapport est un **rapport d'interruption** : la mission est en pause récupérable, "
+            "la délibération n'est pas terminée, aucune recommandation n'existe."
+        )
+    else:
+        banner = (
+            "> Ce rapport ne contient aucune recommandation : la délibération n'a pas été menée "
+            "à terme. Il reste `candidate` jusqu'à une action explicite du CEO."
+        )
     lines: list[str] = [
         f"# Rapport de situation — mission {report['mission_id']}",
         "",
@@ -698,9 +783,11 @@ def render_situation_report_markdown(report: dict[str, Any]) -> str:
         f"{b.get('cost_eur', 0.0):.4f} € / {b.get('max_cost_eur', 0.0):.2f} € · "
         f"{b.get('input_tokens', 0)} tokens entrée · {b.get('output_tokens', 0)} tokens sortie",
         *_render_cost_exposure(b),
+        *_render_pricing(b),
         *_render_build(report.get("build") or {}),
         "",
         banner,
+        *_render_pause(report.get("pause")),
         "",
         "## 1. Problème compris",
         str(f["01_probleme_compris"]),

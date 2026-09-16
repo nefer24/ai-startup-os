@@ -966,7 +966,8 @@ def test_f_unanimous_positions_steelman_the_discarded_alternative_not_the_domina
     llm = use_llm(DeliberationLLM(relation="identical"))
     control = _post(client, declared_class="structurante")
     st = control["deliberation"]["steelman"]
-    assert "mode" not in st
+    # v1.3.7 (§5) : le mode de sélection est toujours explicite (ici : position dominante).
+    assert st["mode"] == "dominant_position"
     assert st["target"] == "P1"
     assert [c["call_type"] for c in llm.calls].count("steelman_recognition") == 1
 

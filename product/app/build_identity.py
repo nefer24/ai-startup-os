@@ -468,6 +468,52 @@ def preflight(settings: Any, expected_freeze: str = "") -> dict[str, Any]:
         "benchmark_strict": bool(getattr(settings, "mission_benchmark_strict", False)),
         "build_label": identity.label,
         "checked_at": identity.created_at,
+        # v1.3.7 (§14, §16) — ce que le système VÉRIFIE lui-même, ce que l'opérateur CONFIRME
+        # (aucune simulation de solde ni d'appel fournisseur), et le barème (comptabilisé vs
+        # référence datée).
+        "verified_by_system": [
+            "commit du processus et cohérence avec le dépôt (D26)",
+            "arbre de travail propre (D20)",
+            "empreintes de configuration de mission et de politique de raisonnement",
+            "modèle configuré et version du SDK fournisseur",
+            "plafonds d'appels et de coût par classe",
+        ],
+        "operator_confirmations": [
+            {
+                "item": "provider_credit_or_spend_cap",
+                "question": (
+                    "Le crédit fournisseur disponible et le plafond de dépense de l'organisation "
+                    "couvrent-ils le plafond de coût de la classe visée ? (non vérifiable par le "
+                    "système : aucun appel, aucune simulation de solde — à confirmer par "
+                    "l'opérateur)"
+                ),
+                "why": (
+                    "une condition externe (crédit, plafond de dépense, quota) interrompt la "
+                    "mission en pause récupérable ; elle ne la fait pas échouer, mais le "
+                    "benchmark n'est pas terminé tant qu'elle n'est pas levée"
+                ),
+            },
+            {
+                "item": "provider_model_pinned",
+                "question": (
+                    "Le modèle configuré est-il bien le modèle épinglé du protocole (aucun alias "
+                    "flottant) ?"
+                ),
+                "why": "une reprise refuse tout modèle ou fournisseur différent (§12)",
+            },
+        ],
+        "pricing": {
+            "accounted_eur_per_mtok": {
+                "input": getattr(settings, "llm_price_input_eur_per_mtok", None),
+                "output": getattr(settings, "llm_price_output_eur_per_mtok", None),
+            },
+            "reference_usd_per_mtok": {
+                "input": getattr(settings, "llm_reference_price_input_usd_per_mtok", None),
+                "output": getattr(settings, "llm_reference_price_output_usd_per_mtok", None),
+            },
+            "reference_price_date": getattr(settings, "llm_reference_price_date", ""),
+            "reference_price_source": getattr(settings, "llm_reference_price_source", ""),
+        },
     }
 
 
@@ -508,4 +554,15 @@ def render_preflight(report: dict[str, Any]) -> str:
         )
     if report.get("git_detail"):
         lines.append(f"Git detail     : {report['git_detail']}")
+    pricing = report.get("pricing") or {}
+    if pricing:
+        acc = pricing.get("accounted_eur_per_mtok", {})
+        ref = pricing.get("reference_usd_per_mtok", {})
+        lines.append(
+            f"Pricing        : comptabilisé {acc.get('input')} / {acc.get('output')} EUR/Mtok — "
+            f"référence {ref.get('input')} / {ref.get('output')} USD/Mtok "
+            f"({pricing.get('reference_price_date') or 'non datée'})"
+        )
+    for item in report.get("operator_confirmations", []):
+        lines.append(f"À CONFIRMER    : [{item['item']}] {item['question']}")
     return "\n".join(lines)

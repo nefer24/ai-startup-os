@@ -818,6 +818,11 @@ class SolutionPlansAPIClient:
             max_polls=max_polls,
         )
 
+    def resume_mission(self, mission_id: int) -> dict[str, Any]:
+        """v1.3.7 — reprise d'une mission en pause récupérable (`POST /missions/{id}/resume`)."""
+        result: dict[str, Any] = self._request("POST", f"/missions/{mission_id}/resume")
+        return result
+
     def mission_ceo_action(
         self, mission_id: int, action: str, ceo_notes: str = ""
     ) -> dict[str, Any]:

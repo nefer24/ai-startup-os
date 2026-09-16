@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.agent_utils import strip_code_fences
 
@@ -126,6 +126,31 @@ class ObjectionOut(_Lenient):
     nature: DisagreementNature = "other"
 
 
+ProposalStance = Literal[
+    "defend", "conditional", "analyse", "critique", "reject", "defer", "not_addressed"
+]
+
+
+class ProposalStanceOut(_Lenient):
+    """Prise de position DÉCLARÉE d'un expert sur une proposition explicite de la demande
+    (v1.3.7 — B17). Mention ≠ analyse ≠ critique ≠ défense : seule une déclaration `defend` ou
+    `conditional` vaut défense ; `analyse`, `critique`, `reject`, `defer`, `not_addressed` n'en
+    sont pas. Une déclaration est autoritaire pour son auteur (aucune inférence lexicale)."""
+
+    proposal: str
+    stance: ProposalStance = "not_addressed"
+    reason: str = ""
+
+
+class OrientationOut(_Lenient):
+    """Orientation décisionnelle réelle d'une position (v1.3.7 — §4) : l'option que la position
+    recommande, distincte des options qu'elle liste ou critique. Sert à mesurer la diversité
+    DÉCISIONNELLE (orientations) séparément de la diversité ARGUMENTATIVE (relations)."""
+
+    kind: OptionKind = "other"
+    label: str = ""
+
+
 class ExpertOutput(_Lenient):
     """Exposé initial d'un expert au Tour 0 (contexte isolé)."""
 
@@ -138,6 +163,11 @@ class ExpertOutput(_Lenient):
     options: list[OptionOut] = Field(default_factory=list)
     objections: list[ObjectionOut] = Field(default_factory=list)
     evidence: list[EvidenceOut] = Field(default_factory=list)
+    # v1.3.7 — prises de position déclarées sur les propositions explicites et orientation réelle.
+    # Optionnels (sorties antérieures, clients de test) : absents → repli lexical prudent (B17) et
+    # diversité décisionnelle « inconnue » (jamais inventée).
+    proposal_stances: list[ProposalStanceOut] = Field(default_factory=list)
+    primary_orientation: OrientationOut | None = None
 
 
 # --- Auto-qualification (après clôture du Tour 0) -----------------------------------------
@@ -256,6 +286,17 @@ class ConfrontationActOut(_Lenient):
     # v1.3.6 (§9) — où la réponse au fait se trouve : données internes du demandeur (`internal`),
     # sources publiques (`external`), ou l'un ou l'autre (`either`, défaut).
     fact_source: FactSource = "either"
+
+    @field_validator("fact_source", mode="before")
+    @classmethod
+    def _empty_fact_source_is_absent(cls, value: object) -> object:
+        """v1.3.7 (D25, Mission #11) — une source VIDE (`""`, `None`, blancs) signifie « non
+        renseignée », exactement comme un champ absent : elle prend le défaut `either` (doctrine
+        §9 : « l'un ou l'autre »). Tout autre littéral inconnu reste rejeté par le schéma — aucune
+        sémantique n'est inventée, l'acte n'est pas perdu pour une simple absence."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return "either"
+        return value.strip() if isinstance(value, str) else value
 
 
 class ConfrontationOutput(_Lenient):

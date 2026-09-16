@@ -1390,7 +1390,13 @@ def test_28_terminal_failure_dominates_missing_information_stays_context(
         "warnings",
         "stop_reason",
         "steps_done",
+        # v1.3.7 (§7 / §11) — étape interrompue et état de reprise, séparés de la cause terminale.
+        "interrupted_step",
+        "paused_recoverable",
+        "resume_possible",
     }
+    assert stop["interrupted_step"] == ""
+    assert stop["paused_recoverable"] is False
 
 
 def test_29_missing_information_without_failure_is_a_context_not_a_terminal_cause(

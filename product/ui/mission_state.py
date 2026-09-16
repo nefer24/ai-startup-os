@@ -13,10 +13,16 @@ from typing import Any
 RUNNING_STATES = frozenset({"running"})
 SUCCESS_STATES = frozenset({"candidate", "approved", "revision_requested", "rejected"})
 FAILED_STATES = frozenset({"failed"})
-TERMINAL_STATES = SUCCESS_STATES | FAILED_STATES
+# v1.3.7 — pause récupérable : la mission ne travaille plus (aucune attente), mais elle n'est ni
+# terminée ni échouée : une intervention externe puis une reprise explicite sont attendues.
+PAUSED_STATES = frozenset({"paused_recoverable"})
+TERMINAL_STATES = SUCCESS_STATES | FAILED_STATES | PAUSED_STATES
 
 CATEGORY_LABELS = {
     "transient_provider_error": "fournisseur temporairement indisponible (surcharge, débit)",
+    "terminal_recoverable_provider_error": (
+        "condition externe à lever chez le fournisseur (crédit, plafond de dépense, quota)"
+    ),
     "permanent_provider_error": "erreur permanente du fournisseur (authentification, requête)",
     "local_error": "erreur locale du produit (validation, contrat)",
     "unknown_error": "erreur non classée",
@@ -46,14 +52,22 @@ REASON_LABELS = {
         "délibération"
     ),
     "permanent_provider_error": "erreur permanente : aucune relance",
+    "terminal_recoverable_provider_error": (
+        "pause récupérable : aucune relance automatique, reprise après intervention"
+    ),
     "local_error": "erreur locale : aucune relance",
     "unknown_error": "erreur non classée : aucune relance",
 }
 
 
 def is_terminal(status: str) -> bool:
-    """Vrai si la mission ne travaille plus (succès, action CEO ou échec)."""
+    """Vrai si la mission ne travaille plus (succès, action CEO, échec ou pause récupérable)."""
     return status in TERMINAL_STATES
+
+
+def is_paused(status: str) -> bool:
+    """Vrai pour une mission en pause récupérable (reprise explicite possible)."""
+    return status in PAUSED_STATES
 
 
 def should_keep_polling(status: str) -> bool:
@@ -85,6 +99,30 @@ def mission_state_summary(mission: dict[str, Any]) -> dict[str, Any]:
         details.append("Statut : " + REASON_LABELS.get(reason, reason or "échec"))
         details.append("La mission ne tourne plus : inutile d'attendre.")
         return {"kind": "failed", "headline": "MISSION ÉCHOUÉE", "details": details}
+    if status in PAUSED_STATES:
+        failure = mission.get("failure") or {}
+        cp = mission.get("checkpoint") or {}
+        stage = failure.get("step") or cp.get("interrupted_step") or "étape inconnue"
+        category = str(failure.get("error_category", failure.get("category", "")))
+        details = [f"Étape interrompue : {stage}"]
+        details.append("Cause : " + CATEGORY_LABELS.get(category, category or "cause non précisée"))
+        if failure.get("required_intervention"):
+            details.append("Intervention requise : " + str(failure["required_intervention"]))
+        details.append(
+            f"Budget consommé : {mission.get('llm_calls_used', 0)}/"
+            f"{mission.get('max_llm_calls', 0)} appels · "
+            f"{float(mission.get('cost_eur', 0.0)):.4f} € — préservé à la reprise"
+        )
+        details.append(
+            "Reprise possible : "
+            + ("oui (POST /missions/{id}/resume)" if mission.get("resume_available") else "non")
+        )
+        details.append("La mission ne tourne plus : inutile d'attendre ; ni succès ni échec.")
+        return {
+            "kind": "paused",
+            "headline": "MISSION EN PAUSE RÉCUPÉRABLE",
+            "details": details,
+        }
     return {
         "kind": "completed",
         "headline": f"Mission terminée ({status})",

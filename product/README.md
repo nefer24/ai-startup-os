@@ -907,7 +907,8 @@ un **rapport partiel** cohérent.
 
 **Endpoints** : `POST /missions`, `GET /missions`, `GET /missions/{id}`,
 `GET /missions/{id}/journal`, `GET /missions/{id}/report/markdown`,
-`POST /missions/{id}/approve|request-revision|reject`. Onglet Streamlit « Missions (cadrage) ».
+`POST /missions/{id}/approve|request-revision|reject`, `POST /missions/{id}/resume` (v1.3.7 :
+reprise d'une mission `paused_recoverable`). Onglet Streamlit « Missions (cadrage) ».
 
 **Ce que l'incrément 1 ne faisait pas** (couvert à l'incrément 2 ci-dessous) : recherche externe,
 tours de critique, steelman, révision sous preuve, porte qualité indépendante. Toujours hors
@@ -1228,6 +1229,56 @@ modifié au démarrage **ou** maintenant ⇒ `benchmark_build_dirty` ; identité
 indisponible ⇒ `benchmark_build_unavailable` — tous fail closed (409, 0 appel) avec un freeze
 attendu ou en mode strict. Pré-vol, statut produit, rapport (`Build (processus)`) et bandeau
 Streamlit affichent le commit du processus et signalent `FS-DIVERGENT`.
+
+**Correctifs post-Mission #11 (v1.3.7)** — cartographie `preuve → cause → correctif → test` dans
+`reviews/packages/PR-144-post-mission-11-diagnostic.md`. (1) **B17 — mention ≠ analyse ≠ critique ≠
+défense** : les experts du Tour 0 déclarent leur prise de position sur chaque proposition explicite
+du dossier (`proposal_stances` : `defend | conditional | analyse | critique | reject | defer |
+not_addressed`, dossier de cadrage listant les propositions) ; une déclaration est autoritaire ; à
+défaut, repli lexical prudent (`mention_polarity` : une mention accompagnée d'un marqueur de rejet /
+report n'est pas un endossement). Seules `defend` / `conditional` valent défense : une proposition
+sérieuse mentionnée pour être écartée devient l'alternative steelmanée. (2) **§4 — diversité
+décisionnelle ≠ argumentative** : `primary_orientation` déclarée ⇒ `decisional_diversity_index`
+(groupes d'orientation, `orientation_clusters`, `decisional_convergence`) distinct de
+`divergence_index` ; `is_premature_convergence` exige le contrôle de convergence (steelman) quand
+toutes les orientations coïncident malgré des raisons divergentes — aucun désaccord fabriqué, la
+convergence légitime après contradiction réelle n'est pas signalée. (3) **§5 — cible du steelman**
+(`select_steelman_target`, journal `steelman_target_selected`) : alternative explicite non défendue →
+orientation minoritaire déclarée à risque d'élimination (`minority_position`) → faiblesse centrale de
+la position dominante (`dominant_position`) ; déterministe, candidats journalisés. (4) **D25** :
+`fact_source` vide (`""`, `None`, blancs) = absent ⇒ défaut `either` ; tout littéral inconnu reste
+rejeté élément par élément. (5) **§7 — rapport terminal** : statut fixé **avant** la charge de
+délibération (`terminal_failure_reason` porte la cause réelle), steelman `pending` →
+`interrupted_provider_failure` / `interrupted_recoverable` (jamais `not_required` par défaut),
+`interrupted_step`, `paused_recoverable`, `resume_possible` dans `stop`. (6) **§10 — taxonomie à
+trois classes** (`app/provider_errors.py`) : `transient_provider_error` (relance bornée),
+`terminal_recoverable_provider_error` (condition externe : 402, `billing_error`, quota / plafond de
+dépense, 400 / 403 / 429 sans `Retry-After` à vocabulaire crédit / facturation, drapeau adaptateur
+`recoverable_external_condition`) ⇒ **pause durable**, `permanent_provider_error` / `local_error` /
+`unknown_error` ⇒ échec. (7) **§8–§11 — pause récupérable, checkpoint, reprise** : statut
+`paused_recoverable` (ni succès, ni échec, ni benchmark consommé), `missions.checkpoint_json`
+(version, dernière étape durable, appels logiques validés rejouables — clé déterministe étape /
+acteur / type / limite / empreinte du prompt —, recherches validées, registre exact à la pause et à
+la création, état initial de la mission, identité attendue : commit du processus, modèle, adaptateur,
+SDK, empreintes de configuration et de politique, freeze attendu ; interruption et intervention
+requise ; **jamais de secret**), rapport d'interruption (`report.pause`, section « 0. Interruption
+récupérable » du Markdown), `POST /missions/{id}/resume` : contrôle d'identité fail closed
+(`resume_compatibility` — modèle, adaptateur, empreintes toujours ; commit, freeze et état propre en
+politique `benchmark` ; commit différent journalisé en politique `production`, jamais un autre modèle
+ni un autre fournisseur), rejeu des appels validés sans appel fournisseur (`call_replayed`, budget
+restauré à l'identique, aucun double appel), poursuite puis issue normale / nouvel échec / nouvelle
+pause ; divergence de rejeu journalisée (`checkpoint_replay_divergence`, échec en benchmark). §13 :
+seule l'abstraction des politiques existe — aucun repli multi-fournisseur. (8) **§14 / §16** :
+pré-vol `verified_by_system` vs `operator_confirmations` (crédit / plafond de dépense fournisseur :
+non vérifiable, aucune simulation de solde) ; barème comptabilisé 3 / 15 €/Mtok **inchangé**, barème
+public de référence daté (`LLM_REFERENCE_PRICE_*`, 2 / 10 USD/Mtok au 2026-09-15) affiché à côté
+(`report.budget.pricing`, ligne « Barème » du Markdown, pré-vol), sans effet sur aucun calcul.
+(9) **§18 — composition** : l'angle libre du cadrage rattaché à un archétype par mots-clés est
+conservé comme focalisation de la fiche (`ExpertSpec.framing_angle`, « ce que tu regardes en
+priorité »), le titre et le rôle de débat de l'archétype restant le repli. Étudiés, non modifiés :
+`max_options` (saturation d'une borne annoncée, journal `options_capped`), D22, sortie structurée
+native (étape suivante documentée), choix du modèle / fournisseur. Interface : état
+« MISSION EN PAUSE RÉCUPÉRABLE » (`mission_state_summary` → `paused`), bouton « Reprendre ».
 
 **État d'une mission (B11)** : « pas de rapport » n'implique pas « encore en cours ».
 `GET /missions/{id}/report/markdown` répond 200 si un rapport (même partiel) existe, sinon 409 avec

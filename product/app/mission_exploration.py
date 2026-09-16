@@ -45,7 +45,16 @@ EXPERT_SYSTEM = (
     'marqué status = "model_knowledge" ; ce qui devrait être vérifié, status = "unverified". '
     "N'utilise \"verified\" que pour un fait présent dans l'entrée du demandeur, en citant ce "
     "passage comme source.\n"
-    "6. Reste proportionné : une situation simple appelle une réponse courte.\n\n"
+    "6. Reste proportionné : une situation simple appelle une réponse courte.\n"
+    "7. Orientation : indique l'option que ta position RECOMMANDE réellement "
+    "(primary_orientation : sa nature et son libellé, l'une de tes options) — distincte des "
+    "options que tu listes ou critiques sans les recommander.\n"
+    "8. Propositions explicites : si le dossier de cadrage liste des propositions explicites de "
+    "la demande, déclare pour CHACUNE ta prise de position : defend (tu la recommandes), "
+    "conditional (tu la recommandes sous condition), analyse (tu l'examines sans trancher), "
+    "critique (tu en analyses les faiblesses), reject (tu l'écartes), defer (tu la juges "
+    "prématurée ou à reporter), not_addressed. Mentionner ou analyser une proposition n'est pas "
+    "la défendre : ne déclare defend que si tu la recommandes vraiment.\n\n"
     "Réponds STRICTEMENT en JSON, sans texte autour, en JSON compact (sans indentation ni "
     "retours à la ligne décoratifs), avec exactement cette structure :\n"
     "{\n"
@@ -57,6 +66,11 @@ EXPERT_SYSTEM = (
     '  "to_verify": ["…"],\n'
     '  "options": [{"label": "…", "summary": "…", '
     '"kind": "build|integrate|buy|wait|test|simplify|do_nothing|other"}],\n'
+    '  "primary_orientation": {"kind": "build|integrate|buy|wait|test|simplify|do_nothing|other", '
+    '"label": "…"},\n'
+    '  "proposal_stances": [{"proposal": "…", '
+    '"stance": "defend|conditional|analyse|critique|reject|defer|not_addressed", '
+    '"reason": "…"}],\n'
     '  "objections": [{"text": "…", "target": "…", '
     '"nature": "solution|hypothesis|fact|value|other"}],\n'
     '  "evidence": [{"claim": "…", "source": "…", '

@@ -144,6 +144,19 @@ class Settings(BaseSettings):
     # fournisseur pour le modèle configuré. Sert à l'estimation avant appel et au coût journalisé.
     llm_price_input_eur_per_mtok: float = 3.0
     llm_price_output_eur_per_mtok: float = 15.0
+    # v1.3.7 (§16) — barème public de RÉFÉRENCE du fournisseur pour le modèle configuré (USD par
+    # million de tokens, tarif standard hors cache / lot), DATÉ et INFORMATIF : il n'entre dans
+    # aucun
+    # calcul de budget ni d'estimation (le barème comptabilisé ci-dessus reste conservateur et
+    # inchangé) ; il rend la marge explicite dans le rapport et le pré-vol. Toute mise à jour est
+    # une modification datée de configuration, jamais un ajustement silencieux.
+    llm_reference_price_input_usd_per_mtok: float = 2.0
+    llm_reference_price_output_usd_per_mtok: float = 10.0
+    llm_reference_price_date: str = "2026-09-15"
+    llm_reference_price_source: str = (
+        "grille publique du fournisseur pour claude-sonnet-5 (tokens standard, hors cache et lot), "
+        "relevée le 2026-09-15"
+    )
 
 
 @lru_cache

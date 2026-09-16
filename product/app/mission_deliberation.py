@@ -415,6 +415,102 @@ def token_overlap(label: str, text: str) -> float:
     return len(lab & txt) / len(lab)
 
 
+# --- B17 (v1.3.7) — mention ≠ analyse ≠ critique ≠ défense ---------------------------------------
+# Déclarations qui valent DÉFENSE d'une proposition ; toute autre déclaration n'en est pas une.
+DEFENDING_STANCES = frozenset({"defend", "conditional"})
+# Marqueurs argumentatifs génériques (français) de rejet, de report ou de mise à l'écart : une
+# mention accompagnée d'un tel marqueur dans la même phrase n'est jamais comptée comme un
+# endossement. Aucun mot métier ; les marqueurs sont pliés (sans accents) comme le texte.
+_NEGATIVE_CUES = (
+    "ne pas ",
+    "ne doit pas",
+    "ne devrait pas",
+    "n'est pas ",
+    "n est pas ",
+    "pas de ",
+    "plutot que",
+    "au lieu de",
+    "eviter",
+    "ecarter",
+    "ecartee",
+    "ecarte ",
+    "rejeter",
+    "rejete",
+    "rejetee",
+    "deconseill",
+    "prematur",
+    "differer",
+    "reporter",
+    "trop tot",
+    "renoncer",
+    "abandonner",
+    "non prioritaire",
+    "risque de ",
+    "risquee",
+    "contre-productif",
+    "contreproductif",
+    "sans passer par",
+    "surseoir",
+)
+_SENTENCE_SPLIT = re.compile(r"[.;:!?\n]+")
+
+
+def mention_polarity(label: str, text: str, threshold: float = 0.5) -> str:
+    """Comment un texte parle d'un libellé : `absent` (aucune phrase ne le recoupe), `negative`
+    (toute phrase qui le recoupe porte un marqueur de rejet / report) ou `mention` (au moins une
+    phrase le recoupe sans marqueur). Une `mention` n'est qu'un indice faible de défense."""
+    if not _content_tokens(label):
+        return "absent"
+    mentioning = [
+        s for s in _SENTENCE_SPLIT.split(text or "") if token_overlap(label, s) >= threshold
+    ]
+    if not mentioning:
+        return "absent"
+    folded = [_fold(s) for s in mentioning]
+    if all(any(cue in s for cue in _NEGATIVE_CUES) for s in folded):
+        return "negative"
+    return "mention"
+
+
+def declared_stance_for(
+    proposal_label: str, stances: list[dict[str, Any]], threshold: float = 0.5
+) -> str | None:
+    """Prise de position déclarée par un expert sur une proposition (appariement lexical du
+    libellé déclaré au libellé du cadrage), ou None si l'expert n'a rien déclaré pour elle."""
+    for st in stances:
+        declared = str(st.get("proposal", "")).strip()
+        if not declared:
+            continue
+        if (
+            token_overlap(proposal_label, declared) >= threshold
+            or token_overlap(declared, proposal_label) >= threshold
+        ):
+            return str(st.get("stance", "not_addressed"))
+    return None
+
+
+def endorsement_of(
+    proposal_label: str, position: dict[str, Any], *, endorse_threshold: float = 0.5
+) -> dict[str, Any]:
+    """Une position défend-elle une proposition ? Déclaration d'abord (autoritaire), sinon repli
+    lexical prudent. Retourne {defends, evidence, stance}."""
+    stance = declared_stance_for(proposal_label, list(position.get("proposal_stances") or []))
+    if stance is not None:
+        return {
+            "defends": stance in DEFENDING_STANCES,
+            "evidence": "declared",
+            "stance": stance,
+        }
+    polarity = mention_polarity(
+        proposal_label, str(position.get("position", "")), threshold=endorse_threshold
+    )
+    return {
+        "defends": polarity == "mention",
+        "evidence": f"lexical_{polarity}",
+        "stance": "",
+    }
+
+
 def find_discarded_alternative(
     *,
     proposals: list[dict[str, Any]],
@@ -430,8 +526,10 @@ def find_discarded_alternative(
     Source des propositions : `explicit_proposals` du cadrage (générique : investissement,
     acquisition, attente, externalisation, abandon…) ; repli : options du Tour 0 dont le libellé
     recoupe fortement le texte de la demande. Une proposition est « écartée » si aucune position
-    du Tour 0 ne l'endosse (recouvrement lexical du libellé dans la position ≥ seuil). Règle
-    déterministe et documentée ; aucun mot-clé métier, aucune nature codée en dur.
+    du Tour 0 ne la DÉFEND (v1.3.7) : prise de position déclarée `defend` / `conditional`
+    (autoritaire), ou, à défaut de déclaration, mention lexicale sans marqueur de rejet / report.
+    Une mention pour critiquer, rejeter, différer ou juger prématurée n'est pas une défense.
+    Règle déterministe et documentée ; aucun mot-clé métier, aucune nature codée en dur.
     """
     candidates: list[dict[str, Any]] = []
     for p in proposals:
@@ -472,15 +570,69 @@ def find_discarded_alternative(
                     }
                 )
     for cand in candidates:
-        endorsed_by = [
-            p["label"]
+        verdicts = {
+            p["label"]: endorsement_of(cand["label"], p, endorse_threshold=endorse_threshold)
             for p in positions
-            if token_overlap(cand["label"], p.get("position", "")) >= endorse_threshold
+        }
+        cand["endorsed_by"] = [lab for lab, v in verdicts.items() if v["defends"]]
+        cand["stances"] = {
+            lab: {"evidence": v["evidence"], "stance": v["stance"]} for lab, v in verdicts.items()
+        }
+        cand["mentioned_without_defending"] = [
+            lab
+            for lab, v in verdicts.items()
+            if not v["defends"] and v["evidence"] in ("lexical_negative", "declared")
         ]
-        cand["endorsed_by"] = endorsed_by
-        if not endorsed_by:
+        if not cand["endorsed_by"]:
             return cand
     return None
+
+
+# --- §4 (v1.3.7) — diversité décisionnelle (orientations) ≠ argumentative (relations) --------
+def labels_match(a: str, b: str, threshold: float = 0.5) -> bool:
+    """Deux libellés désignent-ils la même chose ? Recouvrement lexical de contenu dans un sens ou
+    l'autre ; à défaut de jetons de contenu (libellés courts), égalité ou inclusion des formes
+    pliées. Déterministe."""
+    fa, fb = " ".join(_fold(a).split()), " ".join(_fold(b).split())
+    if not fa or not fb:
+        return True
+    if _content_tokens(a) and _content_tokens(b):
+        return token_overlap(a, b) >= threshold or token_overlap(b, a) >= threshold
+    return fa == fb or fa in fb or fb in fa
+
+
+def orientation_groups(
+    orientations: list[dict[str, Any]], *, threshold: float = 0.5
+) -> list[list[str]]:
+    """Regroupe les experts par orientation déclarée : même nature ET libellés qui se recoupent
+    (ou libellé vide d'un côté). Déterministe, ordre d'exposé, plus grand groupe en tête."""
+    groups: list[dict[str, Any]] = []
+    for o in orientations:
+        kind = str(o.get("kind", "other"))
+        label = str(o.get("label", ""))
+        host = None
+        for g in groups:
+            if g["kind"] != kind:
+                continue
+            if labels_match(label, g["label"], threshold):
+                host = g
+                break
+        if host is None:
+            groups.append({"kind": kind, "label": label, "experts": [o["expert_id"]]})
+        else:
+            host["experts"].append(o["expert_id"])
+            host["label"] = host["label"] or label
+    ordered = sorted(groups, key=lambda g: -len(g["experts"]))
+    return [list(g["experts"]) for g in ordered]
+
+
+def decisional_diversity(orientations: list[dict[str, Any]]) -> float | None:
+    """1 - (plus grand groupe d'orientation / experts ayant déclaré une orientation) ; None si
+    moins de deux orientations déclarées (inconnue, jamais inventée)."""
+    if len(orientations) < 2:
+        return None
+    groups = orientation_groups(orientations)
+    return round(1 - len(groups[0]) / len(orientations), 3)
 
 
 def select_contradictor(
@@ -496,13 +648,78 @@ def select_contradictor(
 
 
 def is_premature_convergence(
-    *, effective_class: str, divergence_index: float, objection_count: int
+    *,
+    effective_class: str,
+    divergence_index: float,
+    objection_count: int,
+    decisional_diversity_index: float | None = None,
 ) -> bool:
-    """Convergence immédiate sur un enjeu qui le justifie → contrôle de convergence (steelman)."""
+    """Convergence immédiate sur un enjeu qui le justifie → contrôle de convergence (steelman).
+
+    v1.3.7 (§4) : une convergence DÉCISIONNELLE avérée (toutes les orientations déclarées
+    identiques) déclenche le contrôle même si les raisons divergent ou si des objections existent —
+    la diversité des raisons n'est pas une diversité d'orientations. Le contrôle n'ajoute aucun
+    désaccord : il exige seulement qu'une contradiction soit tentée. Sans orientation déclarée
+    (None), la règle historique s'applique (aucune divergence, aucune objection).
+    """
+    cls = normalize_class(effective_class)
+    concerned = cls in STEELMAN_CLASSES or cls == "importante"
+    if decisional_diversity_index is not None and decisional_diversity_index == 0.0:
+        return concerned
     if objection_count > 0 or divergence_index > 0.0:
         return False
-    cls = normalize_class(effective_class)
-    return cls in STEELMAN_CLASSES or cls == "importante"
+    return concerned
+
+
+def select_steelman_target(
+    *,
+    answered_ids: list[str],
+    dominant: list[str],
+    orientation_clusters: list[list[str]],
+    alternative: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """§5 (v1.3.7) — cible du steelman par valeur contradictoire décroissante, déterministe :
+
+    1. `discarded_alternative` : proposition explicite sérieuse défendue par aucune position ;
+    2. `minority_position` : orientation déclarée portée par une minorité stricte face à un groupe
+       dominant d'au moins deux positions (à risque d'élimination) ;
+    3. `dominant_position` : faiblesse centrale de la position dominante (règle historique).
+    Retourne le mode, la cible, la raison et les candidats considérés (journalisés)."""
+    considered: list[dict[str, Any]] = []
+    if alternative is not None:
+        considered.append({"mode": "discarded_alternative", "label": alternative.get("label")})
+        return {
+            "mode": "discarded_alternative",
+            "target_expert": None,
+            "reason": "proposition explicite de la demande défendue par aucune position",
+            "candidates_considered": considered,
+        }
+    considered.append({"mode": "discarded_alternative", "label": None, "found": False})
+    if len(orientation_clusters) >= 2 and len(orientation_clusters[0]) >= 2:
+        minority = [
+            e for g in orientation_clusters[1:] for e in g if len(g) < len(orientation_clusters[0])
+        ]
+        minority = [e for e in minority if e in answered_ids]
+        if minority:
+            considered.append({"mode": "minority_position", "experts": minority})
+            return {
+                "mode": "minority_position",
+                "target_expert": minority[0],
+                "reason": (
+                    "orientation minoritaire déclarée, à risque d'élimination face au groupe "
+                    "dominant"
+                ),
+                "candidates_considered": considered,
+            }
+    considered.append({"mode": "minority_position", "experts": [], "found": False})
+    target = next((e for e in dominant if e in answered_ids), answered_ids[0])
+    considered.append({"mode": "dominant_position", "expert": target})
+    return {
+        "mode": "dominant_position",
+        "target_expert": target,
+        "reason": "faiblesse centrale de la position dominante",
+        "candidates_considered": considered,
+    }
 
 
 # --- E. Recherche ciblée : sélection des questions matérielles --------------------------------

@@ -911,6 +911,9 @@ class MissionOut(BaseModel):
     failure: dict[str, Any] | None = None
     # D20 : identité immuable du build qui a exécuté la mission (commit, versions, empreintes).
     build_identity: dict[str, Any] | None = None
+    # v1.3.7 : checkpoint (vue) d'une mission `paused_recoverable` et possibilité de reprise.
+    checkpoint: dict[str, Any] | None = None
+    resume_available: bool = False
 
 
 class MissionJournalEntryOut(BaseModel):

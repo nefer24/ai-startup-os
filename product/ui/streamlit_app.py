@@ -2384,6 +2384,15 @@ def render_mission_create(client: SolutionPlansAPIClient) -> None:
             + "  \n".join(summary["details"])
         )
         return
+    if summary["kind"] == "paused":
+        st.warning(
+            "**"
+            + summary["headline"]
+            + f" (#{mission['id']})**  \n"
+            + "  \n".join(summary["details"])
+            + "  \nOnglet Missions : bouton « Reprendre » une fois la condition levée."
+        )
+        return
     st.success(
         f"Mission #{mission['id']} : rapport `{mission['status']}` — "
         f"{mission['llm_calls_used']} appel(s), {mission['cost_eur']:.4f} €"
@@ -2511,6 +2520,22 @@ def render_mission_detail(client: SolutionPlansAPIClient) -> None:
         st.error("**" + summary["headline"] + "**  \n" + "  \n".join(summary["details"]))
         with st.expander("Détail technique de l'échec"):
             st.json(mission.get("failure") or {})
+    elif summary["kind"] == "paused":
+        # v1.3.7 — pause récupérable : ni succès ni échec ; reprise explicite par l'opérateur
+        # (jamais automatique), refusée si le modèle / fournisseur / build ne correspondent plus.
+        st.warning("**" + summary["headline"] + "**  \n" + "  \n".join(summary["details"]))
+        with st.expander("Checkpoint et cause de l'interruption"):
+            st.json({"checkpoint": mission.get("checkpoint"), "failure": mission.get("failure")})
+        if mission.get("resume_available") and st.button(
+            "Reprendre la mission (condition externe levée)", key=f"mission_resume_{mission_id}"
+        ):
+            try:
+                with st.spinner("Reprise : rejeu des appels validés, puis poursuite…"):
+                    client.resume_mission(int(mission_id))
+            except APIError as exc:
+                st.error(f"Reprise refusée ou échouée : {exc}")
+            else:
+                st.rerun()
     elif summary["kind"] == "running":
         st.info(
             summary["headline"] + " — " + " ".join(summary["details"]) + " Utilisez « Rafraîchir »."

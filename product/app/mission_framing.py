@@ -139,4 +139,17 @@ def framing_summary_for_experts(framing: FramingOutput) -> str:
             "Contestation soulevée au cadrage : "
             f"{framing.contestation.target} — {framing.contestation.argument}"
         )
+    # v1.3.7 (B17) — les propositions explicites de la demande sont montrées à TOUTES les
+    # perspectives (dossier identique, aucune position d'expert) afin que chacune déclare sa prise
+    # de position ; le cadrage ne les juge pas, le dossier non plus.
+    proposals = [p for p in framing.explicit_proposals if p.label.strip()]
+    if proposals:
+        lines.append(
+            "Propositions explicites de la demande (à évaluer, non à adopter) : "
+            + " ; ".join(
+                f"« {p.label.strip()} » [{p.kind}]"
+                + (f" portée par {p.proposed_by.strip()}" if p.proposed_by.strip() else "")
+                for p in proposals
+            )
+        )
     return "\n".join(lines)

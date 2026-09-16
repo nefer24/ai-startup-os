@@ -185,6 +185,38 @@ class BudgetLedger:
             "refusals": list(self.refusals),
         }
 
+    # --- v1.3.7 — checkpoint / reprise : état interne exact, restauré à l'identique -----------
+    def dump_state(self) -> dict[str, Any]:
+        """État interne complet (plafonds, compteurs, expositions, refus) — sans barème : le
+        barème vient toujours de la configuration courante, contrôlée à la reprise."""
+        return {
+            "max_calls": self.max_calls,
+            "max_cost_eur": self.max_cost_eur,
+            "calls_used": self.calls_used,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cost_eur": self.cost_eur,
+            "refusals": [dict(r) for r in self.refusals],
+            "uncertain_cost_upper_bound_eur": self.uncertain_cost_upper_bound_eur,
+            "uncertain_attempts": self.uncertain_attempts,
+            "uncertain_exposures": [dict(e) for e in self.uncertain_exposures],
+        }
+
+    def load_state(self, state: dict[str, Any]) -> None:
+        """Restaure un état produit par `dump_state` (rejeu d'un appel validé, reprise)."""
+        self.max_calls = int(state.get("max_calls", self.max_calls))
+        self.max_cost_eur = float(state.get("max_cost_eur", self.max_cost_eur))
+        self.calls_used = int(state.get("calls_used", 0))
+        self.input_tokens = int(state.get("input_tokens", 0))
+        self.output_tokens = int(state.get("output_tokens", 0))
+        self.cost_eur = float(state.get("cost_eur", 0.0))
+        self.refusals = [dict(r) for r in state.get("refusals", [])]
+        self.uncertain_cost_upper_bound_eur = float(
+            state.get("uncertain_cost_upper_bound_eur", 0.0)
+        )
+        self.uncertain_attempts = int(state.get("uncertain_attempts", 0))
+        self.uncertain_exposures = [dict(e) for e in state.get("uncertain_exposures", [])]
+
 
 # =====================================================================================
 # Incrément 2 — budget adaptatif : plafonds durs par classe, réservation des étapes aval.

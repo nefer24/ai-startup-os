@@ -32,6 +32,17 @@ La classification technique (relançable ou non) et la sémantique financière s
 adaptateur fournisseur qui dispose d'une garantie explicite et documentée peut la porter sur
 l'exception (`rejected_before_processing = True` / `False`) : elle prime alors sur la règle
 générique. Aucune garantie de ce type n'est inventée ici.
+
+Troisième classe (v1.3.7, post-Mission #11) — **terminale récupérable** : la requête est valide et
+le fournisseur joignable, mais une **condition externe** exige une intervention humaine avant que
+tout appel puisse réussir (crédit insuffisant, plafond de dépense atteint, quota d'organisation,
+facturation suspendue). Relancer ne changerait rien (comme une erreur permanente), mais la mission
+n'est pas intrinsèquement invalide : elle doit être **mise en pause durablement** puis reprise une
+fois la condition levée. La détection lit la sémantique du fournisseur (code 402, types
+`billing_error` / `insufficient_quota` / `*spend_limit*`, drapeau `recoverable_external_condition`
+d'un adaptateur, vocabulaire de crédit / facturation / quota dans une erreur 400 / 403 / 429 sans
+`Retry-After`), jamais le seul statut HTTP : un 400 de validation reste permanent, un 429 de débit
+reste transitoire.
 """
 
 from __future__ import annotations
@@ -42,8 +53,53 @@ from typing import Any
 
 TRANSIENT_PROVIDER_ERROR = "transient_provider_error"
 PERMANENT_PROVIDER_ERROR = "permanent_provider_error"
+TERMINAL_RECOVERABLE_PROVIDER_ERROR = "terminal_recoverable_provider_error"
 LOCAL_ERROR = "local_error"
 UNKNOWN_ERROR = "unknown_error"
+
+# Conditions externes récupérables (sémantique fournisseur, pas seulement le statut HTTP).
+RECOVERABLE_STATUS_CODES = frozenset({402})
+RECOVERABLE_ERROR_TYPES = frozenset(
+    {
+        "billing_error",
+        "insufficient_quota",
+        "insufficient_credit",
+        "insufficient_funds",
+        "credit_balance_too_low",
+        "enforced_spend_limit_reached",
+        "spend_limit_reached",
+        "spend_limit_exceeded",
+        "quota_exceeded",
+        "usage_limit_reached",
+    }
+)
+# Statuts / types sous lesquels un fournisseur peut exprimer une condition externe dans le message.
+_RECOVERABLE_CARRIER_STATUS_CODES = frozenset({400, 402, 403, 429})
+_RECOVERABLE_CARRIER_ERROR_TYPES = frozenset(
+    {"invalid_request_error", "billing_error", "permission_error", "rate_limit_error"}
+)
+# Vocabulaire générique (anglais, langue des API) d'une condition externe à lever par l'opérateur.
+_RECOVERABLE_MESSAGE_HINTS = (
+    "credit balance",
+    "insufficient credit",
+    "insufficient funds",
+    "out of credit",
+    "billing",
+    "payment required",
+    "spend limit",
+    "spending limit",
+    "usage limit",
+    "quota",
+    "plan limit",
+    "top up",
+    "purchase credits",
+)
+# Ce que l'opérateur doit faire avant la reprise (texte générique, sans donnée fournisseur).
+RECOVERABLE_INTERVENTION = (
+    "lever la condition externe chez le fournisseur (recharger le crédit, relever le plafond de "
+    "dépense ou le quota, régulariser la facturation), puis reprendre la mission "
+    "(POST /missions/{id}/resume)"
+)
 
 # Codes HTTP que les fournisseurs emploient pour des états temporaires (surcharge, débit, panne).
 TRANSIENT_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504, 529})
@@ -111,6 +167,45 @@ class ProviderErrorInfo:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @property
+    def recoverable(self) -> bool:
+        """Condition externe récupérable : pause durable puis reprise, jamais une relance."""
+        return self.category == TERMINAL_RECOVERABLE_PROVIDER_ERROR
+
+
+def _recoverable_flag_of(exc: BaseException) -> bool | None:
+    """Garantie explicite d'un adaptateur : condition externe récupérable (booléen strict)."""
+    flag = getattr(exc, "recoverable_external_condition", None)
+    return flag if isinstance(flag, bool) else None
+
+
+def is_recoverable_external_condition(
+    status_code: int | None,
+    error_type: str,
+    message: str,
+    *,
+    retry_after_seconds: float | None = None,
+    explicit_flag: bool | None = None,
+) -> bool:
+    """Condition externe à lever par l'opérateur (crédit, plafond de dépense, quota, facturation).
+
+    Ordre : drapeau explicite de l'adaptateur → code 402 → type explicite → message à vocabulaire
+    de crédit / facturation / quota porté par un 400 / 403 / 429 (ou un type porteur) **sans**
+    `Retry-After` (un 429 de débit annonce son délai : il reste transitoire). Aucun autre cas.
+    """
+    if explicit_flag is not None:
+        return explicit_flag
+    if status_code in RECOVERABLE_STATUS_CODES or error_type in RECOVERABLE_ERROR_TYPES:
+        return True
+    carrier = (
+        status_code in _RECOVERABLE_CARRIER_STATUS_CODES
+        or error_type in _RECOVERABLE_CARRIER_ERROR_TYPES
+    )
+    if not carrier or retry_after_seconds is not None:
+        return False
+    lowered = (message or "").lower()
+    return any(hint in lowered for hint in _RECOVERABLE_MESSAGE_HINTS)
 
 
 def _usage_of(exc: BaseException) -> tuple[int, int] | None:
@@ -241,6 +336,16 @@ def classify_provider_error(
     )
     if status_code is None and not error_type and isinstance(exc, local_types):
         return _info(LOCAL_ERROR, False)
+    # Condition externe récupérable AVANT la règle permanente : un 400 / 402 / 403 / 429 qui dit
+    # « crédit », « facturation », « quota » n'est ni une requête invalide ni un pic de débit.
+    if is_recoverable_external_condition(
+        status_code,
+        error_type,
+        message,
+        retry_after_seconds=retry_after,
+        explicit_flag=_recoverable_flag_of(exc),
+    ):
+        return _info(TERMINAL_RECOVERABLE_PROVIDER_ERROR, False)
     if error_type in PERMANENT_ERROR_TYPES or status_code in PERMANENT_STATUS_CODES:
         return _info(PERMANENT_PROVIDER_ERROR, False)
     if error_type in TRANSIENT_ERROR_TYPES or status_code in TRANSIENT_STATUS_CODES:

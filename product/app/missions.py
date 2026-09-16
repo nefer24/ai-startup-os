@@ -11,6 +11,8 @@ jusqu'à une action CEO explicite.
 
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import json
 import time
 from collections.abc import Callable
@@ -106,6 +108,7 @@ from app.mission_deliberation import (
     material_fact_questions,
     select_contradictor,
     select_research_questions,
+    select_steelman_target,
     strawman_flags,
 )
 from app.mission_exploration import (
@@ -131,6 +134,8 @@ from app.mission_framing import (
 from app.mission_report import build_situation_report
 from app.mission_research import (
     RESEARCH_CALL_TYPE,
+    ResearchFinding,
+    ResearchResult,
     build_research_provider,
     classify_research_outcome,
 )
@@ -167,6 +172,8 @@ from app.provider_errors import (
     COST_UNCERTAIN,
     LOCAL_ERROR,
     PERMANENT_PROVIDER_ERROR,
+    RECOVERABLE_INTERVENTION,
+    TERMINAL_RECOVERABLE_PROVIDER_ERROR,
     TRANSIENT_PROVIDER_ERROR,
     ProviderErrorInfo,
     classify_provider_error,
@@ -229,6 +236,27 @@ class MissionNotFoundError(Exception):
 
 class InvalidMissionStatusError(Exception):
     """Action CEO impossible dans le statut courant."""
+
+
+class MissionResumeRefusedError(Exception):
+    """v1.3.7 — reprise refusée : identité incompatible ou état non reprenable (fail closed)."""
+
+    def __init__(self, reason: str, detail: dict[str, Any]) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+# v1.3.7 — statut d'une mission interrompue par une condition externe récupérable : ni succès,
+# ni échec, ni benchmark consommé ; reprenable après intervention de l'opérateur.
+PAUSED_STATUS = "paused_recoverable"
+CHECKPOINT_VERSION = 1
+# §13 — politiques de reprise (abstraction seulement ; aucun repli multi-fournisseur) :
+# `benchmark` exige en plus l'identité stricte du processus (commit, freeze attendu, état propre) ;
+# `production` tolère un commit différent (journalisé) mais jamais un autre modèle, un autre
+# adaptateur fournisseur ou une autre configuration intellectuelle.
+RESUME_POLICY_BENCHMARK = "benchmark"
+RESUME_POLICY_PRODUCTION = "production"
 
 
 @dataclass
@@ -301,12 +329,34 @@ class _Run:
     deliberation_reserve: int | None = None
     deliberation_plan: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, Any] = field(default_factory=dict)
+    # v1.3.7 — checkpoint / reprise. `call_cache` : chaque appel logique VALIDÉ de cette exécution
+    # (clé déterministe, réponse, état du registre après) ; `replay` : appels validés d'une
+    # exécution antérieure à rejouer sans appel fournisseur ; `replaying` : vrai tant que le rejeu
+    # sert les appels (journal marqué) ; `pause` : interruption récupérable en cours.
+    call_cache: list[dict[str, Any]] = field(default_factory=list)
+    research_cache: list[dict[str, Any]] = field(default_factory=list)
+    replay: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    replay_research: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    replay_pending: int = 0
+    replaying: bool = False
+    replayed_calls: int = 0
+    replay_divergences: int = 0
+    resume_count: int = 0
+    policy: str = RESUME_POLICY_PRODUCTION
+    pause: dict[str, Any] = field(default_factory=dict)
+    mission_initial: dict[str, Any] = field(default_factory=dict)
+    ledger_initial: dict[str, Any] = field(default_factory=dict)
+    current_step: str = ""
 
 
 def _journal(
     session: Session, run: _Run, step: str, entry_type: str, actor: str, payload: dict[str, Any]
 ) -> None:
     run.seq += 1
+    if run.replaying:
+        # Reprise : les entrées produites pendant le rejeu des appels validés sont marquées, jamais
+        # confondues avec l'exécution d'origine (journal append-only, rien n'est réécrit).
+        payload = {**payload, "replayed_from_checkpoint": True, "resume_count": run.resume_count}
     session.add(
         MissionJournalEntry(
             mission_id=run.mission.id,
@@ -318,6 +368,105 @@ def _journal(
         )
     )
     session.commit()
+
+
+# --- v1.3.7 — clé de rejeu d'un appel logique --------------------------------------------------
+def _call_key(
+    step: str, actor: str, call_type: str, system: str, prompt: str, max_tokens: int
+) -> str:
+    """Clé déterministe d'un appel logique : étape, acteur, type, limite de sortie et empreinte du
+    prompt. Un appel rejoué est un appel dont TOUS ces éléments sont identiques."""
+    digest = hashlib.sha256()
+    for part in (step, actor, call_type, str(max_tokens), prompt_fingerprint(system, prompt)):
+        digest.update(part.encode("utf-8"))
+        digest.update(b"\x1f")
+    return digest.hexdigest()
+
+
+def _response_to_dict(response: LLMResponse) -> dict[str, Any]:
+    return {
+        "text": response.text,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
+        "stop_reason": response.stop_reason,
+        "content_blocks": response.content_blocks,
+        "reasoning_policy": response.reasoning_policy,
+    }
+
+
+def _response_from_dict(data: dict[str, Any]) -> LLMResponse:
+    return LLMResponse(
+        text=str(data.get("text", "")),
+        usage=LLMUsage(
+            input_tokens=int(data.get("input_tokens", 0)),
+            output_tokens=int(data.get("output_tokens", 0)),
+        ),
+        stop_reason=str(data.get("stop_reason", "")),
+        content_blocks=data.get("content_blocks"),
+        reasoning_policy=data.get("reasoning_policy"),
+    )
+
+
+def _counters(run: _Run) -> dict[str, int]:
+    return {
+        "logical_calls": run.logical_calls,
+        "provider_attempts": run.provider_attempts,
+        "provider_retries": run.provider_retries,
+        "provider_failures": run.provider_failures,
+    }
+
+
+def _take_replay(run: _Run, key: str) -> dict[str, Any] | None:
+    """Consomme l'entrée de rejeu correspondant à la clé, ou None (appel non encore validé)."""
+    entries = run.replay.get(key)
+    if not entries:
+        return None
+    entry = entries.pop(0)
+    run.replay_pending -= 1
+    if run.replay_pending <= 0:
+        run.replaying = False
+    return entry
+
+
+def _replay_divergence(session: Session, run: _Run, step: str, actor: str, key: str) -> None:
+    """Un appel non trouvé dans le checkpoint alors que des appels validés restent à rejouer : le
+    pipeline n'a pas reproduit la même séquence. Jamais silencieux ; en politique benchmark,
+    la reprise s'arrête (aucun appel réel hors séquence)."""
+    run.replay_divergences += 1
+    run.replaying = False
+    remaining = sum(len(v) for v in run.replay.values())
+    run.replay_pending = 0
+    _journal(
+        session,
+        run,
+        step,
+        "checkpoint_replay_divergence",
+        actor,
+        {
+            "key": key,
+            "replayed_calls": run.replayed_calls,
+            "unreplayed_calls_remaining": remaining,
+            "policy": run.policy,
+            "action": "mission_failed" if run.policy == RESUME_POLICY_BENCHMARK else "real_call",
+        },
+    )
+    if run.policy == RESUME_POLICY_BENCHMARK:
+        raise MissionCallFailedError(
+            {
+                "reason": "checkpoint_replay_divergence",
+                "kind": "resume",
+                "step": step,
+                "actor": actor,
+                "category": LOCAL_ERROR,
+                "error_category": LOCAL_ERROR,
+                "retryable": False,
+                "message": (
+                    "la reprise n'a pas reproduit la séquence d'appels validée par le checkpoint "
+                    f"({remaining} appel(s) validé(s) non rejoué(s)) ; politique benchmark : "
+                    "aucun appel réel hors séquence"
+                ),
+            }
+        )
 
 
 def _sync_budget(session: Session, run: _Run) -> None:
@@ -383,6 +532,49 @@ def _call(
             **(planned_extra or {}),
         },
     )
+    run.current_step = step
+    # v1.3.7 — reprise : un appel logique déjà validé par une exécution antérieure est REJOUÉ
+    # depuis le checkpoint (même clé : étape, acteur, type, limite, prompt) — aucun appel
+    # fournisseur, aucun coût nouveau, registre restauré à l'état exact d'après cet appel.
+    key = _call_key(step, actor, call_type, system, prompt, max_tokens)
+    if run.replay_pending > 0:
+        cached = _take_replay(run, key)
+        if cached is None:
+            _replay_divergence(session, run, step, actor, key)
+        else:
+            response = _response_from_dict(cached["response"])
+            run.logical_calls += 1
+            run.replayed_calls += 1
+            run.ledger.load_state(cached["ledger_after"])
+            counters = cached.get("counters_after", {})
+            run.provider_attempts = int(counters.get("provider_attempts", run.provider_attempts))
+            run.provider_retries = int(counters.get("provider_retries", run.provider_retries))
+            run.provider_failures = int(counters.get("provider_failures", run.provider_failures))
+            _sync_budget(session, run)
+            run.call_cache.append({**cached, "replayed": True})
+            _journal(
+                session,
+                run,
+                step,
+                "call_replayed",
+                actor,
+                {
+                    "call_type": call_type,
+                    "logical_call_id": f"LC-{run.logical_calls}",
+                    "original_logical_call_id": cached.get("logical_call_id"),
+                    "provider": "anthropic",
+                    "model": settings.anthropic_model,
+                    "provider_call_made": False,
+                    "replayed_from_checkpoint": True,
+                    "input_tokens": response.usage.input_tokens,
+                    "output_tokens": response.usage.output_tokens,
+                    "max_tokens": max_tokens,
+                    "stop_reason": response.stop_reason,
+                    "cost_eur_new": 0.0,
+                    "budget": run.ledger.snapshot(),
+                },
+            )
+            return response
     client = observed(
         llm,
         session,
@@ -409,6 +601,20 @@ def _call(
     )
     cost = run.ledger.record(response.usage)
     _sync_budget(session, run)
+    run.call_cache.append(
+        {
+            "key": key,
+            "step": step,
+            "actor": actor,
+            "call_type": call_type,
+            "max_tokens": max_tokens,
+            "logical_call_id": f"LC-{run.logical_calls}",
+            "attempt": attempt,
+            "response": _response_to_dict(response),
+            "ledger_after": run.ledger.dump_state(),
+            "counters_after": _counters(run),
+        }
+    )
     _journal(
         session,
         run,
@@ -565,6 +771,9 @@ def _call_with_retries(
                 reason = refusal_reason
             elif info.category == TRANSIENT_PROVIDER_ERROR:
                 reason = "transient_retries_exhausted"
+            elif info.category == TERMINAL_RECOVERABLE_PROVIDER_ERROR:
+                # v1.3.7 — condition externe récupérable : aucune relance, pause durable.
+                reason = TERMINAL_RECOVERABLE_PROVIDER_ERROR
             elif info.category == PERMANENT_PROVIDER_ERROR:
                 reason = "permanent_provider_error"
             elif info.category == LOCAL_ERROR:
@@ -585,6 +794,8 @@ def _call_with_retries(
                 "retries_total_max": settings.mission_provider_max_retries_total,
                 "total_retry_cap_reached": total_cap_reached and info.retryable,
                 **info.to_dict(),
+                "recoverable": info.recoverable,
+                "required_intervention": RECOVERABLE_INTERVENTION if info.recoverable else "",
                 **cost_view,
             }
             raise MissionCallFailedError(failure) from exc
@@ -1283,7 +1494,11 @@ def run_mission(
             price_out_per_mtok=settings.llm_price_output_eur_per_mtok,
         ),
         budget_source=budget_source,
+        policy=(RESUME_POLICY_BENCHMARK if benchmark.get("enforced") else RESUME_POLICY_PRODUCTION),
     )
+    # v1.3.7 — état initial figé pour une reprise idempotente (le rejeu repart de la création).
+    run.mission_initial = _mission_initial_state(mission)
+    run.ledger_initial = run.ledger.dump_state()
     _journal(
         session,
         run,
@@ -1298,8 +1513,29 @@ def run_mission(
             "budget": run.ledger.snapshot(),
             "build_identity": identity.compact(),
             "benchmark": benchmark,
+            "resume_policy": run.policy,
         },
     )
+    _execute(session, run, llm, settings, benchmark)
+    return mission
+
+
+def _mission_initial_state(mission: Mission) -> dict[str, Any]:
+    """Champs de la mission que le pipeline modifie et que le rejeu doit retrouver à l'identique."""
+    return {
+        "effective_class": mission.effective_class,
+        "class_is_provisional": mission.class_is_provisional,
+        "max_llm_calls": mission.max_llm_calls,
+        "max_cost_eur": mission.max_cost_eur,
+    }
+
+
+def _execute(
+    session: Session, run: _Run, llm: LLMClient, settings: Settings, benchmark: dict[str, Any]
+) -> None:
+    """Exécution (ou reprise) du pipeline complet avec ses trois issues : normale, échec
+    définitif (`failed`), interruption récupérable (`paused_recoverable`, checkpoint)."""
+    mission = run.mission
     class_info: dict[str, Any] = {
         "declared": mission.declared_class,
         "effective": mission.effective_class,
@@ -1310,9 +1546,13 @@ def run_mission(
         try:
             _run_pipeline(session, run, llm, settings, class_info)
         except MissionCallFailedError as exc:
-            # B10 — échec définitif d'un appel fournisseur : état terminal explicite, données
-            # déjà produites conservées, rapport diagnostic partiel, aucune recommandation.
-            _fail_mission(session, run, exc.failure)
+            if exc.failure.get("category") == TERMINAL_RECOVERABLE_PROVIDER_ERROR:
+                # v1.3.7 — condition externe récupérable : pause durable, checkpoint, reprise.
+                _pause_mission(session, run, exc.failure, settings, benchmark)
+            else:
+                # B10 — échec définitif d'un appel fournisseur : état terminal explicite, données
+                # déjà produites conservées, rapport diagnostic partiel, aucune recommandation.
+                _fail_mission(session, run, exc.failure)
     except Exception as exc:
         mission.status = "failed"
         mission.stop_reason = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -1327,6 +1567,366 @@ def run_mission(
         session.commit()
         _journal(session, run, "mission", "failed", "facilitateur", {"error": mission.stop_reason})
         raise
+
+
+# --- v1.3.7 — pause récupérable, checkpoint, reprise -----------------------------------------
+def _identity_for_checkpoint(
+    identity_raw: dict[str, Any], settings: Settings, benchmark: dict[str, Any]
+) -> dict[str, Any]:
+    """Identité attendue à la reprise : jamais de secret, jamais de contenu utilisateur."""
+    return {
+        "process_commit": identity_raw.get("process_commit"),
+        "git_commit_short": identity_raw.get("git_commit_short"),
+        "product_version": identity_raw.get("product_version"),
+        "provider_adapter": identity_raw.get("provider_adapter"),
+        "provider_sdk_version": identity_raw.get("provider_sdk_version"),
+        "model": settings.anthropic_model,
+        "mission_config_fingerprint": identity_raw.get("mission_config_fingerprint"),
+        "reasoning_policy_fingerprint": identity_raw.get("reasoning_policy_fingerprint"),
+        "expected_freeze": benchmark.get("expected_freeze", ""),
+        "benchmark_enforced": bool(benchmark.get("enforced")),
+        "benchmark_strict": bool(benchmark.get("strict")),
+    }
+
+
+def _build_checkpoint(
+    run: _Run, settings: Settings, benchmark: dict[str, Any], failure: dict[str, Any]
+) -> dict[str, Any]:
+    """Checkpoint durable d'une mission interrompue par une condition externe récupérable.
+
+    Contenu : dernière étape durable et étapes faites, appels logiques validés (rejouables),
+    résultats de recherche validés, budget consommé (état exact du registre), état initial de la
+    mission et du registre (le rejeu repart de la création), identité du build et du modèle
+    attendus, politique de reprise, appel interrompu et intervention requise. Aucun secret : les
+    réglages ne sont représentés que par leurs empreintes ; les textes sont ceux du journal."""
+    m = run.mission
+    identity_raw = json.loads(m.build_identity_json) if m.build_identity_json else {}
+    return {
+        "version": CHECKPOINT_VERSION,
+        "mission_id": m.id,
+        "created_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "resume_count": run.resume_count,
+        "policy": run.policy,
+        "budget_source": run.budget_source,
+        "identity": _identity_for_checkpoint(identity_raw, settings, benchmark),
+        "mission_initial": dict(run.mission_initial),
+        "ledger_initial": dict(run.ledger_initial),
+        "ledger_at_pause": run.ledger.dump_state(),
+        "budget_at_pause": _budget_snapshot(run),
+        "steps_done": list(run.steps_done),
+        "last_durable_step": run.steps_done[-1] if run.steps_done else "",
+        "interrupted_step": str(failure.get("step", run.current_step)),
+        "next_transition": {
+            "step": str(failure.get("step", run.current_step)),
+            "call_type": failure.get("call_type", ""),
+            "logical_call_id": failure.get("logical_call_id", ""),
+        },
+        "logical_calls_completed": len(run.call_cache),
+        "calls": [{k: v for k, v in c.items() if k != "replayed"} for c in run.call_cache],
+        "research": list(run.research_cache),
+        "interruption": {
+            "reason": failure.get("reason"),
+            "category": failure.get("category"),
+            "status_code": failure.get("status_code"),
+            "error_type": failure.get("error_type"),
+            "message": str(failure.get("message", ""))[:300],
+            "provider": failure.get("provider"),
+            "model": failure.get("model"),
+            "required_intervention": failure.get("required_intervention", ""),
+        },
+    }
+
+
+def checkpoint_view(checkpoint: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Vue API / rapport d'un checkpoint : tout sauf le contenu des appels (dans le journal)."""
+    if not checkpoint:
+        return None
+    view = {k: v for k, v in checkpoint.items() if k not in ("calls", "research")}
+    view["calls_count"] = len(checkpoint.get("calls", []))
+    view["research_count"] = len(checkpoint.get("research", []))
+    return view
+
+
+def _mark_interrupted_step(run: _Run, step: str, status: str) -> None:
+    """§7 — une étape interrompue en plein vol ne doit jamais être décrite comme achevée, sautée
+    ou non requise : son état porte l'interruption (steelman : `pending` → `interrupted…`)."""
+    if (
+        step == "steelman"
+        and run.steelman.get("required")
+        and run.steelman.get("status")
+        in {
+            "pending",
+            "not_required",
+        }
+    ):
+        run.steelman["status"] = status
+    run.step_outcomes.setdefault(step, {})
+    run.step_outcomes[step].update({"interrupted": True, "interruption_status": status})
+
+
+def _pause_mission(
+    session: Session,
+    run: _Run,
+    failure: dict[str, Any],
+    settings: Settings,
+    benchmark: dict[str, Any],
+) -> None:
+    """v1.3.7 — interruption récupérable : `paused_recoverable`, checkpoint, rapport
+    d'interruption. Ni succès, ni échec, ni benchmark consommé ; aucune recommandation."""
+    m = run.mission
+    run.failure = failure
+    run.pause = {
+        "interrupted_step": str(failure.get("step", run.current_step)),
+        "actor": failure.get("actor", ""),
+        "call_type": failure.get("call_type", ""),
+        "logical_call_id": failure.get("logical_call_id", ""),
+        "reason": failure.get("reason"),
+        "category": failure.get("category"),
+        "status_code": failure.get("status_code"),
+        "error_type": failure.get("error_type"),
+        "message": str(failure.get("message", ""))[:300],
+        "required_intervention": failure.get("required_intervention", RECOVERABLE_INTERVENTION),
+        "resume_possible": True,
+        "resume_endpoint": f"POST /missions/{m.id}/resume",
+        "policy": run.policy,
+        "resume_count": run.resume_count,
+    }
+    run.stop_reason = "interrupted_recoverable"
+    _mark_interrupted_step(run, run.pause["interrupted_step"], "interrupted_recoverable")
+    checkpoint = _build_checkpoint(run, settings, benchmark, failure)
+    m.checkpoint_json = json.dumps(checkpoint, ensure_ascii=False, default=str)
+    m.failure_json = json.dumps(failure, ensure_ascii=False, default=str)
+    session.commit()
+    _journal(
+        session,
+        run,
+        "mission",
+        "paused_recoverable",
+        "facilitateur",
+        {
+            **{k: v for k, v in failure.items() if k != "message"},
+            "message": str(failure.get("message", ""))[:300],
+            "checkpoint": checkpoint_view(checkpoint),
+            "provider_attempts": run.provider_attempts,
+            "provider_retries": run.provider_retries,
+            "provider_failures": run.provider_failures,
+            "budget": run.ledger.snapshot(),
+        },
+    )
+    class_info = {
+        "declared": m.declared_class,
+        "effective": m.effective_class,
+        "provisional": m.class_is_provisional,
+        "escalation": "",
+    }
+    _finalize(session, run, class_info, paused=True)
+
+
+def resume_compatibility(
+    expected: dict[str, Any], identity: BuildIdentity, settings: Settings, policy: str
+) -> dict[str, Any]:
+    """§12 — contrôle d'identité avant reprise (jamais de repli silencieux, D20/D26 respectés).
+
+    Toujours exigés : même modèle, même adaptateur fournisseur, même empreinte de configuration de
+    mission, même empreinte de politique de raisonnement. Politique benchmark : même commit du
+    processus, freeze attendu satisfait, état expérimental propre (D26). Politique production : un
+    commit différent est admis mais journalisé."""
+    mismatches: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    def _check(name: str, exp: Any, cur: Any, *, strict: bool) -> None:
+        if exp is None or exp == "":
+            return
+        if exp != cur:
+            (mismatches if strict else warnings).append(
+                {"field": name, "expected": exp, "current": cur}
+            )
+
+    _check("model", expected.get("model"), settings.anthropic_model, strict=True)
+    _check(
+        "provider_adapter", expected.get("provider_adapter"), identity.provider_adapter, strict=True
+    )
+    _check(
+        "mission_config_fingerprint",
+        expected.get("mission_config_fingerprint"),
+        identity.mission_config_fingerprint,
+        strict=True,
+    )
+    _check(
+        "reasoning_policy_fingerprint",
+        expected.get("reasoning_policy_fingerprint"),
+        identity.reasoning_policy_fingerprint,
+        strict=True,
+    )
+    benchmark_mode = policy == RESUME_POLICY_BENCHMARK
+    _check(
+        "process_commit",
+        expected.get("process_commit"),
+        identity.process_commit,
+        strict=benchmark_mode,
+    )
+    _check(
+        "provider_sdk_version",
+        expected.get("provider_sdk_version"),
+        identity.provider_sdk_version,
+        strict=benchmark_mode,
+    )
+    if benchmark_mode:
+        check = benchmark_check(identity, str(expected.get("expected_freeze") or ""))
+        if not check["match"]:
+            mismatches.append(
+                {
+                    "field": "benchmark",
+                    "expected": expected.get("expected_freeze") or "clean_state",
+                    "current": check.get("reason"),
+                }
+            )
+    return {
+        "compatible": not mismatches,
+        "policy": policy,
+        "mismatches": mismatches,
+        "warnings": warnings,
+        "expected": expected,
+        "current": {
+            "model": settings.anthropic_model,
+            "provider_adapter": identity.provider_adapter,
+            "provider_sdk_version": identity.provider_sdk_version,
+            "process_commit": identity.process_commit,
+            "mission_config_fingerprint": identity.mission_config_fingerprint,
+            "reasoning_policy_fingerprint": identity.reasoning_policy_fingerprint,
+        },
+    }
+
+
+def _research_from_dict(data: dict[str, Any]) -> ResearchResult:
+    usage = data.get("usage")
+    return ResearchResult(
+        question=str(data.get("question", "")),
+        status=data.get("status", "error"),
+        provider=str(data.get("provider", "")),
+        findings=[
+            ResearchFinding(
+                source=str(f.get("source", "")),
+                title=str(f.get("title", "")),
+                date=str(f.get("date", "")),
+                excerpt=str(f.get("excerpt", "")),
+                reliability=str(f.get("reliability", "unknown")),
+            )
+            for f in data.get("findings", [])
+        ],
+        note=str(data.get("note", "")),
+        usage=(
+            LLMUsage(
+                input_tokens=int(usage.get("input_tokens", 0)),
+                output_tokens=int(usage.get("output_tokens", 0)),
+            )
+            if isinstance(usage, dict)
+            else None
+        ),
+        answer_summary=str(data.get("answer_summary", "")),
+        answer_found=data.get("answer_found"),
+        requires_internal_data=bool(data.get("requires_internal_data", False)),
+        reason=str(data.get("reason", "")),
+    )
+
+
+def resume_mission(
+    session: Session, llm: LLMClient, mission_id: int, settings: Settings
+) -> Mission:
+    """v1.3.7 — reprise idempotente d'une mission `paused_recoverable`.
+
+    Contrôle d'identité (fail closed) → statut `running` → rejeu des appels logiques validés
+    depuis le checkpoint (aucun appel fournisseur, budget consommé restauré à l'identique) →
+    poursuite à partir du premier appel non validé → issue normale, nouvel échec ou nouvelle
+    pause (checkpoint mis à jour). Une mission non en pause n'est jamais reprise."""
+    mission = get_mission(session, mission_id)
+    if mission.status != PAUSED_STATUS:
+        raise InvalidMissionStatusError(
+            f"la mission est en statut « {mission.status} » : seule une mission "
+            f"« {PAUSED_STATUS} » peut être reprise"
+        )
+    checkpoint = json.loads(mission.checkpoint_json) if mission.checkpoint_json else {}
+    if not checkpoint or checkpoint.get("version") != CHECKPOINT_VERSION:
+        raise MissionResumeRefusedError(
+            "checkpoint_unavailable",
+            {"mission_id": mission_id, "version": checkpoint.get("version")},
+        )
+    policy = str(checkpoint.get("policy", RESUME_POLICY_PRODUCTION))
+    identity = compute_build_identity(settings)
+    compat = resume_compatibility(checkpoint.get("identity", {}), identity, settings, policy)
+    last_seq = session.execute(
+        select(MissionJournalEntry.seq)
+        .where(MissionJournalEntry.mission_id == mission_id)
+        .order_by(MissionJournalEntry.seq.desc())
+        .limit(1)
+    ).scalar()
+    run = _Run(
+        mission=mission,
+        ledger=BudgetLedger(
+            max_calls=mission.max_llm_calls,
+            max_cost_eur=mission.max_cost_eur,
+            price_in_per_mtok=settings.llm_price_input_eur_per_mtok,
+            price_out_per_mtok=settings.llm_price_output_eur_per_mtok,
+        ),
+        seq=int(last_seq or 0),
+        policy=policy,
+        resume_count=int(checkpoint.get("resume_count", 0)) + 1,
+    )
+    if not compat["compatible"]:
+        _journal(
+            session,
+            run,
+            "mission",
+            "resume_refused",
+            "facilitateur",
+            {"reason": "identity_mismatch", **compat, "build_identity": identity.compact()},
+        )
+        raise MissionResumeRefusedError("identity_mismatch", compat)
+    # Rejeu : la mission repart de son état de création ; chaque appel validé est resservi.
+    initial = checkpoint.get("mission_initial", {})
+    mission.effective_class = str(initial.get("effective_class", mission.effective_class))
+    mission.class_is_provisional = bool(
+        initial.get("class_is_provisional", mission.class_is_provisional)
+    )
+    mission.max_llm_calls = int(initial.get("max_llm_calls", mission.max_llm_calls))
+    mission.max_cost_eur = float(initial.get("max_cost_eur", mission.max_cost_eur))
+    mission.status = "running"
+    mission.stop_reason = ""
+    mission.failure_json = ""
+    session.commit()
+    run.ledger.load_state(checkpoint.get("ledger_initial", {}))
+    run.mission_initial = dict(initial)
+    run.ledger_initial = dict(checkpoint.get("ledger_initial", {}))
+    run.budget_source = str(checkpoint.get("budget_source", "class_ceiling"))
+    for entry in checkpoint.get("calls", []):
+        run.replay.setdefault(str(entry["key"]), []).append(entry)
+    run.replay_pending = len(checkpoint.get("calls", []))
+    run.replaying = run.replay_pending > 0
+    for entry in checkpoint.get("research", []):
+        run.replay_research.setdefault(str(entry["key"]), []).append(entry)
+    benchmark = {
+        "expected_freeze": checkpoint.get("identity", {}).get("expected_freeze", ""),
+        "enforced": bool(checkpoint.get("identity", {}).get("benchmark_enforced")),
+        "strict": bool(checkpoint.get("identity", {}).get("benchmark_strict")),
+    }
+    _journal(
+        session,
+        run,
+        "mission",
+        "resumed",
+        "facilitateur",
+        {
+            "resume_count": run.resume_count,
+            "policy": policy,
+            "compatibility": compat,
+            "build_identity": identity.compact(),
+            "calls_to_replay": run.replay_pending,
+            "last_durable_step": checkpoint.get("last_durable_step", ""),
+            "interrupted_step": checkpoint.get("interrupted_step", ""),
+            "budget_at_pause": checkpoint.get("budget_at_pause", {}),
+        },
+    )
+    _execute(session, run, llm, settings, benchmark)
     return mission
 
 
@@ -1427,6 +2027,10 @@ def _fail_mission(session: Session, run: _Run, failure: dict[str, Any]) -> None:
     m = run.mission
     run.failure = failure
     run.stop_reason = str(failure.get("reason", "provider_error"))
+    # §7 — l'étape en cours au moment de l'échec est dite interrompue, jamais « non requise ».
+    _mark_interrupted_step(
+        run, str(failure.get("step", run.current_step)), "interrupted_provider_failure"
+    )
     m.failure_json = json.dumps(failure, ensure_ascii=False, default=str)
     session.commit()
     entry_type = (
@@ -2158,12 +2762,27 @@ def _budget_snapshot(run: _Run) -> dict[str, Any]:
 
 
 def _finalize(
-    session: Session, run: _Run, class_info: dict[str, Any], *, failed: bool = False
+    session: Session,
+    run: _Run,
+    class_info: dict[str, Any],
+    *,
+    failed: bool = False,
+    paused: bool = False,
 ) -> None:
     m = run.mission
     if not run.cartography:
         _build_interim_cartography(run)
     cartography = run.cartography
+    # §7 (v1.3.7) — le statut terminal est fixé AVANT le calcul de la charge de délibération : la
+    # cause terminale (`terminal_failure_reason`) et l'état atteint en dépendent. Une panne de
+    # cadrage ou un échec définitif d'appel fournisseur n'est pas un rapport candidat ; une
+    # interruption récupérable n'est ni un échec ni un succès.
+    if paused:
+        m.status = PAUSED_STATUS
+    elif failed or run.stop_reason.startswith("framing_failed"):
+        m.status = "failed"
+    else:
+        m.status = "candidate"
     deliberation = _deliberation_payload(run)
     m.deliberation_json = json.dumps(deliberation, ensure_ascii=False, default=str)
     m.recommendation_json = (
@@ -2171,6 +2790,7 @@ def _finalize(
         if run.recommendation
         else ""
     )
+    budget = {**_budget_snapshot(run), "pricing": _pricing_view(run.ledger)}
     report = build_situation_report(
         mission_id=m.id,
         input_type=m.input_type,
@@ -2180,16 +2800,27 @@ def _finalize(
         framing_error=run.framing_error,
         composition=run.composition,
         cartography=cartography,
-        budget=_budget_snapshot(run),
+        budget=budget,
         stop_reason=run.stop_reason,
         deliberation=deliberation,
         recommendation=run.recommendation or None,
     )
-    # Une panne de cadrage ou un échec définitif d'appel fournisseur n'est pas un rapport
-    # candidat : la mission est `failed`, le rapport partiel reste disponible pour le diagnostic.
-    m.status = "failed" if (failed or run.stop_reason.startswith("framing_failed")) else "candidate"
     report["status"] = m.status
     report["failure"] = run.failure or None
+    # v1.3.7 (§11) — rapport d'interruption : étape interrompue, cause, intervention requise,
+    # dernier checkpoint valide, budget consommé / restant, identité fournisseur / modèle, reprise.
+    checkpoint = json.loads(m.checkpoint_json) if (paused and m.checkpoint_json) else None
+    report["pause"] = (
+        {
+            **run.pause,
+            "checkpoint": checkpoint_view(checkpoint),
+            "budget_consumed": run.ledger.snapshot(),
+            "provider": run.pause.get("provider") or "anthropic",
+            "model": run.failure.get("model", ""),
+        }
+        if paused
+        else None
+    )
     # D20 — l'identité du build accompagne le rapport (vue compacte, sans le détail des réglages).
     identity_raw = json.loads(m.build_identity_json) if m.build_identity_json else {}
     report["build"] = {k: v for k, v in identity_raw.items() if k != "mission_config"}
@@ -2208,10 +2839,53 @@ def _finalize(
             "stop_reason": run.stop_reason,
             "distinct_option_groups": cartography["distinct_option_groups"],
             "divergence_index": cartography["divergence_index"],
-            "budget": _budget_snapshot(run),
+            "decisional_diversity_index": cartography.get("decisional_diversity_index"),
+            "budget": budget,
             "status": m.status,
+            "terminal_failure_reason": deliberation["stop"].get("terminal_failure_reason", ""),
+            "interrupted_step": deliberation["stop"].get("interrupted_step", ""),
         },
     )
+
+
+def _pricing_view(ledger: BudgetLedger) -> dict[str, Any]:
+    """§16 (v1.3.7) — quatre grandeurs jamais confondues : barème COMPTABILISÉ par AI-SOS (€/Mtok,
+    conservateur, inchangé), barème public de RÉFÉRENCE du fournisseur (daté, informatif), coût
+    comptabilisé de la mission, exposition incertaine (B12). Le barème de référence ne modifie
+    aucun calcul : il rend la marge conservatrice explicite."""
+    from app.config import get_settings
+
+    s = get_settings()
+    accounted_in = float(ledger.price_in_per_mtok)
+    accounted_out = float(ledger.price_out_per_mtok)
+    ref_in = float(getattr(s, "llm_reference_price_input_usd_per_mtok", 0.0) or 0.0)
+    ref_out = float(getattr(s, "llm_reference_price_output_usd_per_mtok", 0.0) or 0.0)
+    reference_cost_usd = (
+        round(
+            ledger.input_tokens * ref_in / 1_000_000 + ledger.output_tokens * ref_out / 1_000_000,
+            6,
+        )
+        if ref_in or ref_out
+        else None
+    )
+    return {
+        "accounted_eur_per_mtok": {"input": accounted_in, "output": accounted_out},
+        "accounted_cost_eur": ledger.known_cost_eur,
+        "uncertain_exposure_upper_bound_eur": round(ledger.uncertain_cost_upper_bound_eur, 6),
+        "reference_usd_per_mtok": {"input": ref_in, "output": ref_out},
+        "reference_price_date": str(getattr(s, "llm_reference_price_date", "")),
+        "reference_price_source": str(getattr(s, "llm_reference_price_source", "")),
+        "reference_cost_usd_same_tokens": reference_cost_usd,
+        "conservative_margin_ratio": (
+            round(accounted_in / ref_in, 3) if ref_in else None,
+            round(accounted_out / ref_out, 3) if ref_out else None,
+        ),
+        "note": (
+            "coût comptabilisé = barème AI-SOS conservateur (€) ; coût de référence = même usage "
+            "au barème public daté (USD, hors cache / lot / change) ; exposition incertaine = "
+            "borne, pas une facture. Aucun de ces montants n'est la facture du fournisseur."
+        ),
+    }
 
 
 # =====================================================================================
@@ -2530,21 +3204,31 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
     answered = _answered(run)
     open_objections = [o for o in run.objections if o["status"] == "open"]
     required_by_class = m.effective_class in STEELMAN_CLASSES
+    decisional = run.cartography.get("decisional_diversity_index")
     premature = is_premature_convergence(
         effective_class=m.effective_class,
         divergence_index=float(run.cartography.get("divergence_index", 0.0)),
         objection_count=len(open_objections),
+        decisional_diversity_index=(float(decisional) if decisional is not None else None),
     )
+    if required_by_class:
+        reason = "classe structurante/critique"
+    elif premature and decisional == 0.0:
+        reason = "convergence décisionnelle malgré la diversité des raisons"
+    elif premature:
+        reason = "convergence prématurée"
+    else:
+        reason = ""
+    # §7 (v1.3.7) — `pending` tant que rien n'est décidé : jamais « non requis » par défaut.
     run.steelman = {
         "required": required_by_class or premature,
-        "reason": (
-            "classe structurante/critique"
-            if required_by_class
-            else ("convergence prématurée" if premature else "")
-        ),
-        "status": "not_required",
+        "reason": reason,
+        "status": "pending",
+        "divergence_index": run.cartography.get("divergence_index"),
+        "decisional_diversity_index": decisional,
     }
     if not run.steelman["required"]:
+        run.steelman["status"] = "not_required"
         _journal(session, run, step, "not_required", "facilitateur", dict(run.steelman))
         _release_reserve(run, "steelman")
         return
@@ -2560,35 +3244,65 @@ def _step_steelman(session: Session, run: _Run, llm: LLMClient, settings: Settin
         return
     clusters = run.cartography.get("position_clusters") or [[r["expert_id"] for r in answered]]
     dominant = list(clusters[0])
-    # B17 (v1.3.6) — classe structurante / critique : si la demande met explicitement une
-    # alternative sur la table et qu'AUCUNE position ne la défend, le steelman porte sur cette
-    # alternative écartée (avocat désigné, contradicteur distinct, reconnaissance par le
-    # contradicteur) plutôt que sur la position dominante, qu'il ne ferait que renforcer.
-    alternative = (
-        find_discarded_alternative(
-            proposals=[p.model_dump() for p in run.framing.explicit_proposals]
-            if run.framing
-            else [],
-            option_groups=run.cartography.get("option_groups", []),
-            options=run.cartography.get("options", []),
-            positions=[
-                {"label": run.labels[r["expert_id"]], "position": r["output"].position}
-                for r in answered
-            ],
-            request_text=" ".join(_request_texts(run)),
-        )
-        if required_by_class
-        else None
+    # B17 (v1.3.6, corrigé v1.3.7) — si la demande met explicitement une alternative sur la table
+    # et qu'AUCUNE position ne la DÉFEND (prise de position déclarée, sinon mention non négative),
+    # le steelman porte sur cette alternative écartée (avocat désigné, contradicteur distinct,
+    # reconnaissance par le contradicteur) plutôt que sur la position dominante.
+    alternative = find_discarded_alternative(
+        proposals=[p.model_dump() for p in run.framing.explicit_proposals] if run.framing else [],
+        option_groups=run.cartography.get("option_groups", []),
+        options=run.cartography.get("options", []),
+        positions=[
+            {
+                "label": run.labels[r["expert_id"]],
+                "position": r["output"].position,
+                "proposal_stances": [s.model_dump() for s in r["output"].proposal_stances],
+            }
+            for r in answered
+        ],
+        request_text=" ".join(_request_texts(run)),
     )
+    # §5 (v1.3.7) — cible par valeur contradictoire décroissante, déterministe et journalisée.
+    selection = select_steelman_target(
+        answered_ids=[r["expert_id"] for r in answered],
+        dominant=dominant,
+        orientation_clusters=list(run.cartography.get("orientation_clusters") or []),
+        alternative=alternative,
+    )
+    _journal(
+        session,
+        run,
+        step,
+        "steelman_target_selected",
+        "facilitateur",
+        {
+            "mode": selection["mode"],
+            "reason": selection["reason"],
+            "target": (
+                run.labels.get(selection["target_expert"], "")
+                if selection.get("target_expert")
+                else (alternative or {}).get("label", "")
+            ),
+            "candidates_considered": selection["candidates_considered"],
+            "alternative_stances": (alternative or {}).get("stances"),
+            "decisional_diversity_index": decisional,
+            "divergence_index": run.cartography.get("divergence_index"),
+        },
+    )
+    run.steelman.update({"mode": selection["mode"], "selection_reason": selection["reason"]})
     if alternative is not None:
         _steelman_discarded_alternative(
             session, run, llm, settings, answered, dominant, alternative
         )
         _release_reserve(run, "steelman")
         return
-    target_expert = dominant[0]
+    target_expert = str(selection["target_expert"])
     experts_view = [{"expert_id": r["expert_id"], "angle": r["angle"]} for r in answered]
-    contradictor = select_contradictor(experts_view, dominant, run.labels)
+    if selection["mode"] == "minority_position":
+        # Le contradicteur vient du groupe dominant d'orientation (angle critique de préférence).
+        contradictor = select_contradictor(experts_view, [target_expert], run.labels)
+    else:
+        contradictor = select_contradictor(experts_view, dominant, run.labels)
     if contradictor is None:
         # Unanimité : le contradicteur est désigné hors du tenant, angle critique de préférence.
         others = [e for e in experts_view if e["expert_id"] != target_expert]
@@ -3145,6 +3859,31 @@ def _research_call(
             "system_text": RESEARCH_SYSTEM_LABEL,
         },
     )
+    # v1.3.7 — reprise : une recherche déjà validée est resservie depuis le checkpoint.
+    research_key = hashlib.sha256(f"{provider.name}\x1f{question}".encode()).hexdigest()
+    replayed = run.replay_research.get(research_key)
+    if replayed:
+        cached = replayed.pop(0)
+        result = _research_from_dict(cached["result"])
+        run.ledger.load_state(cached["ledger_after"])
+        _sync_budget(session, run)
+        run.research_cache.append(cached)
+        _journal(
+            session,
+            run,
+            step,
+            "call_replayed",
+            "Recherche",
+            {
+                "call_type": RESEARCH_CALL_TYPE,
+                "provider": provider.name,
+                "provider_call_made": False,
+                "replayed_from_checkpoint": True,
+                "findings_count": len(result.findings),
+                "budget": run.ledger.snapshot(),
+            },
+        )
+        return result
     start = time.perf_counter()
     result = provider.search(question, max_tokens=max_tokens)
     duration_ms = int((time.perf_counter() - start) * 1000)
@@ -3153,6 +3892,15 @@ def _research_call(
     usage = result.usage or LLMUsage(input_tokens=0, output_tokens=0)
     cost = run.ledger.record(usage)
     _sync_budget(session, run)
+    run.research_cache.append(
+        {
+            "key": research_key,
+            "question": question,
+            "provider": provider.name,
+            "result": result.to_dict(),
+            "ledger_after": run.ledger.dump_state(),
+        }
+    )
     session.add(
         LLMCallLog(
             phase=PHASE,
@@ -4491,7 +5239,13 @@ def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, A
         run.failure.get("kind") == "structured_output" and run.failure.get("step") == "cadrage"
     )
     terminal = ""
-    if run.stop_reason.startswith("framing_failed") or framing_output_failed:
+    paused = run.mission.status == PAUSED_STATUS or bool(run.pause)
+    interrupted_step = str(run.pause.get("interrupted_step", "")) if paused else ""
+    if paused:
+        # v1.3.7 — interruption récupérable : PAS une cause terminale (la mission n'est pas
+        # finie) ; l'étape interrompue et la cause sont portées à part.
+        terminal = ""
+    elif run.stop_reason.startswith("framing_failed") or framing_output_failed:
         terminal = "framing_failed"
     elif (
         run.stop_reason in BUDGET_STOP_REASONS or run.stop_reason == "critical_dimension_uncovered"
@@ -4499,6 +5253,7 @@ def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, A
         terminal = "budget"
     elif run.failure.get("reason") and run.mission.status == "failed":
         terminal = str(run.failure.get("reason"))
+        interrupted_step = str(run.failure.get("step", ""))
     elif run.recommendation.get("status") == "failed":
         terminal = "synthesis_structured_output_failed"
     elif "synthese" in run.steps_done and run.recommendation.get("status") != "produced":
@@ -4549,7 +5304,11 @@ def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, A
         warnings.append(f"research_questions_deferred:{len(run.research_deferred)}")
     if run.items_rejected:
         warnings.append(f"structured_items_rejected:{run.items_rejected}")
-    if terminal:
+    if run.replay_divergences:
+        warnings.append(f"checkpoint_replay_divergences:{run.replay_divergences}")
+    if paused:
+        reason = "interrupted_recoverable"
+    elif terminal:
         reason = terminal
     elif internal:
         # D23 — une information interne manquante n'est JAMAIS présentée comme externe.
@@ -4567,6 +5326,10 @@ def _deliberation_stop(run: _Run, residual: list[dict[str, Any]]) -> dict[str, A
     return {
         "reason": reason,
         "terminal_failure_reason": terminal,
+        # v1.3.7 (§7 / §11) — étape réellement interrompue (échec ou pause) et état de reprise.
+        "interrupted_step": interrupted_step,
+        "paused_recoverable": paused,
+        "resume_possible": paused,
         "missing_information": missing,
         "degraded_steps": degraded,
         "warnings": warnings,
@@ -4686,4 +5449,7 @@ def mission_payload(mission: Mission) -> dict[str, Any]:
         "recommendation": _load(mission.recommendation_json),
         "failure": _load(mission.failure_json),
         "build_identity": _load(mission.build_identity_json),
+        # v1.3.7 — checkpoint d'une mission en pause récupérable (vue sans le contenu des appels).
+        "checkpoint": checkpoint_view(_load(mission.checkpoint_json)),
+        "resume_available": mission.status == PAUSED_STATUS and bool(mission.checkpoint_json),
     }

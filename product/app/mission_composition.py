@@ -106,6 +106,10 @@ class ExpertSpec:
     expected_contribution: str
     justification: str
     contradicts_preference: bool = False
+    # v1.3.7 (§18) — angle libre tel que formulé par le cadrage lorsqu'il a été rattaché à un
+    # archétype du catalogue par mots-clés : conservé comme focalisation explicite de la fiche
+    # (Problème → Dimensions → Expertise), jamais remplacé silencieusement par le catalogue.
+    framing_angle: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Représentation sérialisable."""
@@ -150,8 +154,13 @@ def _initial_depth(criticality: str, effective_class: str, max_angles_per_cell: 
     return max(1, min(depth, max_angles_per_cell))
 
 
-def _angles_for_cell(dimension: DimensionOut, depth: int) -> list[tuple[str, str]]:
-    """Choisit `depth` angles pour une cellule : d'abord ceux du cadrage, puis le catalogue."""
+def _angles_for_cell(
+    dimension: DimensionOut, depth: int, focus: dict[str, str] | None = None
+) -> list[tuple[str, str]]:
+    """Choisit `depth` angles pour une cellule : d'abord ceux du cadrage, puis le catalogue.
+
+    `focus` (v1.3.7, §18) reçoit, pour chaque archétype rattaché par mots-clés, l'angle libre du
+    cadrage qui l'a appelé : la fiche de l'expert garde cette focalisation."""
     chosen: list[tuple[str, str]] = []
     used_titles: set[str] = set()
     for free in dimension.suggested_angles:
@@ -161,6 +170,8 @@ def _angles_for_cell(dimension: DimensionOut, depth: int) -> list[tuple[str, str
         if title is not None and title not in used_titles and title not in EXCLUDED_FROM_TOUR0:
             chosen.append((title, "cadrage"))
             used_titles.add(title)
+            if focus is not None and free.strip() and free.strip().lower() != title.lower():
+                focus[title] = free.strip()
         elif title is None and free.strip():
             label = free.strip()
             if label not in used_titles:
@@ -182,6 +193,7 @@ def _spec(
     source: str,
     justification: str,
     contradicts_preference: bool = False,
+    framing_angle: str = "",
 ) -> ExpertSpec:
     arch = _CATALOGUE.get(title)
     if arch is None:
@@ -198,17 +210,23 @@ def _spec(
             justification=justification,
             contradicts_preference=contradicts_preference,
         )
+    # v1.3.7 (§18) — l'archétype fournit le rôle de débat ; la focalisation reste celle que le
+    # cadrage a nommée pour cette dimension (le catalogue ne remplace pas le problème).
+    analysis = arch["angle_of_analysis"]
+    if framing_angle:
+        analysis = f"{framing_angle} (focalisation nommée par le cadrage) — {analysis}"
     return ExpertSpec(
         expert_id=expert_id,
         dimension=dimension,
         angle_title=title,
         angle_source=source,
-        angle_of_analysis=arch["angle_of_analysis"],
+        angle_of_analysis=analysis,
         debate_role=arch["debate_role"],
         expected_objections=arch["expected_objections"],
         expected_contribution=arch["expected_contribution"],
         justification=justification,
         contradicts_preference=contradicts_preference,
+        framing_angle=framing_angle,
     )
 
 
@@ -252,7 +270,15 @@ def compose(
     plan: list[dict[str, Any]] = []
     for dim in dimensions:
         depth = _initial_depth(dim.presumed_criticality, effective_class, max_angles_per_cell)
-        plan.append({"dimension": dim, "depth": depth, "angles": _angles_for_cell(dim, depth)})
+        focus: dict[str, str] = {}
+        plan.append(
+            {
+                "dimension": dim,
+                "depth": depth,
+                "angles": _angles_for_cell(dim, depth, focus),
+                "focus": focus,
+            }
+        )
         result.journal.append(
             {
                 "event": "profondeur_initiale",
@@ -452,7 +478,8 @@ def compose(
                 )
             if contradicts and ceo_preference.strip():
                 why += f" ; préférence à challenger : {ceo_preference.strip()[:200]}"
-            spec = _spec(expert_id, dimension.name, title, source, why, contradicts)
+            framing_angle = str(p.get("focus", {}).get(title, "")) if source == "cadrage" else ""
+            spec = _spec(expert_id, dimension.name, title, source, why, contradicts, framing_angle)
             result.experts.append(spec)
             cell_angles.append(title)
             result.journal.append(
@@ -462,6 +489,7 @@ def compose(
                     "dimension": dimension.name,
                     "angle": title,
                     "source": source,
+                    "framing_angle": framing_angle,
                     "justification": why,
                 }
             )

@@ -223,13 +223,16 @@ from app.deliverable_versions import (
 from app.llm import LLMClient, build_llm_client
 from app.mission_report import render_situation_report_markdown
 from app.missions import (
+    PAUSED_STATUS,
     InvalidMissionStatusError,
     MissionNotFoundError,
+    MissionResumeRefusedError,
     apply_ceo_action,
     get_mission,
     list_journal,
     list_missions,
     mission_payload,
+    resume_mission,
     run_mission,
 )
 from app.observability import (
@@ -1876,6 +1879,15 @@ def get_mission_report_markdown(mission_id: int, db: DbSession) -> MissionReport
     report = payload["report"]
     if report is None:
         # Contrat explicite (B11) : « pas de rapport » ne veut pas dire « encore en cours ».
+        if mission.status == PAUSED_STATUS:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "state": PAUSED_STATUS,
+                    "message": "mission en pause récupérable : rapport d'interruption absent",
+                    "failure": payload.get("failure") or {},
+                },
+            )
         if mission.status == "failed":
             raise HTTPException(
                 status_code=409,
@@ -1907,6 +1919,41 @@ def _mission_ceo_action(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     log_product_event(
         db, f"mission_{mission.status}", "otv1_inc1", "mission", mission.id, mission.status
+    )
+    return MissionOut.model_validate(mission_payload(mission))
+
+
+@app.post("/missions/{mission_id}/resume", response_model=MissionOut)
+def resume_mission_endpoint(mission_id: int, db: DbSession, llm: LLM) -> MissionOut:
+    """v1.3.7 — reprise d'une mission `paused_recoverable` après levée de la condition externe.
+
+    Contrôle d'identité fail closed (modèle, adaptateur, empreintes ; commit, freeze et état
+    propre en mode benchmark) : refus explicite (409, raisons) sinon. Les appels déjà validés sont
+    rejoués depuis le checkpoint sans appel fournisseur ; la mission continue puis se termine
+    normalement, échoue ou se remet en pause. Jamais de repli sur un autre modèle / fournisseur."""
+    _get_mission_or_404(db, mission_id)
+    try:
+        mission = resume_mission(db, llm, mission_id, get_settings())
+    except InvalidMissionStatusError as exc:
+        raise HTTPException(
+            status_code=409, detail={"reason": "not_paused", "message": str(exc)}
+        ) from exc
+    except MissionResumeRefusedError as exc:
+        raise HTTPException(
+            status_code=409, detail={"reason": exc.reason, "compatibility": exc.detail}
+        ) from exc
+    log_product_event(
+        db,
+        "mission_resumed",
+        "otv1_inc1",
+        "mission",
+        mission.id,
+        mission.status,
+        metadata={
+            "llm_calls_used": mission.llm_calls_used,
+            "cost_eur": mission.cost_eur,
+            "stop_reason": mission.stop_reason,
+        },
     )
     return MissionOut.model_validate(mission_payload(mission))
 
