@@ -58,6 +58,9 @@ PROJECT_FEATURES = [
     "project_snapshot_import",
     "mission_framing_otv1_inc1 (cadrage → composition → Tour 0 isolé → cartographie → "
     "rapport de situation candidate, sous plafonds CEO)",
+    "mission_deliberation_otv1_inc2 (confrontation → steelman → recherche ciblée → révision "
+    "sous preuve → familles stratégiques → comparaison → recommandation en 14 champs → porte "
+    "qualité ; les agents recommandent, le CEO décide ; plafonds durs par classe)",
 ]
 
 # Opérations produit **déterministes** (aucun appel LLM), par phase.
@@ -79,10 +82,20 @@ NOTES = [
 
 
 def build_product_status() -> dict[str, Any]:
-    """Construit la carte de statut MVP (lecture seule, déterministe, sans LLM)."""
+    """Construit la carte de statut MVP (lecture seule, déterministe, sans LLM).
+
+    D20 : expose l'identité du build qui tourne (commit, propreté de l'arbre, versions,
+    empreintes) pour que l'opérateur voie ce que le processus exécute réellement.
+    """
+    from app.build_identity import compute_build_identity
+    from app.config import get_settings
+
+    identity = compute_build_identity(get_settings())
     return {
         "product_name": PRODUCT_NAME,
         "version": PRODUCT_VERSION,
+        "build": identity.compact(),
+        "build_label": identity.label,
         "current_phase": CURRENT_PHASE,
         "mvp_status": MVP_STATUS,
         "capabilities": CAPABILITIES,

@@ -618,6 +618,16 @@ class Mission(Base):
     composition_json: Mapped[str] = mapped_column(Text, default="")
     cartography_json: Mapped[str] = mapped_column(Text, default="")
     report_json: Mapped[str] = mapped_column(Text, default="")
+    # Incrément 2 — délibération probante et recommandation décisionnelle (JSON).
+    deliberation_json: Mapped[str] = mapped_column(Text, default="")
+    recommendation_json: Mapped[str] = mapped_column(Text, default="")
+    # B10 / B11 — échec structuré d'une mission (étape, catégorie d'erreur, tentatives…).
+    failure_json: Mapped[str] = mapped_column(Text, default="")
+    # D20 — identité du build capturée à la création (immuable ; JSON).
+    build_identity_json: Mapped[str] = mapped_column(Text, default="")
+    # v1.3.7 — checkpoint durable d'une mission `paused_recoverable` (appels validés, budget,
+    # identité attendue, étape interrompue ; JSON, jamais de secret).
+    checkpoint_json: Mapped[str] = mapped_column(Text, default="")
     ceo_notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[dt.datetime] = mapped_column(default=_now)
     updated_at: Mapped[dt.datetime] = mapped_column(default=_now, onupdate=_now)
@@ -651,7 +661,14 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "cost_eur": "FLOAT",
         "call_type": "VARCHAR",
         "mission_id": "INTEGER",
-    }
+    },
+    "missions": {
+        "deliberation_json": "TEXT DEFAULT ''",
+        "recommendation_json": "TEXT DEFAULT ''",
+        "failure_json": "TEXT DEFAULT ''",
+        "build_identity_json": "TEXT DEFAULT ''",
+        "checkpoint_json": "TEXT DEFAULT ''",
+    },
 }
 
 

@@ -31,7 +31,8 @@ EXPERT_SYSTEM = (
     "vient de ton angle propre, de ton honnêteté et de ta précision.\n\n"
     "Règles :\n"
     "1. Prends une position claire depuis ton angle, avec ton raisonnement.\n"
-    "2. Propose une ou plusieurs OPTIONS réellement différentes. Les options de non-action sont "
+    "2. Propose une ou plusieurs OPTIONS réellement différentes (au plus cinq : les plus "
+    "distinctes). Les options de non-action sont "
     "légitimes et attendues quand elles sont pertinentes : attendre (wait), tester d'abord (test), "
     "acheter ou intégrer l'existant (buy / integrate), simplifier (simplify), ne rien faire "
     "(do_nothing).\n"
@@ -44,7 +45,16 @@ EXPERT_SYSTEM = (
     'marqué status = "model_knowledge" ; ce qui devrait être vérifié, status = "unverified". '
     "N'utilise \"verified\" que pour un fait présent dans l'entrée du demandeur, en citant ce "
     "passage comme source.\n"
-    "6. Reste proportionné : une situation simple appelle une réponse courte.\n\n"
+    "6. Reste proportionné : une situation simple appelle une réponse courte.\n"
+    "7. Orientation : indique l'option que ta position RECOMMANDE réellement "
+    "(primary_orientation : sa nature et son libellé, l'une de tes options) — distincte des "
+    "options que tu listes ou critiques sans les recommander.\n"
+    "8. Propositions explicites : si le dossier de cadrage liste des propositions explicites de "
+    "la demande, déclare pour CHACUNE ta prise de position : defend (tu la recommandes), "
+    "conditional (tu la recommandes sous condition), analyse (tu l'examines sans trancher), "
+    "critique (tu en analyses les faiblesses), reject (tu l'écartes), defer (tu la juges "
+    "prématurée ou à reporter), not_addressed. Mentionner ou analyser une proposition n'est pas "
+    "la défendre : ne déclare defend que si tu la recommandes vraiment.\n\n"
     "Réponds STRICTEMENT en JSON, sans texte autour, en JSON compact (sans indentation ni "
     "retours à la ligne décoratifs), avec exactement cette structure :\n"
     "{\n"
@@ -56,6 +66,11 @@ EXPERT_SYSTEM = (
     '  "to_verify": ["…"],\n'
     '  "options": [{"label": "…", "summary": "…", '
     '"kind": "build|integrate|buy|wait|test|simplify|do_nothing|other"}],\n'
+    '  "primary_orientation": {"kind": "build|integrate|buy|wait|test|simplify|do_nothing|other", '
+    '"label": "…"},\n'
+    '  "proposal_stances": [{"proposal": "…", '
+    '"stance": "defend|conditional|analyse|critique|reject|defer|not_addressed", '
+    '"reason": "…"}],\n'
     '  "objections": [{"text": "…", "target": "…", '
     '"nature": "solution|hypothesis|fact|value|other"}],\n'
     '  "evidence": [{"claim": "…", "source": "…", '
@@ -132,6 +147,41 @@ def build_self_qualification_prompt(
     for label, position in others:
         parts.append(f"- {label} : {position.strip()}")
     parts += ["", "Qualifie ta relation à chacune des autres positions, au format JSON demandé."]
+    return "\n".join(parts)
+
+
+GROUPED_SELF_QUAL_SYSTEM = (
+    "Le premier tour d'une étude est clos. On te confie, de façon ANONYME, plusieurs positions "
+    "initiales à qualifier, UNE PAR UNE, chacune du point de vue de la perspective qui l'a "
+    "formulée : pour chaque position confiée, qualifie sa relation à chacune des autres positions "
+    "de l'étude.\n"
+    "- identical : même orientation de fond, différences de formulation seulement ;\n"
+    "- variant : même famille d'approche avec une différence réelle (périmètre, condition, "
+    "séquence) ;\n"
+    "- different : approche réellement différente ou incompatible.\n"
+    "Chaque relation est attribuée à la position qui la déclare (from_id). Tu ne révises rien, tu "
+    "ne juges pas, tu ne recommandes rien ; une relation manquante n'est jamais inventée.\n\n"
+    "Réponds STRICTEMENT en JSON compact : "
+    '{"qualifications": [{"from_id": "P1", "relations": [{"other_id": "P2", '
+    '"relation": "identical|variant|different", "reason": "…"}]}]}'
+)
+
+
+def build_grouped_self_qualification_prompt(
+    *, own: list[tuple[str, str]], all_positions: list[tuple[str, str]]
+) -> str:
+    """Prompt d'auto-qualification groupée : positions confiées + toutes les positions."""
+    parts = ["Positions confiées à qualifier (une par une, chacune de son point de vue) :"]
+    for label, position in own:
+        parts += [f"=== {label} ===", position.strip()]
+    parts += ["", "Toutes les positions de l'étude :"]
+    for label, position in all_positions:
+        parts.append(f"- {label} : {position.strip()}")
+    parts += [
+        "",
+        "Pour chaque position confiée, qualifie sa relation à chacune des autres positions, au "
+        "format JSON demandé.",
+    ]
     return "\n".join(parts)
 
 

@@ -25,13 +25,33 @@ class Settings(BaseSettings):
     # Base de données du produit (SQLite locale par défaut).
     database_url: str = "sqlite:///./product_runtime.db"
 
-    # --- OT-V1, incrément 1 : missions de cadrage -------------------------------------------
-    # Plafonds CEO par mission (défauts de l'incrément 1 ; configurables, jamais dépassés).
-    mission_max_llm_calls: int = 12
-    mission_max_cost_eur: float = 2.0
+    # --- OT-V1 : missions (incrément 1 : cadrage ; incrément 2 : délibération probante) ---------
+    # Plafonds DURS par classe de décision (appels LLM, euros). Ce sont des plafonds, pas des
+    # cibles : une mission s'arrête quand la délibération n'apporte plus d'information, pas quand
+    # le budget est consommé. Le CEO peut surcharger par mission (`max_llm_calls`,
+    # `max_cost_eur`) : la surcharge est alors absolue. Valeurs indicatives et configurables.
+    # ÉCART DÉCLARÉ par rapport aux a priori du document canonique §6.1 (courante ≤ 4 appels /
+    # < 0,10 € ; importante ≤ 15 / 0,3 à 1 € ; structurante ≤ 60 / 2 à 8 € ; critique ≤ 120 /
+    # 5 à 20 €) : `courante` et `importante` sont relevées parce que le cycle minimal de cet
+    # incrément (cadrage à 8 000 tokens de sortie depuis la correction de troncature, exposés,
+    # confrontation, consolidation, comparaison, synthèse, porte qualité) ne tient pas dans ces
+    # a priori ; `critique` est en dessous. Seul le CEO assouplit ou ramène ces valeurs
+    # (à ratifier ou corriger à la revue de l'incrément 2 ; protocole de profondeur à venir).
+    mission_ceiling_calls_courante: int = 16
+    mission_ceiling_cost_courante: float = 1.5
+    mission_ceiling_calls_importante: int = 30
+    mission_ceiling_cost_importante: float = 3.0
+    mission_ceiling_calls_structurante: int = 60
+    mission_ceiling_cost_structurante: float = 8.0
+    mission_ceiling_calls_critique: int = 90
+    mission_ceiling_cost_critique: float = 15.0
     # Borne EXPÉRIMENTALE et TEMPORAIRE du nombre d'angles par cellule au Tour 0. Elle borne le
     # coût du prototype ; elle n'est ni une profondeur normale ni une doctrine (Décision 026 §3).
     mission_max_angles_per_cell: int = 3
+    # Recherche ciblée : fournisseur (`none` | `anthropic_web_search`) et nombre maximal de
+    # recherches par mission (plafond dur ; aucune recherche « pour remplir »).
+    mission_research_provider: str = "none"
+    mission_max_research_tasks: int = 3
     # `max_tokens` par type d'appel (les appels courts en consomment moins). Ce sont des plafonds
     # de sortie, pas des cibles : le coût réel est calculé sur l'usage rapporté. Les valeurs sont
     # dimensionnées avec une marge large par rapport au volume des schémas demandés (en français,
@@ -41,10 +61,102 @@ class Settings(BaseSettings):
     mission_max_tokens_expert: int = 6000
     mission_max_tokens_self_qualification: int = 1500
     mission_max_tokens_clerk: int = 3000
+    mission_max_tokens_confrontation: int = 4000
+    mission_max_tokens_steelman: int = 4000
+    mission_max_tokens_recognition: int = 1200
+    mission_max_tokens_revision: int = 3000
+    mission_max_tokens_consolidation: int = 5000
+    mission_max_tokens_comparison: int = 6000
+    mission_max_tokens_synthesis: int = 8000
+    mission_max_tokens_gate: int = 2500
+    mission_max_tokens_research: int = 4000
+    # B14-prime (O1) — étapes dont la sortie grandit avec l'équipe ou la matière : la limite est
+    # dérivée
+    # du nombre d'éléments demandés (`app/output_budget.py`), jamais en dessous de la limite
+    # historique ci-dessus (plancher), jamais au-dessus de ces plafonds.
+    # v1.3.6 (§6) : l'auto-qualification est groupée (plusieurs positions qualifiées par appel) ;
+    # son plafond de sortie est dimensionné par la formule sur `g x (n - 1)` relations.
+    mission_output_ceiling_self_qualification: int = 6000
+    mission_output_ceiling_clerk: int = 8000
+    mission_output_ceiling_consolidation: int = 8000
+    mission_output_ceiling_comparison: int = 8000
+    # D21 (v1.3.6.2) — étapes de catégorie A à cardinalité fixe : la limite historique reste le
+    # budget TEXTE (plancher) ; la marge de raisonnement A s'y ajoute ; le plafond borne la relance
+    # à limite recalculée (une seule) lorsque la sortie est coupée. Aucun doublement aveugle : la
+    # marge est un réglage explicite, journalisé, distinct du texte requis.
+    mission_output_ceiling_framing: int = 12000
+    mission_output_ceiling_expert: int = 10000
+    mission_output_ceiling_confrontation: int = 8000
+    mission_output_ceiling_steelman: int = 8000
+    mission_output_ceiling_revision: int = 6000
+    mission_output_ceiling_synthesis: int = 16000
+    # B15 (v1.3.6) — réserve unique : allocation de révisions réservée dès la composition
+    # (`revision_allowance` : ceil(n / 2), bornée par ce plafond) ; nombre maximal de positions
+    # qualifiées par appel d'auto-qualification groupée (1 = un appel par position).
+    mission_max_revision_calls: int = 8
+    mission_self_qualification_group_max: int = 3
+    # B16 (v1.3.6) — politique de raisonnement par catégorie de `call_type`
+    # (`app/reasoning_policy.py`). Catégorie A (cadrage, exposés, confrontation, steelman,
+    # révision, synthèse) : raisonnement adaptatif, effort élevé. Catégorie B (comparaison, porte) :
+    # adaptatif, effort contrôlé. Catégorie C (auto-qualification, greffier, consolidation) :
+    # effort bas ; `disabled` possible si les tests structurels le permettent. Les marges de sortie
+    # (`headroom`) s'ajoutent au budget textuel des étapes à cardinalité variable, sous plafond :
+    # elles ne remplacent pas le pilotage de l'effort et ne doublent rien.
+    mission_reasoning_effort_a: str = "high"
+    mission_reasoning_effort_b: str = "medium"
+    mission_reasoning_effort_c: str = "low"
+    mission_reasoning_thinking_c: str = "adaptive"
+    mission_reasoning_headroom_tokens_b: int = 1500
+    mission_reasoning_headroom_tokens_c: int = 500
+    # D21 (v1.3.6.2) — marge de raisonnement de la catégorie A (cadrage, exposés, confrontation,
+    # steelman, révision) et marge dédiée de la synthèse (étape terminale à matière large :
+    # 14 champs sur des dizaines de familles). Les traces réelles montrent des sorties A où le
+    # texte utile seul approche la limite historique : sans marge, un raisonnement adaptatif
+    # élevé coupe la sortie structurée. La marge s'ajoute au texte ; elle ne le remplace pas.
+    mission_reasoning_headroom_tokens_a: int = 2000
+    mission_reasoning_headroom_tokens_synthesis: int = 4000
+    # D22 (v1.3.6.2) — contrat de comparaison : nombre maximal de critères produits (noyau de 5,
+    # au plus 7). Le modèle ne peut pas en inventer davantage : les critères excédentaires sont
+    # écartés et déclarés, jamais évalués en silence.
+    mission_comparison_max_criteria: int = 7
+    # D20 (v1.3.6.2) — intégrité des benchmarks : freeze attendu (SHA court ou complet) et mode
+    # strict (fail closed : commit différent, identité Git indisponible ou arbre modifié → la
+    # mission ne démarre pas, aucun appel LLM). `mission_allow_dirty_build_dev` est réservé au
+    # développement hors benchmark : il n'a AUCUN effet en mode strict ni quand un freeze est
+    # attendu.
+    mission_expected_freeze: str = ""
+    mission_benchmark_strict: bool = False
+    mission_allow_dirty_build_dev: bool = False
+    # B14-prime (O2) — cardinalité maximale des options proposées par un expert au Tour 0 :
+    # contrat de
+    # sortie explicite qui borne le plan de consolidation (lots, méta-passes) à la composition.
+    mission_max_options_per_expert: int = 5
+    # Résilience aux erreurs fournisseur transitoires (B10) : tentatives par appel logique
+    # (1 initiale + relances), plafond de relances par mission, attente exponentielle bornée,
+    # prise en compte d'un `Retry-After` raisonnable. Une erreur permanente ou locale n'est
+    # jamais relancée. Les relances n'entament ni les plafonds d'appels ni les réserves (B8).
+    mission_provider_max_attempts: int = 3
+    mission_provider_max_retries_total: int = 6
+    mission_provider_backoff_base_seconds: float = 1.0
+    mission_provider_backoff_cap_seconds: float = 8.0
+    mission_provider_retry_after_cap_seconds: float = 30.0
     # Barème d'estimation du coût (euros par million de tokens) — à aligner sur la grille du
     # fournisseur pour le modèle configuré. Sert à l'estimation avant appel et au coût journalisé.
     llm_price_input_eur_per_mtok: float = 3.0
     llm_price_output_eur_per_mtok: float = 15.0
+    # v1.3.7 (§16) — barème public de RÉFÉRENCE du fournisseur pour le modèle configuré (USD par
+    # million de tokens, tarif standard hors cache / lot), DATÉ et INFORMATIF : il n'entre dans
+    # aucun
+    # calcul de budget ni d'estimation (le barème comptabilisé ci-dessus reste conservateur et
+    # inchangé) ; il rend la marge explicite dans le rapport et le pré-vol. Toute mise à jour est
+    # une modification datée de configuration, jamais un ajustement silencieux.
+    llm_reference_price_input_usd_per_mtok: float = 2.0
+    llm_reference_price_output_usd_per_mtok: float = 10.0
+    llm_reference_price_date: str = "2026-09-15"
+    llm_reference_price_source: str = (
+        "grille publique du fournisseur pour claude-sonnet-5 (tokens standard, hors cache et lot), "
+        "relevée le 2026-09-15"
+    )
 
 
 @lru_cache

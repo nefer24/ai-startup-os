@@ -60,7 +60,11 @@ FRAMING_SYSTEM = (
     "laisse suggested_class vide.\n"
     "7. Tout ce que tu affirmes qui ne vient pas de la demande relève de ta connaissance "
     "générale : "
-    "formule-le comme hypothèse, pas comme fait.\n\n"
+    "formule-le comme hypothèse, pas comme fait.\n"
+    "8. Propositions explicites : liste chaque orientation que la demande met elle-même sur la "
+    "table comme proposition formulée (un investissement, une acquisition, une attente, une "
+    "externalisation, un abandon, un projet chiffré…), avec sa nature et qui la porte. Tu ne "
+    "la juges pas : elle sera défendue et testée plus tard si aucune perspective ne la défend.\n\n"
     "Réponds STRICTEMENT en JSON, sans texte autour, en JSON compact (sans indentation ni "
     "retours à la ligne décoratifs), avec exactement cette structure :\n"
     "{\n"
@@ -75,7 +79,9 @@ FRAMING_SYSTEM = (
     "  ],\n"
     '  "contestation": {"status": "none|raised", "target": "…", "argument": "…"},\n'
     '  "escalation_signals": ["…"],\n'
-    '  "suggested_class": "" \n'
+    '  "suggested_class": "",\n'
+    '  "explicit_proposals": [{"label": "…", '
+    '"kind": "build|integrate|buy|wait|test|simplify|do_nothing|other", "proposed_by": "…"}]\n'
     "}"
 )
 
@@ -132,5 +138,18 @@ def framing_summary_for_experts(framing: FramingOutput) -> str:
         lines.append(
             "Contestation soulevée au cadrage : "
             f"{framing.contestation.target} — {framing.contestation.argument}"
+        )
+    # v1.3.7 (B17) — les propositions explicites de la demande sont montrées à TOUTES les
+    # perspectives (dossier identique, aucune position d'expert) afin que chacune déclare sa prise
+    # de position ; le cadrage ne les juge pas, le dossier non plus.
+    proposals = [p for p in framing.explicit_proposals if p.label.strip()]
+    if proposals:
+        lines.append(
+            "Propositions explicites de la demande (à évaluer, non à adopter) : "
+            + " ; ".join(
+                f"« {p.label.strip()} » [{p.kind}]"
+                + (f" portée par {p.proposed_by.strip()}" if p.proposed_by.strip() else "")
+                for p in proposals
+            )
         )
     return "\n".join(lines)

@@ -7,9 +7,13 @@ entièrement côté backend. L'interface Streamlit passe uniquement par ce clien
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
+
+from ui.mission_state import poll_until_terminal
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 
@@ -71,6 +75,13 @@ class SolutionPlansAPIClient:
     def get_product_status(self) -> dict[str, Any]:
         """Carte de statut MVP (`GET /product/status`) : capacités + invariants (lecture seule)."""
         result: dict[str, Any] = self._request("GET", "/product/status")
+        return result
+
+    def benchmark_preflight(self, expected_freeze: str = "") -> dict[str, Any]:
+        """D20 — pré-vol benchmark (`GET /benchmark/preflight`) : identité réelle du serveur qui
+        tourne et verdict MATCH / MISMATCH contre le freeze attendu (lecture seule)."""
+        params = {"expected_freeze": expected_freeze} if expected_freeze else None
+        result: dict[str, Any] = self._request("GET", "/benchmark/preflight", params=params)
         return result
 
     def create_plan(self, input_type: str, title: str, description: str) -> dict[str, Any]:
@@ -788,6 +799,28 @@ class SolutionPlansAPIClient:
     def get_mission_report_markdown(self, mission_id: int) -> dict[str, Any]:
         """Rapport de situation Markdown (`GET /missions/{id}/report/markdown`)."""
         result: dict[str, Any] = self._request("GET", f"/missions/{mission_id}/report/markdown")
+        return result
+
+    def wait_for_mission(
+        self,
+        mission_id: int,
+        *,
+        sleeper: Callable[[float], None] = time.sleep,
+        interval_seconds: float = 5.0,
+        max_polls: int = 60,
+    ) -> tuple[dict[str, Any], int, bool]:
+        """Interroge la mission jusqu'à un état terminal (succès, action CEO ou `failed`), au plus
+        `max_polls` fois : jamais d'attente infinie sur une mission déjà échouée (B11)."""
+        return poll_until_terminal(
+            lambda: self.get_mission(mission_id),
+            sleeper=sleeper,
+            interval_seconds=interval_seconds,
+            max_polls=max_polls,
+        )
+
+    def resume_mission(self, mission_id: int) -> dict[str, Any]:
+        """v1.3.7 — reprise d'une mission en pause récupérable (`POST /missions/{id}/resume`)."""
+        result: dict[str, Any] = self._request("POST", f"/missions/{mission_id}/resume")
         return result
 
     def mission_ceo_action(

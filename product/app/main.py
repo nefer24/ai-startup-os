@@ -137,6 +137,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.build_identity import BenchmarkBuildError, capture_process_build, preflight
 from app.company_deliverables import (
     CompanyNotApprovedError,
     CompanyNotFoundError,
@@ -222,13 +223,16 @@ from app.deliverable_versions import (
 from app.llm import LLMClient, build_llm_client
 from app.mission_report import render_situation_report_markdown
 from app.missions import (
+    PAUSED_STATUS,
     InvalidMissionStatusError,
     MissionNotFoundError,
+    MissionResumeRefusedError,
     apply_ceo_action,
     get_mission,
     list_journal,
     list_missions,
     mission_payload,
+    resume_mission,
     run_mission,
 )
 from app.observability import (
@@ -353,6 +357,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.llm_client = build_llm_client(settings)
     yield
 
+
+# D26 (v1.3.6.2.1) — l'identité du code chargé dans CE processus est figée à l'import du runtime :
+# c'est elle, et jamais le HEAD du dépôt lu plus tard, qui prouve le code exécuté par une mission.
+PROCESS_BUILD = capture_process_build()
 
 app = FastAPI(title="AI-SOS Product Runtime", version="0.1.0", lifespan=lifespan)
 
@@ -1789,10 +1797,33 @@ def _get_mission_or_404(db: Session, mission_id: int) -> Any:
         raise HTTPException(status_code=404, detail="mission introuvable") from exc
 
 
+@app.get("/benchmark/preflight")
+def benchmark_preflight(expected_freeze: str = "") -> dict[str, Any]:
+    """D20 — pré-vol benchmark : identité réelle du processus qui tourne (commit, arbre, SDK,
+    politique de raisonnement, empreinte de configuration, plafonds) et verdict MATCH / MISMATCH
+    contre le freeze attendu. Lecture seule, aucun LLM, aucune écriture."""
+    return preflight(get_settings(), expected_freeze or get_settings().mission_expected_freeze)
+
+
 @app.post("/missions", response_model=MissionOut, status_code=201)
 def create_mission(payload: MissionCreateRequest, db: DbSession, llm: LLM) -> MissionOut:
-    """Crée et exécute une mission de cadrage sous budget ; retourne le rapport `candidate`."""
-    mission = run_mission(db, llm, payload, get_settings())
+    """Crée et exécute une mission de cadrage sous budget ; retourne le rapport `candidate`.
+
+    D20 : en mode benchmark (freeze attendu ou strict), un build qui ne correspond pas est refusé
+    AVANT toute création de mission et tout appel LLM (409, raison explicite)."""
+    try:
+        mission = run_mission(db, llm, payload, get_settings())
+    except BenchmarkBuildError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": exc.reason,
+                "benchmark": exc.check,
+                "build": exc.identity.compact(),
+                "llm_calls_used": 0,
+                "cost_eur": 0.0,
+            },
+        ) from exc
     log_product_event(
         db,
         "mission_report_ready",
@@ -1844,9 +1875,35 @@ def get_mission_journal(mission_id: int, db: DbSession) -> list[MissionJournalEn
 def get_mission_report_markdown(mission_id: int, db: DbSession) -> MissionReportMarkdownOut:
     """Rapport de situation en Markdown déterministe (aucun appel LLM, aucune mutation)."""
     mission = _get_mission_or_404(db, mission_id)
-    report = mission_payload(mission)["report"]
+    payload = mission_payload(mission)
+    report = payload["report"]
     if report is None:
-        raise HTTPException(status_code=409, detail="rapport non disponible (mission non terminée)")
+        # Contrat explicite (B11) : « pas de rapport » ne veut pas dire « encore en cours ».
+        if mission.status == PAUSED_STATUS:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "state": PAUSED_STATUS,
+                    "message": "mission en pause récupérable : rapport d'interruption absent",
+                    "failure": payload.get("failure") or {},
+                },
+            )
+        if mission.status == "failed":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "state": "failed",
+                    "message": "mission échouée : aucun rapport n'a pu être produit",
+                    "failure": payload.get("failure") or {},
+                },
+            )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "state": "running" if mission.status == "running" else mission.status,
+                "message": "rapport non disponible : mission encore en cours",
+            },
+        )
     return MissionReportMarkdownOut(
         mission_id=mission.id, markdown=render_situation_report_markdown(report)
     )
@@ -1862,6 +1919,41 @@ def _mission_ceo_action(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     log_product_event(
         db, f"mission_{mission.status}", "otv1_inc1", "mission", mission.id, mission.status
+    )
+    return MissionOut.model_validate(mission_payload(mission))
+
+
+@app.post("/missions/{mission_id}/resume", response_model=MissionOut)
+def resume_mission_endpoint(mission_id: int, db: DbSession, llm: LLM) -> MissionOut:
+    """v1.3.7 — reprise d'une mission `paused_recoverable` après levée de la condition externe.
+
+    Contrôle d'identité fail closed (modèle, adaptateur, empreintes ; commit, freeze et état
+    propre en mode benchmark) : refus explicite (409, raisons) sinon. Les appels déjà validés sont
+    rejoués depuis le checkpoint sans appel fournisseur ; la mission continue puis se termine
+    normalement, échoue ou se remet en pause. Jamais de repli sur un autre modèle / fournisseur."""
+    _get_mission_or_404(db, mission_id)
+    try:
+        mission = resume_mission(db, llm, mission_id, get_settings())
+    except InvalidMissionStatusError as exc:
+        raise HTTPException(
+            status_code=409, detail={"reason": "not_paused", "message": str(exc)}
+        ) from exc
+    except MissionResumeRefusedError as exc:
+        raise HTTPException(
+            status_code=409, detail={"reason": exc.reason, "compatibility": exc.detail}
+        ) from exc
+    log_product_event(
+        db,
+        "mission_resumed",
+        "otv1_inc1",
+        "mission",
+        mission.id,
+        mission.status,
+        metadata={
+            "llm_calls_used": mission.llm_calls_used,
+            "cost_eur": mission.cost_eur,
+            "stop_reason": mission.stop_reason,
+        },
     )
     return MissionOut.model_validate(mission_payload(mission))
 

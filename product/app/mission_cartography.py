@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from app.mission_deliberation import decisional_diversity, orientation_groups
 from app.mission_schemas import ClerkOutput, ExpertOutput, SelfQualificationOutput
 
 NON_ACTION_KINDS = frozenset({"wait", "test", "buy", "simplify", "do_nothing", "integrate"})
@@ -227,6 +228,53 @@ def build_cartography(
     clusters = position_clusters(answered, relations)
     largest = len(clusters[0]) if clusters else 0
     divergence = 0.0 if len(answered) <= 1 else round(1 - largest / len(answered), 3)
+    # B14-prime — auto-qualification partielle : les positions sans relations (relance refusée ou
+    # épuisée) restent des singletons ; l'indice de divergence est alors marqué partiel, jamais
+    # complété par des relations inventées.
+    relations_missing = [labels.get(e, e) for e in answered if self_qual.get(e) is None]
+    # v1.3.7 (§4) — orientations DÉCLARÉES : diversité décisionnelle distincte de la diversité
+    # argumentative ci-dessus ; « inconnue » (None) sans déclaration, jamais inventée.
+    orientations: list[dict[str, Any]] = []
+    stances: list[dict[str, Any]] = []
+    for res in expert_results:
+        out: ExpertOutput | None = res.get("output")
+        if out is None:
+            continue
+        if out.primary_orientation is not None:
+            orientations.append(
+                {
+                    "expert_id": res["expert_id"],
+                    "label": labels.get(res["expert_id"], ""),
+                    "kind": out.primary_orientation.kind,
+                    "orientation_label": out.primary_orientation.label,
+                }
+            )
+        for st in out.proposal_stances:
+            stances.append(
+                {
+                    "expert_id": res["expert_id"],
+                    "label": labels.get(res["expert_id"], ""),
+                    "proposal": st.proposal,
+                    "stance": st.stance,
+                    "reason": st.reason,
+                }
+            )
+    orientation_clusters = (
+        orientation_groups(
+            [
+                {"expert_id": o["expert_id"], "kind": o["kind"], "label": o["orientation_label"]}
+                for o in orientations
+            ]
+        )
+        if orientations
+        else []
+    )
+    decisional = decisional_diversity(
+        [
+            {"expert_id": o["expert_id"], "kind": o["kind"], "label": o["orientation_label"]}
+            for o in orientations
+        ]
+    )
 
     evidence: list[dict[str, Any]] = []
     for res in expert_results:
@@ -305,6 +353,17 @@ def build_cartography(
         "clerk_used": clerk is not None,
         "position_clusters": clusters,
         "divergence_index": divergence,
+        # v1.3.7 — diversité décisionnelle (orientations déclarées) : None = inconnue.
+        "orientations": orientations,
+        "orientation_clusters": orientation_clusters,
+        "decisional_diversity_index": decisional,
+        "decisional_convergence": decisional == 0.0,
+        "proposal_stances": stances,
+        "divergence_index_partial": bool(relations_missing) and len(answered) > 1,
+        "relations_missing_labels": relations_missing,
+        "self_qualification_coverage": (
+            f"{len(answered) - len(relations_missing)}/{len(answered)}" if answered else "0/0"
+        ),
         "hypotheses": _aggregate(expert_results, "assumptions"),
         "unknowns": _aggregate(expert_results, "unknowns"),
         "risks": _aggregate(expert_results, "risks"),
